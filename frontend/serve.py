@@ -61,6 +61,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlparse(self.path).path)
+        if path == "/favicon.ico":  # 404ノイズ抑制（空アイコン）
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path in ("/", "/index.html") or path == "/" + DC:
             self._serve_injected()
             return
