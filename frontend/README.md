@@ -79,8 +79,10 @@ cd frontend/design && python3 -m http.server 0   # 割当ポートは起動ロ�
 
 ### アダプタが追加する機能（.dc.html 無改修）
 
-- **「＋現場登録」ボタン＋モーダル**（右下固定）: `POST /api/sites` で現場を登録し、ダッシュボードを自動更新。作業種別は `/api/work-types` から取得。河川近接チェックで河川状態欄を表示。
-- **5分ごとの定期自動更新**: ダッシュボード/データソースを再取得（`setInterval`）。サーバ側の定期バッチ（APScheduler）は未実装。
+- **「現場登録」正式画面**（ヘッダーナビに統合）: `afterRender` フックでナビに「現場登録」項目を追加し、`state.screen==='register'` のとき注入した全面パネルを表示。`POST /api/sites` で登録→ダッシュボードへ自動遷移。作業種別は `/api/work-types`。河川近接チェックで河川状態欄を表示。
+- **5分ごとの定期自動更新**: ダッシュボード/データソースを再取得（サーバ側は APScheduler でも実施 → backend/README）。
+
+> **ネイティブ ClaudeDesign 画面化への移行**: 現状の登録画面はアダプタ注入。正式に ClaudeDesign の画面にしたい場合は、ClaudeDesign で「現場登録」画面（フォーム）を1枚追加し `POST /api/sites`（body は上記payload）を呼ぶだけ。API は完成済みなので、デザイン側にフォームができたらアダプタの注入版は外せる。
 
 ### 旧計画（対応表・参考）
 
