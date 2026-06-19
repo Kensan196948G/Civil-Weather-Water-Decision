@@ -76,6 +76,7 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   let afterRenderCalled = 0;
   const adapter = createAdapter({
     base: "", fetch: fetchMock, bump: function () {},
+    hideNav: ["現場詳細"], // 現場詳細タブを廃しドリルダウン専用
     afterRender: function (inst, vals) {
       afterRenderCalled++;
       // 正式画面化: ナビへ「現場登録」を追加（ブラウザ実装と同等の検証）
@@ -94,6 +95,8 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   ok(v.sites.length === 2, "dashboard sites が API 由来（件数=" + v.sites.length + "）");
   ok(afterRenderCalled > 0 && v.nav[v.nav.length - 1].label === "現場登録",
     "afterRender フックでナビに「現場登録」を追加（正式画面化）");
+  ok(!v.nav.some(function (n) { return n.label === "現場詳細"; }),
+    "ナビから「現場詳細」を除外（クリック時のみ表示=ドリルダウン専用）");
   ok(v.sites[0].name.indexOf("北川") === 0, "現場名が API 由来: " + v.sites[0].name);
   ok(v.summary.reduce((a, b) => a + b.count, 0) === 2, "サマリが API 現場数に追従");
 

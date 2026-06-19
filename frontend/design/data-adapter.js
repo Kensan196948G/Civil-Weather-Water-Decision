@@ -124,6 +124,10 @@
         var vals = origRender.call(this);
         if (CW.sources) vals.sources = mapSources(CW.sources); // データソース状態
         vals.exportCsv = function () { try { _open(url("/api/decision-logs/export.csv"), "_blank"); } catch (e) {} };
+        // 指定ラベルのナビを非表示（例: 「現場詳細」はナビタブを廃しダッシュボードからのドリルダウン専用に）
+        if (opts.hideNav && vals.nav && vals.nav.filter) {
+          vals.nav = vals.nav.filter(function (n) { return opts.hideNav.indexOf(n.label) < 0; });
+        }
         if (opts.afterRender) { try { opts.afterRender(this, vals); } catch (e) {} } // ナビ追加/画面トグル等
         return vals;
       };
@@ -238,6 +242,7 @@
       base: apiBase,
       fetch: window.fetch.bind(window),
       open: window.open.bind(window),
+      hideNav: ["現場詳細"], // 現場詳細はナビタブを廃し、現場クリックのドリルダウン専用にする
       bump: function () {
         try {
           var rn = (window.__dcRootName && window.__dcRootName()) || "Root";
