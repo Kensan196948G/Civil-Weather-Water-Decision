@@ -6,7 +6,7 @@ import io
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,7 @@ from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
     AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
-    Site, Station, User, WorkType,
+    Site, User, WorkType,
 )
 from ..services import assessment, notifications
 from ..services.audit import audit
@@ -126,6 +126,15 @@ class SiteCreate(BaseModel):
         if not -180 <= v <= 180:
             raise ValueError("経度は -180〜180")
         return v
+
+    @model_validator(mode="after")
+    def _no_html(self):
+        # 名称等の HTML 危険文字を入力境界で拒否（XSS 多層防御。地図ポップアップ等を保護）
+        for f in ("name", "loc", "manager", "site_code"):
+            v = getattr(self, f, None)
+            if isinstance(v, str) and ("<" in v or ">" in v):
+                raise ValueError("名称・所在地等に < > は使用できません")
+        return self
 
 
 class SiteUpdate(BaseModel):

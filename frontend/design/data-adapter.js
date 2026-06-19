@@ -466,7 +466,7 @@
         var m = wbgtMeta(s.wbgt);
         return '<div class="cw-wbgt-row"><span class="cw-wbgt-dot" style="background:' + m.color + '"></span>'
           + "<b>" + (s.wbgt == null ? "—" : s.wbgt) + '</b><span class="cw-wbgt-lab" style="color:' + m.color + '">' + m.label + "</span>"
-          + '<span class="cw-wbgt-name">' + s.name + '</span><span class="cw-wbgt-loc">' + (s.loc || "") + "</span></div>";
+          + '<span class="cw-wbgt-name">' + esc(s.name) + '</span><span class="cw-wbgt-loc">' + esc(s.loc || "") + "</span></div>";
       }).join("");
     }
     function buildWbgtScreen() {
@@ -495,7 +495,7 @@
           if (s.lat == null || s.lon == null) return;
           var m = wbgtMeta(s.wbgt);
           var mk = L.circleMarker([s.lat, s.lon], { radius: 8, color: "#fff", weight: 2, fillColor: m.color, fillOpacity: 0.95 });
-          mk.bindPopup("<b>" + s.name + "</b><br>WBGT " + (s.wbgt == null ? "—" : s.wbgt) + ' ・ <b style="color:' + m.color + '">' + m.label + "</b>");
+          mk.bindPopup("<b>" + esc(s.name) + "</b><br>WBGT " + (s.wbgt == null ? "—" : s.wbgt) + ' ・ <b style="color:' + m.color + '">' + m.label + "</b>");
           wbgtMarkers.addLayer(mk); pts.push([s.lat, s.lon]);
         });
         if (pts.length) { try { wbgtMap.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch (e) {} }
@@ -507,6 +507,13 @@
       var el = document.getElementById("cw-wbgt-screen");
       if (el) el.style.display = active ? "block" : "none";
       if (active) { wbgtBuildTries = 0; setTimeout(buildWbgtScreen, 0); } // レイアウト確定後に構築
+    }
+
+    // 注入HTMLに入るユーザー制御値（現場名等）をエスケープし XSS を防ぐ
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
     }
 
     // ---- ログイン画面（注入。.dc.html 無改修） ----
@@ -623,7 +630,7 @@
           list.innerHTML = ns.length
             ? ns.map(function (n) {
                 return '<div class="cw-notif-row"><div class="t" style="color:' + notifColor(n.severity)
-                  + '">' + n.title + "</div>" + n.message + "</div>";
+                  + '">' + esc(n.title) + "</div>" + esc(n.message) + "</div>";
               }).join("")
             : '<div class="cw-notif-empty">現在、通知はありません</div>';
         }

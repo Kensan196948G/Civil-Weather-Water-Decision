@@ -141,6 +141,13 @@ def test_create_site_validation(client):
         "name": "y", "latitude": 999, "longitude": 139, "work_type": "crane"}).status_code == 422
 
 
+def test_create_site_rejects_html(client):
+    # 名称に HTML 危険文字 → 422（XSS 多層防御）
+    assert client.post("/api/sites", json={
+        "name": "<img src=x onerror=alert(1)>", "latitude": 35, "longitude": 139,
+        "work_type": "crane"}).status_code == 422
+
+
 def test_update_and_deactivate_site(client):
     sid = client.post("/api/sites", json={
         "name": "更新対象", "latitude": 35.1, "longitude": 139.1, "work_type": "earthwork"}).json()["id"]
