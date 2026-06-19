@@ -1,0 +1,25 @@
+{
+  "project": {
+    "name": "Civil-Weather-Water-Decision",
+    "repository": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision.git",
+    "registered_at": "2026-06-19",
+    "release_deadline": "2026-12-19",
+    "current_phase": "Phase 0",
+    "milestones": {
+      "M0_foundation_ready": "2026-07-02",
+      "M1_poc_demoable": "2026-07-30",
+      "M2_feature_complete": "2026-09-24",
+      "M3_verification_ready": "2026-11-19",
+      "M4_production_release": "2026-12-19"
+    },
+    "freeze_lines": {
+      "improvement_taper": "2026-11-19",
+      "feature_freeze": "2026-12-05",
+      "release_prep_only": "2026-12-12"
+    }
+  },
+  "session": {
+    "last_phase": "Monitor",
+    "notes": "要件・設計を読了し、docs/implementation-plan.md を作成。次は Phase 0 足場構築（リポジトリ初期化・マイルストーン・Issue 起票）。"
+  }
+}
