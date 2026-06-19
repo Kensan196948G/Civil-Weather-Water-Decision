@@ -98,6 +98,18 @@
         return Promise.all([loadSources(), loadHistory(), loadSeries()]);
       });
     }
+    function workTypes() { return j("/api/work-types"); }
+    function createSite(payload) {
+      return _fetch(url("/api/sites"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (r) {
+        return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+      }).then(function (res) {
+        if (res.ok) return loadDashboard().then(function () { return res; });
+        return res;
+      });
+    }
 
     // ---- プロトタイプ・パッチ ----
     function patch(proto) {
@@ -197,6 +209,7 @@
     return {
       patch: patch, loadAll: loadAll, loadDashboard: loadDashboard, loadSources: loadSources,
       loadHistory: loadHistory, loadSeries: loadSeries, ensureSiteDetail: ensureSiteDetail,
+      workTypes: workTypes, createSite: createSite,
       mapDashToSites: mapDashToSites, mapSources: mapSources, _state: CW
     };
   }
@@ -215,6 +228,96 @@
         } catch (e) {}
       }
     });
+    // 「＋現場登録」UI を .dc.html を触らず DOM 注入（FR-001/002, SC-009 の簡易版）
+    function installRegisterUI(adapter) {
+      if (document.getElementById("cw-reg-btn")) return;
+      var css = document.createElement("style");
+      css.textContent =
+        "#cw-reg-btn{position:fixed;right:18px;bottom:18px;z-index:9998;background:#16527d;color:#fff;border:none;"
+        + "border-radius:24px;padding:12px 18px;font:700 13px 'Noto Sans JP',sans-serif;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer}"
+        + "#cw-reg-btn:hover{background:#13344f}"
+        + "#cw-reg-ov{position:fixed;inset:0;z-index:9999;background:rgba(10,20,30,.45);display:none;align-items:flex-start;justify-content:center;overflow:auto}"
+        + "#cw-reg-ov.on{display:flex}"
+        + ".cw-reg-card{background:#fff;margin:6vh 0;width:min(520px,92vw);border-radius:12px;padding:20px 22px;font-family:'Noto Sans JP',sans-serif;color:#16212c}"
+        + ".cw-reg-card h2{margin:0 0 4px;font-size:16px;color:#13344f}"
+        + ".cw-reg-card p.sub{margin:0 0 14px;font-size:11.5px;color:#7e8c99}"
+        + ".cw-reg-card label{display:block;font-size:11.5px;font-weight:700;color:#3a4854;margin:10px 0 4px}"
+        + ".cw-reg-card input,.cw-reg-card select{width:100%;padding:8px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px 'Noto Sans JP',sans-serif;box-sizing:border-box}"
+        + ".cw-reg-row{display:flex;gap:10px}.cw-reg-row>div{flex:1}"
+        + ".cw-reg-chk{display:flex;align-items:center;gap:7px;margin-top:10px;font-size:12.5px}"
+        + ".cw-reg-chk input{width:auto}"
+        + ".cw-reg-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}"
+        + ".cw-reg-actions button{padding:9px 16px;border-radius:7px;font:700 13px 'Noto Sans JP',sans-serif;cursor:pointer;border:none}"
+        + ".cw-reg-cancel{background:#eef1f4;color:#5a6b7b}.cw-reg-save{background:#2e7d32;color:#fff}"
+        + ".cw-reg-msg{margin-top:10px;font-size:12px;min-height:16px}";
+      document.head.appendChild(css);
+
+      var btn = document.createElement("button");
+      btn.id = "cw-reg-btn"; btn.textContent = "＋ 現場登録";
+      var ov = document.createElement("div"); ov.id = "cw-reg-ov";
+      ov.innerHTML =
+        '<form class="cw-reg-card" id="cw-reg-form">'
+        + '<h2>現場登録</h2><p class="sub">公開データ中心のPoC。実在現場名・個人情報は登録しないでください。</p>'
+        + '<label>現場名 *</label><input name="name" required placeholder="例: 北川 下流右岸 護岸工事">'
+        + '<div class="cw-reg-row"><div><label>現場コード</label><input name="site_code" placeholder="任意（空欄で自動）"></div>'
+        + '<div><label>所在地</label><input name="loc" placeholder="例: X市 北川流域"></div></div>'
+        + '<div class="cw-reg-row"><div><label>緯度 *</label><input name="latitude" type="number" step="any" required placeholder="35.76"></div>'
+        + '<div><label>経度 *</label><input name="longitude" type="number" step="any" required placeholder="139.78"></div></div>'
+        + '<div class="cw-reg-row"><div><label>作業種別 *</label><select name="work_type" id="cw-reg-wt"></select></div>'
+        + '<div><label>発注区分</label><select name="project_type"><option>公共</option><option>民間</option><option>その他</option></select></div></div>'
+        + '<label class="cw-reg-chk"><input type="checkbox" name="river_work_flag">河川内・河川近接作業</label>'
+        + '<div class="cw-reg-row" id="cw-reg-river" style="display:none"><div><label>河川状態</label>'
+        + '<select name="river_state"><option value="none">近接なし</option><option value="stable">安定</option>'
+        + '<option value="rising">上昇傾向</option><option value="stale">データ更新遅延</option></select></div>'
+        + '<div><label>担当者</label><input name="manager" placeholder="例: 山田"></div></div>'
+        + '<div id="cw-reg-mgr2"><label>担当者</label><input name="manager2" placeholder="例: 山田"></div>'
+        + '<div class="cw-reg-msg" id="cw-reg-msg"></div>'
+        + '<div class="cw-reg-actions"><button type="button" class="cw-reg-cancel" id="cw-reg-cancel">キャンセル</button>'
+        + '<button type="submit" class="cw-reg-save">登録</button></div></form>';
+      document.body.appendChild(btn); document.body.appendChild(ov);
+
+      var sel = ov.querySelector("#cw-reg-wt");
+      adapter.workTypes().then(function (wts) {
+        sel.innerHTML = wts.map(function (w) { return '<option value="' + w.id + '">' + w.name + "</option>"; }).join("");
+      }).catch(function () { sel.innerHTML = '<option value="river">河川内作業</option>'; });
+
+      var chk = ov.querySelector('[name=river_work_flag]');
+      var riverRow = ov.querySelector("#cw-reg-river");
+      var mgr2 = ov.querySelector("#cw-reg-mgr2");
+      function syncRiver() { var on = chk.checked; riverRow.style.display = on ? "flex" : "none"; mgr2.style.display = on ? "none" : "block"; }
+      chk.addEventListener("change", syncRiver); syncRiver();
+
+      function close() { ov.classList.remove("on"); ov.querySelector("#cw-reg-msg").textContent = ""; }
+      btn.addEventListener("click", function () { ov.classList.add("on"); });
+      ov.querySelector("#cw-reg-cancel").addEventListener("click", close);
+      ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+
+      ov.querySelector("#cw-reg-form").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var f = e.target, msg = ov.querySelector("#cw-reg-msg");
+        var payload = {
+          name: f.name.value, site_code: f.site_code.value || null, loc: f.loc.value,
+          latitude: parseFloat(f.latitude.value), longitude: parseFloat(f.longitude.value),
+          work_type: f.work_type.value, project_type: f.project_type.value,
+          river_work_flag: f.river_work_flag.checked,
+          river_state: f.river_work_flag.checked ? f.river_state.value : "none",
+          manager: (f.river_work_flag.checked ? f.manager.value : f.manager2.value) || ""
+        };
+        msg.style.color = "#5a6b7b"; msg.textContent = "登録中…";
+        adapter.createSite(payload).then(function (res) {
+          if (res.ok) {
+            msg.style.color = "#2e7d32"; msg.textContent = "登録しました（" + res.body.id + "）。ダッシュボードを更新しました。";
+            try { window.__dcSetProps((window.__dcRootName && window.__dcRootName()) || "Root", { __cw: Date.now() }); } catch (_) {}
+            setTimeout(close, 1100); f.reset(); syncRiver();
+          } else {
+            var d = res.body && res.body.detail;
+            msg.style.color = "#c62828";
+            msg.textContent = "登録できません: " + (Array.isArray(d) ? d.map(function (x) { return x.msg; }).join(" / ") : (d || ("HTTP " + res.status)));
+          }
+        }).catch(function (err) { msg.style.color = "#c62828"; msg.textContent = "登録に失敗しました（APIエラー）: " + err; });
+      });
+    }
+
     (function whenReady() {
       var n = 0;
       var t = setInterval(function () {
@@ -228,6 +331,13 @@
           adapter.loadAll().then(function () {
             try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {}
           });
+          installRegisterUI(adapter);
+          // 定期自動更新（5分ごとにダッシュボード/ソースを再取得）
+          setInterval(function () {
+            adapter.loadDashboard().then(function () { return adapter.loadSources(); })
+              .then(function () { try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {} })
+              .catch(function () {});
+          }, 300000);
           window.__cwAdapter = adapter;
         } else if (n > 300) {
           clearInterval(t);

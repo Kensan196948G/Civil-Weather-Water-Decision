@@ -72,3 +72,44 @@ def test_data_sources(client):
     assert len(rows) == 6
     assert any(d["status"] == "Error" for d in rows)
     assert any(d["status"] == "Warning" for d in rows)
+
+
+def test_work_types(client):
+    rows = client.get("/api/work-types").json()
+    assert len(rows) == 6
+    assert {r["id"] for r in rows} == {"river", "concrete", "earthwork", "pavement", "crane", "heat"}
+
+
+def test_create_site(client):
+    before = len(client.get("/api/sites").json())
+    r = client.post("/api/sites", json={
+        "name": "テスト新設 現場", "loc": "T市 試験地区",
+        "latitude": 35.5, "longitude": 139.5, "work_type": "crane", "manager": "試験"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["status"] == "created" and body["id"].startswith("S")
+    after = client.get("/api/sites").json()
+    assert len(after) == before + 1
+    # ダッシュボード（ライブ判定）にも出現
+    dash = client.get("/api/dashboard/site-risk").json()
+    assert any(s["id"] == body["id"] for s in dash["sites"])
+
+
+def test_create_site_validation(client):
+    assert client.post("/api/sites", json={
+        "name": "x", "latitude": 35, "longitude": 139, "work_type": "INVALID"}).status_code == 422
+    assert client.post("/api/sites", json={
+        "name": "", "latitude": 35, "longitude": 139, "work_type": "crane"}).status_code == 422
+    assert client.post("/api/sites", json={
+        "name": "y", "latitude": 999, "longitude": 139, "work_type": "crane"}).status_code == 422
+
+
+def test_update_and_deactivate_site(client):
+    sid = client.post("/api/sites", json={
+        "name": "更新対象", "latitude": 35.1, "longitude": 139.1, "work_type": "earthwork"}).json()["id"]
+    assert client.put(f"/api/sites/{sid}", json={"manager": "新担当"}).status_code == 200
+    assert client.get(f"/api/sites/{sid}").json()["manager"].startswith("新担当")
+    assert client.delete(f"/api/sites/{sid}").status_code == 200
+    # 無効化後はダッシュボードから消える
+    dash = client.get("/api/dashboard/site-risk").json()
+    assert not any(s["id"] == sid for s in dash["sites"])

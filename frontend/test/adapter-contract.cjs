@@ -51,16 +51,22 @@ function points24() {
   for (let i = 0; i < 24; i++) p.push({ time: "h" + i, temp_c: 20 + i % 5, precip_mm: i === 14 ? 6 : 0, wind_ms: 3, wbgt_derived: 25 });
   return p;
 }
-function fetchMock(u) {
-  let data = {};
-  if (u.indexOf("/api/sites/") >= 0 && u.indexOf("stations") < 0) {
+let lastPost = null;
+function fetchMock(u, opts) {
+  var method = (opts && opts.method) || "GET";
+  let data = {}, status = 200;
+  if (method === "POST" && u.indexOf("/api/sites") >= 0 && u.indexOf("/api/sites/") < 0) {
+    lastPost = JSON.parse(opts.body); data = { id: "S07", code: "CW-S07", name: lastPost.name, status: "created" }; status = 201;
+  } else if (u.indexOf("/api/work-types") >= 0) {
+    data = [{ id: "river", name: "河川内作業", color: "#0e7d8f" }, { id: "crane", name: "クレーン作業", color: "#c0682c" }];
+  } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("stations") < 0) {
     data = { plans: [{ title: "護岸ブロック据付", time: "08:00–12:00", contractor: "○○建設", level: 2, reason: "中止検討" }] };
   } else if (u.indexOf("/api/sites") >= 0) data = SITES_LIST;
   else if (u.indexOf("/api/dashboard/site-risk") >= 0) data = DASH;
   else if (u.indexOf("/api/dashboard/data-sources") >= 0) data = SOURCES;
   else if (u.indexOf("/api/decision-logs") >= 0) data = HISTORY;
   else if (u.indexOf("/api/weather/timeseries") >= 0) data = { points: points24() };
-  return Promise.resolve({ json: function () { return Promise.resolve(data); } });
+  return Promise.resolve({ ok: status < 400, status: status, json: function () { return Promise.resolve(data); } });
 }
 
 let pass = 0, fail = 0;
@@ -104,6 +110,11 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   adapter._state.result = null;
   const rv2 = c.resultVM();
   ok(rv2 && rv2.levelLabel, "API未取得時は元の resultVM にフォールバック: " + rv2.levelLabel);
+
+  // 現場登録: createSite が POST し作成結果を返す
+  const cres = await adapter.createSite({ name: "新設テスト", latitude: 35.5, longitude: 139.5, work_type: "crane" });
+  ok(cres.ok && cres.body.id === "S07", "createSite が POST /api/sites で作成（id=" + (cres.body && cres.body.id) + "）");
+  ok(lastPost && lastPost.name === "新設テスト", "createSite が payload を送信");
 
   console.log("\nRESULT: " + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);

@@ -6,7 +6,7 @@ import io
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,9 @@ from ..services import assessment
 from ..services.data_collectors import open_meteo
 
 router = APIRouter()
+
+WORK_KEYS = {"river", "concrete", "earthwork", "pavement", "crane", "heat"}
+RIVER_STATES = {"none", "stable", "rising", "stale"}
 
 
 # ---------- 現場 ----------
@@ -61,10 +64,131 @@ def site_stations(site_id: str, db: Session = Depends(get_db)):
              "lat": st.latitude, "lon": st.longitude} for st in site.stations]
 
 
+# ---------- 作業種別マスタ ----------
+@router.get("/work-types")
+def list_work_types(db: Session = Depends(get_db)):
+    rows = db.scalars(select(WorkType).order_by(WorkType.id)).all()
+    return [{"id": w.id, "name": w.name, "color": w.color} for w in rows]
+
+
+# ---------- 現場 書き込み（登録/更新/無効化） ----------
+class SiteCreate(BaseModel):
+    name: str
+    site_code: str | None = None
+    loc: str = ""
+    latitude: float
+    longitude: float
+    work_type: str
+    project_type: str = "公共"
+    river_work_flag: bool = False
+    river_state: str = "none"
+    river_note: str = "近接なし"
+    flood_info: bool = False
+    manager: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v):
+        if not v or not v.strip():
+            raise ValueError("現場名は必須です")
+        return v.strip()
+
+    @field_validator("work_type")
+    @classmethod
+    def _work(cls, v):
+        if v not in WORK_KEYS:
+            raise ValueError(f"work_type は {sorted(WORK_KEYS)} のいずれか")
+        return v
+
+    @field_validator("river_state")
+    @classmethod
+    def _rstate(cls, v):
+        if v not in RIVER_STATES:
+            raise ValueError(f"river_state は {sorted(RIVER_STATES)} のいずれか")
+        return v
+
+    @field_validator("latitude")
+    @classmethod
+    def _lat(cls, v):
+        if not -90 <= v <= 90:
+            raise ValueError("緯度は -90〜90")
+        return v
+
+    @field_validator("longitude")
+    @classmethod
+    def _lon(cls, v):
+        if not -180 <= v <= 180:
+            raise ValueError("経度は -180〜180")
+        return v
+
+
+class SiteUpdate(BaseModel):
+    name: str | None = None
+    loc: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    work_type: str | None = None
+    project_type: str | None = None
+    river_work_flag: bool | None = None
+    river_state: str | None = None
+    river_note: str | None = None
+    flood_info: bool | None = None
+    manager: str | None = None
+    status: str | None = None
+
+
+def _next_site_id(db: Session) -> str:
+    ids = db.scalars(select(Site.id)).all()
+    nums = [int(x[1:]) for x in ids if x[1:].isdigit()]
+    return f"S{(max(nums) + 1) if nums else 1:02d}"
+
+
+@router.post("/sites", status_code=201)
+def create_site(req: SiteCreate, db: Session = Depends(get_db)):
+    sid = _next_site_id(db)
+    site = Site(
+        id=sid, site_code=req.site_code or f"CW-{sid}", name=req.name, loc=req.loc,
+        latitude=req.latitude, longitude=req.longitude, work_type=req.work_type,
+        project_type=req.project_type, river_work_flag=req.river_work_flag,
+        river_state=req.river_state, river_note=req.river_note, flood_info=req.flood_info,
+        manager=req.manager, status="active",
+    )
+    db.add(site)
+    db.commit()
+    return {"id": sid, "code": site.site_code, "name": site.name, "status": "created"}
+
+
+@router.put("/sites/{site_id}")
+def update_site(site_id: str, req: SiteUpdate, db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    data = req.model_dump(exclude_none=True)
+    if "work_type" in data and data["work_type"] not in WORK_KEYS:
+        raise HTTPException(422, "invalid work_type")
+    if "river_state" in data and data["river_state"] not in RIVER_STATES:
+        raise HTTPException(422, "invalid river_state")
+    for k, v in data.items():
+        setattr(site, k, v)
+    db.commit()
+    return {"id": site.id, "status": "updated"}
+
+
+@router.delete("/sites/{site_id}")
+def deactivate_site(site_id: str, db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    site.status = "inactive"
+    db.commit()
+    return {"id": site.id, "status": "inactive"}
+
+
 # ---------- ダッシュボード ----------
 @router.get("/dashboard/site-risk")
 async def dashboard_site_risk(db: Session = Depends(get_db)):
-    sites = db.scalars(select(Site).order_by(Site.id)).all()
+    sites = db.scalars(
+        select(Site).where(Site.status == "active").order_by(Site.id)).all()
     cards = await assessment.assess_all(list(sites))
     counts = [0, 0, 0, 0]
     for c in cards:

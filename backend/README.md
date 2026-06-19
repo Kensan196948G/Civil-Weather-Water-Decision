@@ -81,5 +81,14 @@ cd backend && python3 -m pytest      # 26 passed
 - `#12` Alembic マイグレーション化（現状は `create_all`）。
 - `#20` 環境省 WBGT 実データ接続（現状 derived 推定）。
 - `#23` `decision_results`/`decision_reasons` の永続化（現状は都度計算）。
-- `#14` 現場の作成/更新/無効化 API（現状は読み取り＋シード）。
 - 河川（川の防災情報）・気象庁防災XML の連携（Phase 2 / #29〜#33）。
+- データソース状態の**実プローブ化**（現状 Open-Meteo 以外は固定シード）＋**定期バッチ**（APScheduler, 設計§11 JOB-001〜007）。
+
+## 現場の登録/更新/無効化（#14 実装済み）
+
+| メソッド | パス | 概要 |
+|---|---|---|
+| GET | `/api/work-types` | 作業種別マスタ（登録フォーム用） |
+| POST | `/api/sites` | 現場登録（id自動採番・バリデーション） |
+| PUT | `/api/sites/{id}` | 現場更新（部分） |
+| DELETE | `/api/sites/{id}` | 現場無効化（status=inactive、ダッシュボードから除外） |
