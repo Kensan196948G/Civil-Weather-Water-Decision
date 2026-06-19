@@ -42,5 +42,14 @@ def client(monkeypatch):
 
     from app.main import app
     with TestClient(app) as c:
+        # 既定は管理者でログイン（多くのテストは認証済み前提）
+        r = c.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+        c.headers.update({"Authorization": "Bearer " + r.json()["token"]})
         yield c
     assessment.clear_cache()
+
+
+def login_token(client, username, password="pass1234"):
+    """指定ユーザーのトークンを取得（RBAC テスト用）。"""
+    return client.post("/api/auth/login",
+                       json={"username": username, "password": password}).json().get("token")

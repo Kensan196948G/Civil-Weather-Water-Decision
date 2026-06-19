@@ -21,6 +21,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # 認証（PoC: アプリ内ユーザー＋JWT。本番候補は Entra ID OIDC へ差し替え）
+    enable_auth: bool = True
+    # 本番は環境変数 JWT_SECRET で必ず上書き（32バイト以上）
+    jwt_secret: str = "dev-secret-change-in-production-please-32+"
+    jwt_expire_minutes: int = 480
+
     # スケジューラ（定期プローブ＋予報リフレッシュ）。テストでは false。
     enable_scheduler: bool = True
     probe_interval_seconds: int = 300   # データソース状態を5分ごとに実プローブ更新

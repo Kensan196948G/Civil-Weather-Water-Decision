@@ -11,13 +11,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
+from ..core.deps import get_current_user, require_role
 from ..models import (
-    DataSourceStatus, DecisionLog, DecisionReason, DecisionResult, Site, Station, WorkType,
+    AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
+    Site, Station, User, WorkType,
 )
 from ..services import assessment
+from ..services.audit import audit
 from ..services.data_collectors import open_meteo, source_probe
 
-router = APIRouter()
+# ルータ全体に認証を必須化（/auth と /health は別ルータ/main で公開）
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 WORK_KEYS = {"river", "concrete", "earthwork", "pavement", "crane", "heat"}
 RIVER_STATES = {"none", "stable", "rising", "stale"}
@@ -146,7 +150,8 @@ def _next_site_id(db: Session) -> str:
 
 
 @router.post("/sites", status_code=201)
-def create_site(req: SiteCreate, db: Session = Depends(get_db)):
+def create_site(req: SiteCreate, db: Session = Depends(get_db),
+                user: User = Depends(require_role("admin", "tech_manager"))):
     sid = _next_site_id(db)
     site = Site(
         id=sid, site_code=req.site_code or f"CW-{sid}", name=req.name, loc=req.loc,
@@ -157,11 +162,13 @@ def create_site(req: SiteCreate, db: Session = Depends(get_db)):
     )
     db.add(site)
     db.commit()
+    audit(db, user, "site_create", f"{sid} {site.name}", site_id=sid)
     return {"id": sid, "code": site.site_code, "name": site.name, "status": "created"}
 
 
 @router.put("/sites/{site_id}")
-def update_site(site_id: str, req: SiteUpdate, db: Session = Depends(get_db)):
+def update_site(site_id: str, req: SiteUpdate, db: Session = Depends(get_db),
+                user: User = Depends(require_role("admin", "tech_manager"))):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
@@ -173,16 +180,19 @@ def update_site(site_id: str, req: SiteUpdate, db: Session = Depends(get_db)):
     for k, v in data.items():
         setattr(site, k, v)
     db.commit()
+    audit(db, user, "site_update", f"{site_id} {','.join(data.keys())}", site_id=site_id)
     return {"id": site.id, "status": "updated"}
 
 
 @router.delete("/sites/{site_id}")
-def deactivate_site(site_id: str, db: Session = Depends(get_db)):
+def deactivate_site(site_id: str, db: Session = Depends(get_db),
+                    user: User = Depends(require_role("admin", "tech_manager"))):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
     site.status = "inactive"
     db.commit()
+    audit(db, user, "site_deactivate", f"{site_id} {site.name}", site_id=site_id)
     return {"id": site.id, "status": "inactive"}
 
 
@@ -232,7 +242,8 @@ def _next_result_id(db: Session) -> str:
 
 
 @router.post("/decisions/evaluate")
-async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db)):
+async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
+                            user: User = Depends(get_current_user)):
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
@@ -251,6 +262,7 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db)):
             reason_code=r["reason_code"], message=r["message"],
             source_id=r["source_id"], observed_value=r["observed_value"]))
     db.commit()
+    audit(db, user, "evaluate", f"{rid} {req.work_type} L{res['overall_level']}", site_id=site.id)
     res["resultId"] = rid
     return res
 
@@ -294,7 +306,8 @@ def list_decision_logs(action: str | None = None, db: Session = Depends(get_db))
 
 
 @router.post("/decision-logs")
-def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db)):
+def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db),
+                        user: User = Depends(require_role("admin", "tech_manager", "site_manager", "safety"))):
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
@@ -308,11 +321,14 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db)):
         decided_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"))
     db.add(entry)
     db.commit()
+    audit(db, user, "decision_log", f"{entry.id} {req.action} L{req.level}", site_id=site.id)
     return {"id": entry.id, "status": "recorded"}
 
 
 @router.get("/decision-logs/export.csv")
-def export_decision_logs(db: Session = Depends(get_db)):
+def export_decision_logs(db: Session = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    audit(db, user, "csv_export", "decision_logs.csv")
     rows = db.scalars(select(DecisionLog).order_by(DecisionLog.id.desc())).all()
     buf = io.StringIO()
     buf.write("﻿")  # Excel(JP) 用 BOM
@@ -328,7 +344,9 @@ def export_decision_logs(db: Session = Depends(get_db)):
 
 # ---------- データ取得（手動再取得） ----------
 @router.post("/data-collectors/run")
-async def run_collectors(db: Session = Depends(get_db)):
+async def run_collectors(db: Session = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    audit(db, user, "collectors_run", "手動再取得")
     assessment.clear_cache()
     sites = db.scalars(select(Site).where(Site.status == "active")).all()
     cards = await assessment.assess_all(list(sites))
@@ -337,3 +355,12 @@ async def run_collectors(db: Session = Depends(get_db)):
     probed = await source_probe.probe_all(db)
     return {"refetched": len(cards), "weatherOk": ok, "total": len(cards),
             "probed": {k: v["status"] for k, v in probed.items()}}
+
+
+# ---------- 監査ログ（管理者・技術管理者） ----------
+@router.get("/admin/audit-logs")
+def list_audit_logs(limit: int = 100, db: Session = Depends(get_db),
+                    user: User = Depends(require_role("admin", "tech_manager"))):
+    rows = db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)).all()
+    return [{"id": r.id, "timestamp": r.timestamp, "user": r.username, "action": r.action,
+             "message": r.message, "siteId": r.site_id} for r in rows]

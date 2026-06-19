@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .api.auth import router as auth_router
 from .api.routes import router
 from .core.config import settings
 from .seed import init_db
@@ -55,4 +56,5 @@ def health():
     return {"status": "ok", "app": settings.app_name, "env": settings.app_env}
 
 
-app.include_router(router, prefix="/api")
+app.include_router(auth_router, prefix="/api")  # /api/auth/* は公開（ログイン）
+app.include_router(router, prefix="/api")        # その他は認証必須

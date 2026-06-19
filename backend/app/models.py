@@ -10,6 +10,35 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .core.db import Base
 
 
+class User(Base):
+    """アプリ内ユーザー（設計§6.2.1 / §7 ロール）。本番候補では Entra ID に差し替え。"""
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str] = mapped_column(String(255), default="")
+    password_hash: Mapped[str] = mapped_column(Text, default="")
+    role: Mapped[str] = mapped_column(String(30))  # admin/tech_manager/site_manager/safety/viewer
+    department: Mapped[str] = mapped_column(String(100), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class AuditLog(Base):
+    """監査ログ（設計§13）。ログイン・設定変更・判定・判断・CSV出力等を記録。"""
+    __tablename__ = "audit_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[str] = mapped_column(String(40), default="")
+    user_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    action: Mapped[str] = mapped_column(String(50))
+    component: Mapped[str] = mapped_column(String(30), default="api")
+    message: Mapped[str] = mapped_column(Text, default="")
+    site_id: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
 class Site(Base):
     __tablename__ = "sites"
     id: Mapped[str] = mapped_column(String(10), primary_key=True)

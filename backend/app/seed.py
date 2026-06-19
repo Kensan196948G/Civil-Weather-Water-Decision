@@ -11,7 +11,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .core.db import SessionLocal
-from .models import DataSourceStatus, DecisionLog, Site, Station, WorkPlan, WorkType
+from .core.security import hash_password
+from .models import DataSourceStatus, DecisionLog, Site, Station, User, WorkPlan, WorkType
+
+# デモ用ユーザー（5ロール）。本番では各自パスワード変更／Entra ID 連携。
+USERS = [
+    ("U01", "admin", "システム管理者", "admin", "IT・DX部門", "admin123"),
+    ("U02", "tanaka", "田中（技術管理者）", "tech_manager", "土木技術部", "pass1234"),
+    ("U03", "yamada", "山田（現場管理者）", "site_manager", "現場", "pass1234"),
+    ("U04", "takahashi", "高橋（安全担当）", "safety", "安全衛生", "pass1234"),
+    ("U05", "viewer", "閲覧 太郎", "viewer", "経営企画", "pass1234"),
+]
 
 WORK_TYPES = [
     ("river", "河川内作業", "#0e7d8f"), ("concrete", "コンクリート打設", "#7a5cc0"),
@@ -111,6 +121,10 @@ def seed(db: Session) -> None:
     for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
         db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
                            action=act, comment=comment, decided_by=by, decided_at=dt))
+    for (uid, uname, disp, role, dept, pw) in USERS:
+        db.add(User(id=uid, username=uname, display_name=disp, role=role,
+                    department=dept, email=f"{uname}@example.com",
+                    password_hash=hash_password(pw)))
     db.commit()
 
 
