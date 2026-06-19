@@ -21,7 +21,38 @@
     var CW = { sites: null, meta: null, sources: null, history: null, series: {}, result: null, ver: 0 };
 
     function url(p) { return base + p; }
-    function j(p, o) { return _fetch(url(p), o).then(function (r) { return r.json(); }); }
+
+    // ---- 認証トークン（localStorage。Node テストでは null） ----
+    function getToken() { try { return localStorage.getItem("cw_token"); } catch (e) { return null; } }
+    function setToken(t) {
+      try { if (t) localStorage.setItem("cw_token", t); else localStorage.removeItem("cw_token"); } catch (e) {}
+    }
+    function authHeaders() {
+      var t = getToken();
+      return t ? { Authorization: "Bearer " + t } : {};
+    }
+
+    function j(p, o) {
+      o = o || {};
+      o.headers = Object.assign({}, authHeaders(), o.headers || {});
+      return _fetch(url(p), o).then(function (r) {
+        if (r.status === 401 && opts.onUnauthorized) opts.onUnauthorized();
+        return r.json();
+      });
+    }
+
+    function login(username, password) {
+      return _fetch(url("/api/auth/login"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username, password: password }),
+      }).then(function (r) {
+        return r.json().then(function (b) {
+          if (r.ok && b.token) setToken(b.token);
+          return { ok: r.ok, status: r.status, body: b };
+        });
+      });
+    }
+    function logout() { setToken(null); }
 
     // ---- マッピング（API形 → dc が期待する形）----
     function mapReasons(rs) {
@@ -107,7 +138,8 @@
     function workTypes() { return j("/api/work-types"); }
     function createSite(payload) {
       return _fetch(url("/api/sites"), {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
         body: JSON.stringify(payload)
       }).then(function (r) {
         return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
@@ -225,6 +257,8 @@
       patch: patch, loadAll: loadAll, loadDashboard: loadDashboard, loadSources: loadSources,
       loadHistory: loadHistory, loadSeries: loadSeries, ensureSiteDetail: ensureSiteDetail,
       workTypes: workTypes, createSite: createSite,
+      login: login, logout: logout, getToken: getToken,
+      me: function () { return j("/api/auth/me"); },
       mapDashToSites: mapDashToSites, mapSources: mapSources, _state: CW
     };
   }
@@ -252,6 +286,7 @@
       base: apiBase,
       fetch: window.fetch.bind(window),
       open: window.open.bind(window),
+      onUnauthorized: function () { showLogin(); }, // 401 で自動ログアウト→ログイン画面
       hideNav: ["現場詳細"], // 現場詳細はナビタブを廃し、現場クリックのドリルダウン専用にする
       bump: function () {
         try {
@@ -473,6 +508,73 @@
       if (active) { wbgtBuildTries = 0; setTimeout(buildWbgtScreen, 0); } // レイアウト確定後に構築
     }
 
+    // ---- ログイン画面（注入。.dc.html 無改修） ----
+    function roleLabel(r) {
+      return ({ admin: "管理者", tech_manager: "技術管理者", site_manager: "現場管理者",
+        safety: "安全担当", viewer: "閲覧" })[r] || r;
+    }
+    function showLogin() {
+      var el = document.getElementById("cw-login"); if (el) el.classList.add("on");
+      var p = document.getElementById("cw-user"); if (p) p.style.display = "none";
+    }
+    function hideLogin() {
+      var el = document.getElementById("cw-login"); if (el) el.classList.remove("on");
+      var p = document.getElementById("cw-user"); if (p) p.style.display = "flex";
+    }
+    function setUserPill(u) {
+      var n = document.getElementById("cw-user-name");
+      if (n && u) n.textContent = (u.displayName || "") + "（" + roleLabel(u.role) + "）";
+    }
+    function startApp() {
+      var rn = (window.__dcRootName && window.__dcRootName()) || "Root";
+      adapter.loadAll().then(function () { try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {} });
+      adapter.me().then(function (u) { if (u && u.role) { hideLogin(); setUserPill(u); } }).catch(function () {});
+    }
+    function installLoginScreen() {
+      if (document.getElementById("cw-login")) return;
+      var css = document.createElement("style");
+      css.textContent =
+        "#cw-login{display:none;position:fixed;inset:0;z-index:10000;background:#13344f;"
+        + "align-items:center;justify-content:center;font-family:'Noto Sans JP',system-ui,sans-serif}"
+        + "#cw-login.on{display:flex}"
+        + ".cw-login-card{background:#fff;width:min(380px,92vw);border-radius:14px;padding:26px 28px;box-shadow:0 8px 30px rgba(0,0,0,.35)}"
+        + ".cw-login-card h2{margin:0 0 4px;font-size:18px;color:#13344f}"
+        + ".cw-login-card p.sub{margin:0 0 18px;font-size:11.5px;color:#7e8c99}"
+        + ".cw-login-card label{display:block;font-size:11.5px;font-weight:700;color:#3a4854;margin:11px 0 4px}"
+        + ".cw-login-card input{width:100%;padding:10px;border:1px solid #d4dce2;border-radius:7px;font:400 14px sans-serif;box-sizing:border-box}"
+        + ".cw-login-card button{width:100%;margin-top:18px;padding:11px;border:none;border-radius:8px;background:#16527d;color:#fff;font:700 14px 'Noto Sans JP',sans-serif;cursor:pointer}"
+        + ".cw-login-msg{margin-top:10px;font-size:12px;min-height:16px;color:#c62828}"
+        + ".cw-login-hint{margin-top:14px;font-size:11px;color:#7e8c99;line-height:1.7}"
+        + "#cw-user{position:fixed;right:14px;top:9px;z-index:50;display:none;align-items:center;gap:8px;"
+        + "font:600 11.5px 'Noto Sans JP',sans-serif;color:#cfe0ef}"
+        + "#cw-user button{background:#1d4d74;color:#fff;border:none;border-radius:6px;padding:4px 10px;font:700 11px 'Noto Sans JP',sans-serif;cursor:pointer}";
+      document.head.appendChild(css);
+      var ov = document.createElement("div"); ov.id = "cw-login";
+      ov.innerHTML =
+        '<form class="cw-login-card" id="cw-login-form">'
+        + "<h2>ログイン</h2><p class=\"sub\">気象・河川・施工判断支援システム</p>"
+        + '<label>ユーザー名</label><input name="username" autocomplete="username" required>'
+        + '<label>パスワード</label><input name="password" type="password" autocomplete="current-password" required>'
+        + '<button type="submit">ログイン</button>'
+        + '<div class="cw-login-msg" id="cw-login-msg"></div>'
+        + '<div class="cw-login-hint">デモ: admin / admin123（管理者） ・ yamada / pass1234（現場管理者） ・ viewer / pass1234（閲覧）</div>'
+        + "</form>";
+      document.body.appendChild(ov);
+      var pill = document.createElement("div"); pill.id = "cw-user";
+      pill.innerHTML = '<span id="cw-user-name"></span><button id="cw-logout">ログアウト</button>';
+      document.body.appendChild(pill);
+      ov.querySelector("#cw-login-form").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var f = e.target, msg = ov.querySelector("#cw-login-msg");
+        msg.textContent = "認証中…";
+        adapter.login(f.username.value, f.password.value).then(function (res) {
+          if (res.ok) { msg.textContent = ""; setUserPill(res.body.user); hideLogin(); f.reset(); startApp(); }
+          else { msg.textContent = (res.body && res.body.detail) || "ログインに失敗しました"; }
+        }).catch(function () { msg.textContent = "通信エラー（バックエンド未起動の可能性）"; });
+      });
+      pill.querySelector("#cw-logout").addEventListener("click", function () { adapter.logout(); location.reload(); });
+    }
+
     (function whenReady() {
       var n = 0;
       var t = setInterval(function () {
@@ -483,14 +585,15 @@
         if (e && e.Logic && e.Logic.prototype && e.Logic.prototype.renderVals) {
           clearInterval(t);
           adapter.patch(e.Logic.prototype);
-          adapter.loadAll().then(function () {
-            try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {}
-          });
           installRegisterScreen(adapter);
           installSourceNote();
           installWbgtScreen();
-          // 定期自動更新（5分ごとにダッシュボード/ソースを再取得）
+          installLoginScreen();
+          // 認証ゲート: トークンがあればデータ取得、無ければログイン画面
+          if (adapter.getToken()) startApp(); else showLogin();
+          // 定期自動更新（5分ごと, 認証済み時のみ）
           setInterval(function () {
+            if (!adapter.getToken()) return;
             adapter.loadDashboard().then(function () { return adapter.loadSources(); })
               .then(function () { try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {} })
               .catch(function () {});
