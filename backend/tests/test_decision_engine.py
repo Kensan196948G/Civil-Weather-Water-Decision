@@ -1,0 +1,87 @@
+"""判定エンジンの単体テスト（詳細設計 §18.2 TC-003〜006 を含む）。"""
+from app.services.decision_engine import Reading, evaluate
+
+
+def test_river_flood_is_stop():
+    r = Reading(upstream_rain_mm_h=8, water_level_trend="rising", flood_warning=True)
+    res = evaluate("river", r)
+    assert res["overall_label"] == "中止検討"
+    assert res["overall_level"] == 2
+    assert any(x["reason_code"] == "flood_warning" for x in res["reasons"])
+
+
+def test_river_all_missing_is_unavailable():
+    r = Reading(missing={"river"})
+    res = evaluate("river", r)
+    assert res["overall_label"] == "確認不能"
+    assert res["overall_level"] == 3
+
+
+def test_river_known_risk_dominates_over_missing():
+    # 洪水(2) + 河川データ欠測(3) → 既知リスク(中止検討)を優先しつつ欠測を品質サマリに明記
+    r = Reading(flood_warning=True, missing={"river"})
+    res = evaluate("river", r)
+    assert res["overall_level"] == 2
+    assert "欠測" in res["data_quality_summary"]
+
+
+def test_concrete_high_temp_is_caution():
+    r = Reading(precip_mm_h=0.4, temp_c=31, wind_ms=7)
+    res = evaluate("concrete", r)
+    assert res["overall_label"] == "注意"
+    assert any(x["reason_code"] == "high_temperature" for x in res["reasons"])
+
+
+def test_concrete_heavy_rain_is_stop():
+    r = Reading(precip_mm_h=6.0, temp_c=25)
+    res = evaluate("concrete", r)
+    assert res["overall_level"] == 2
+
+
+def test_earthwork_light_rain_is_caution():
+    r = Reading(precip_mm_h=1.5)
+    res = evaluate("earthwork", r)
+    assert res["overall_label"] == "注意"
+
+
+def test_pavement_clear_is_normal_not_workable():
+    r = Reading(precip_mm_h=0.0, temp_c=25)
+    res = evaluate("pavement", r)
+    assert res["overall_level"] == 0
+    assert res["overall_label"] == "通常"
+    # 「作業可能」と断定しない
+    assert "作業可能" not in res["summary"]
+
+
+def test_crane_gust_is_stop():
+    r = Reading(wind_ms=9, gust_ms=14)
+    res = evaluate("crane", r)
+    assert res["overall_level"] == 2
+
+
+def test_crane_wind_only_is_caution():
+    r = Reading(wind_ms=9, gust_ms=8)
+    res = evaluate("crane", r)
+    assert res["overall_label"] == "注意"
+
+
+def test_crane_wind_missing_is_unavailable():
+    r = Reading(missing={"wind"})
+    res = evaluate("crane", r)
+    assert res["overall_level"] == 3
+
+
+def test_heat_wbgt_caution_and_danger():
+    assert evaluate("heat", Reading(wbgt=29))["overall_label"] == "注意"
+    assert evaluate("heat", Reading(wbgt=31))["overall_label"] == "中止検討"
+    assert evaluate("heat", Reading(missing={"wbgt"}))["overall_level"] == 3
+
+
+def test_output_shape_matches_design():
+    res = evaluate("river", Reading(flood_warning=True))
+    for key in ("work_type", "overall_level", "overall_label", "summary",
+                "reasons", "data_quality_summary"):
+        assert key in res
+    for reason in res["reasons"]:
+        for key in ("severity", "reason_code", "message", "source_id", "observed_value"):
+            assert key in reason

@@ -1,0 +1,105 @@
+"""評価サービス: 気象取得（Open-Meteo）→ Reading 構築 → 判定エンジン を束ねる。
+
+外部取得失敗は隠さず、欠測として判定に反映する（設計 §5.3 / §15.2）。
+fetch は注入可能（テストはネットワーク非依存）。
+"""
+from __future__ import annotations
+
+import asyncio
+import time
+from datetime import datetime, timedelta, timezone
+
+from .data_collectors import open_meteo
+from .decision_engine import LEVEL_LABELS, Reading, evaluate
+from ..models import Site
+
+JST = timezone(timedelta(hours=9))
+_CACHE: dict[str, tuple[float, dict]] = {}
+_TTL = 300  # 秒
+
+
+async def _cached_fetch(lat: float, lon: float, key: str) -> dict:
+    now = time.monotonic()
+    hit = _CACHE.get(key)
+    if hit and now - hit[0] < _TTL:
+        return hit[1]
+    data = await open_meteo.fetch_forecast(lat, lon)
+    _CACHE[key] = (now, data)
+    return data
+
+
+def clear_cache() -> None:
+    _CACHE.clear()
+
+
+def build_reading(work_type: str, wr: dict, site: Site) -> Reading:
+    r = Reading(
+        precip_mm_h=wr.get("precip_mm_h"), temp_c=wr.get("temp_c"),
+        wind_ms=wr.get("wind_ms"), gust_ms=wr.get("gust_ms"),
+        humidity_pct=wr.get("humidity_pct"), wbgt=wr.get("wbgt"),
+        missing=set(wr.get("missing") or set()),
+    )
+    if work_type == "river":
+        r.upstream_rain_mm_h = wr.get("precip_mm_h")        # PoC: 降雨を上流雨量proxy
+        r.water_level_trend = "rising" if site.river_state == "rising" else None
+        r.flood_warning = bool(site.flood_info)
+        if site.river_state == "stale":
+            r.missing = set(r.missing) | {"river"}
+    return r
+
+
+async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
+                      start: str | None = None, end: str | None = None) -> dict:
+    """1現場を評価してダッシュボード/詳細用 dict を返す。"""
+    wt = work_type or site.work_type
+    if fetch is None:
+        data = await _cached_fetch(site.latitude, site.longitude, site.id)
+    else:
+        data = await fetch(site.latitude, site.longitude)
+
+    status = data.get("status", "ERROR")
+    points = data.get("points", [])
+    wr = open_meteo.window_reading(points, start, end) if points else {
+        "precip_mm_h": None, "temp_c": None, "temp_lo": None, "wind_ms": None,
+        "gust_ms": None, "humidity_pct": None, "wbgt": None,
+        "missing": {"precip", "temp", "wind", "wbgt"},
+    }
+    reading = build_reading(wt, wr, site)
+    decision = evaluate(wt, reading)
+
+    return {
+        "id": site.id, "name": site.name, "code": site.site_code, "loc": site.loc,
+        "work": wt, "level": decision["overall_level"], "levelLabel": decision["overall_label"],
+        "summary": decision["summary"],
+        "rainNow": wr.get("precip_mm_h"), "rainPeak": wr.get("precip_mm_h"),
+        "windMax": wr.get("wind_ms"), "gust": wr.get("gust_ms"),
+        "tempHi": wr.get("temp_c"), "tempLo": wr.get("temp_lo"),
+        "wbgt": wr.get("wbgt"), "wbgtDerived": True,
+        "river": site.river_note, "riverState": site.river_state,
+        "reasons": [{"severity": x["severity"], "text": x["message"],
+                     "source": x["source_id"], "value": x["observed_value"]}
+                    for x in decision["reasons"]],
+        "dataQuality": decision["data_quality_summary"],
+        "weatherStatus": status,
+        "fetchedAt": data.get("fetched_at"),
+        "updated": datetime.now(JST).strftime("%H:%M"),
+    }
+
+
+async def assess_all(sites: list[Site], *, fetch=None) -> list[dict]:
+    return await asyncio.gather(*[assess_site(s, fetch=fetch) for s in sites])
+
+
+async def assess_decision(site: Site, work_type: str, start: str | None, end: str | None,
+                          *, fetch=None) -> dict:
+    """作業判断画面の評価。判定エンジン出力（設計 §8.2）＋参照情報を返す。"""
+    card = await assess_site(site, fetch=fetch, work_type=work_type, start=start, end=end)
+    return {
+        "siteId": site.id, "siteName": site.name, "workType": work_type,
+        "overall_level": card["level"], "overall_label": card["levelLabel"],
+        "summary": card["summary"], "reasons": card["reasons"],
+        "data_quality_summary": card["dataQuality"],
+        "weatherStatus": card["weatherStatus"], "fetchedAt": card["fetchedAt"],
+        "refs": ["気象: Open-Meteo", "河川: 川の防災情報", "WBGT: 環境省(推定)", "警報: 気象庁"],
+        "levelLabels": LEVEL_LABELS,
+    }

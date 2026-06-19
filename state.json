@@ -28,6 +28,11 @@
       "status": "モックデータで6画面動作。実APIへのデータ接続は次フェーズ。",
       "note": "frontend は ClaudeDesign 管理。再取り込みは DesignSync。素React移植はしない（frontend/README.md 参照）。"
     },
-    "notes": "実装計画作成→GitHub足場(M0-M4/Issue45)→ClaudeDesign WebUI を frontend/ に取り込み(6画面/ロジック21検証pass)。次は モック→実API のデータ接続。"
+    "backend": {
+      "stack": "FastAPI + SQLAlchemy(SQLite) + httpx",
+      "status": "判定エンジン/Open-Meteoコレクタ/API実装・26テストpass・ライブ判定動作確認済み。",
+      "note": "ポート固定不可(8000は別プロジェクトCivilPDF-DX使用中)。空きポート起動。"
+    },
+    "notes": "実装計画→GitHub足場(M0-M4/Issue45)→WebUI取り込み(6画面)→バックエンド構築(FastAPI/判定エンジン/Open-Meteo/API, 26テストpass, ライブ動作確認)。次は #46 WebUIモック→本API接続。"
   }
 }
