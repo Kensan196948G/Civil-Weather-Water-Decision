@@ -381,7 +381,7 @@
       if (v < 31) return { label: "厳重警戒", color: "#d6481f" };
       return { label: "危険", color: "#c62828" };
     }
-    var wbgtMap = null, wbgtMarkers = null, wbgtVer = -1;
+    var wbgtMap = null, wbgtMarkers = null, wbgtVer = -1, wbgtBuildTries = 0;
     function installWbgtScreen() {
       if (document.getElementById("cw-wbgt-screen")) return;
       var css = document.createElement("style");
@@ -413,16 +413,35 @@
         + '<div id="cw-wbgt-rank"></div></div>';
       document.body.appendChild(screen);
     }
+    function buildWbgtRank() {
+      var rank = document.getElementById("cw-wbgt-rank");
+      if (!rank || !CW.sites) return;
+      var sorted = CW.sites.slice().sort(function (a, b) { return (b.wbgt || 0) - (a.wbgt || 0); });
+      rank.innerHTML = sorted.map(function (s) {
+        var m = wbgtMeta(s.wbgt);
+        return '<div class="cw-wbgt-row"><span class="cw-wbgt-dot" style="background:' + m.color + '"></span>'
+          + "<b>" + (s.wbgt == null ? "—" : s.wbgt) + '</b><span class="cw-wbgt-lab" style="color:' + m.color + '">' + m.label + "</span>"
+          + '<span class="cw-wbgt-name">' + s.name + '</span><span class="cw-wbgt-loc">' + (s.loc || "") + "</span></div>";
+      }).join("");
+    }
     function buildWbgtScreen() {
       if (!CW.sites) return;
-      var L = window.L, mapEl = document.getElementById("cw-wbgt-map");
-      if (L && mapEl && !wbgtMap) {
+      var mapEl = document.getElementById("cw-wbgt-map");
+      if (!mapEl) return;
+      buildWbgtRank();
+      if (!window.L) { // Leaflet 未ロードなら再試行（dc の ensureMaps と同じ作法）
+        if (wbgtBuildTries++ < 50) setTimeout(buildWbgtScreen, 150);
+        return;
+      }
+      var L = window.L;
+      if (!wbgtMap) {
         wbgtMap = L.map(mapEl, { scrollWheelZoom: false }).setView([37.5, 137.0], 4);
         L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
           { maxZoom: 18, attribution: "&copy; OpenStreetMap contributors" }).addTo(wbgtMap);
         wbgtMarkers = L.layerGroup().addTo(wbgtMap);
       }
-      if (wbgtMap && wbgtVer !== CW.ver) {
+      wbgtMap.invalidateSize(); // パネル表示後の実コンテナサイズを反映（非表示時に作ると0px化するため）
+      if (wbgtVer !== CW.ver) {
         wbgtVer = CW.ver;
         wbgtMarkers.clearLayers();
         var pts = [];
@@ -434,24 +453,14 @@
           wbgtMarkers.addLayer(mk); pts.push([s.lat, s.lon]);
         });
         if (pts.length) { try { wbgtMap.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch (e) {} }
-        var rank = document.getElementById("cw-wbgt-rank");
-        if (rank) {
-          var sorted = CW.sites.slice().sort(function (a, b) { return (b.wbgt || 0) - (a.wbgt || 0); });
-          rank.innerHTML = sorted.map(function (s) {
-            var m = wbgtMeta(s.wbgt);
-            return '<div class="cw-wbgt-row"><span class="cw-wbgt-dot" style="background:' + m.color + '"></span>'
-              + "<b>" + (s.wbgt == null ? "—" : s.wbgt) + '</b><span class="cw-wbgt-lab" style="color:' + m.color + '">' + m.label + "</span>"
-              + '<span class="cw-wbgt-name">' + s.name + '</span><span class="cw-wbgt-loc">' + (s.loc || "") + "</span></div>";
-          }).join("");
-        }
       }
-      if (wbgtMap) setTimeout(function () { try { wbgtMap.invalidateSize(); } catch (e) {} }, 60);
+      setTimeout(function () { try { wbgtMap.invalidateSize(); } catch (e) {} }, 150);
     }
     function cwSyncWbgtScreen(inst) {
       var active = inst.state.screen === "wbgt";
       var el = document.getElementById("cw-wbgt-screen");
       if (el) el.style.display = active ? "block" : "none";
-      if (active) buildWbgtScreen();
+      if (active) { wbgtBuildTries = 0; setTimeout(buildWbgtScreen, 0); } // レイアウト確定後に構築
     }
 
     (function whenReady() {
