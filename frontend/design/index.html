@@ -4,14 +4,40 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>気象・河川・施工判断支援システム</title>
-<!-- ClaudeDesign 出力(.dc.html)をエントリとして読み込む。
-     ファイル名は ClaudeDesign 側と一致させており、再取り込み時の対応を保つ。 -->
-<meta http-equiv="refresh" content="0; url=./気象河川施工判断支援.dc.html">
-<link rel="canonical" href="./気象河川施工判断支援.dc.html">
 </head>
 <body>
-<p>読み込み中… 自動で遷移しない場合は
-<a href="./気象河川施工判断支援.dc.html">気象・河川・施工判断支援システム</a>
-を開いてください。</p>
+<p style="font-family:system-ui,sans-serif;padding:18px;color:#5a6b7b">読み込み中…</p>
+<!--
+  ローダ: ClaudeDesign 出力(.dc.html, 無改修)を取得し、
+  ・<head> に API ベース設定（?api= / localStorage / 既定=同一オリジン）
+  ・</body> 直前に data-adapter.js
+  を注入して展開する。これにより .dc.html を1バイトも変更せず実APIへ接続でき、
+  ClaudeDesign 再取り込み（.dc.html 上書き）でもアダプタは生き残る。
+  データ無しで素のデザインだけ見たい場合は ?api= を付けず、かつ data-adapter は
+  バックエンド未起動なら fetch 失敗してモック表示にフォールバックする。
+-->
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var api = params.get("api");
+  try {
+    if (api !== null) localStorage.setItem("cw_api", api);
+    else api = localStorage.getItem("cw_api");
+  } catch (e) {}
+  api = api || ""; // "" = 同一オリジン
+  var DC = "./気象河川施工判断支援.dc.html";
+  fetch(DC).then(function (r) { return r.text(); }).then(function (html) {
+    var cfg = "<scr" + "ipt>window.__CW_API_BASE__=" + JSON.stringify(api) + ";</scr" + "ipt>";
+    var adp = '<scr' + 'ipt src="./data-adapter.js"></scr' + "ipt>";
+    html = html.indexOf("</head>") >= 0 ? html.replace("</head>", cfg + "</head>") : cfg + html;
+    html = html.indexOf("</body>") >= 0 ? html.replace("</body>", adp + "</body>") : html + adp;
+    document.open(); document.write(html); document.close();
+  }).catch(function (e) {
+    document.body.innerHTML =
+      '<p style="font-family:system-ui,sans-serif;padding:18px;color:#c62828">'
+      + "デザインの読み込みに失敗しました: " + e + "</p>";
+  });
+})();
+</script>
 </body>
 </html>

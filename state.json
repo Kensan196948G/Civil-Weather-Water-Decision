@@ -33,6 +33,10 @@
       "status": "判定エンジン/Open-Meteoコレクタ/API実装・26テストpass・ライブ判定動作確認済み。",
       "note": "ポート固定不可(8000は別プロジェクトCivilPDF-DX使用中)。空きポート起動。"
     },
-    "notes": "実装計画→GitHub足場(M0-M4/Issue45)→WebUI取り込み(6画面)→バックエンド構築(FastAPI/判定エンジン/Open-Meteo/API, 26テストpass, ライブ動作確認)。次は #46 WebUIモック→本API接続。"
+    "dataWiring": {
+      "method": "外部アダプタ(data-adapter.js)。.dc.html無改修・prototypeラップ。index.htmlローダで注入。",
+      "status": "実装＋契約テスト9件pass。デモ動作: front?api=backend。ブラウザ実描画は要ユーザー確認。"
+    },
+    "notes": "実装計画→GitHub足場→WebUI取り込み→バックエンド(26テスト)→#46 データ接続アダプタ実装(契約テスト9pass)。ブラウザ確認待ち。"
   }
 }

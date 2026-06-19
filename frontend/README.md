@@ -5,12 +5,14 @@
 
 ```
 frontend/
-├── design/                          # ClaudeDesign 出力（再取り込みの対象。原則ここを直接編集しない）
-│   ├── 気象河川施工判断支援.dc.html   # 本体（<x-dc>テンプレート ＋ <script data-dc-script> ロジック）
-│   ├── support.js                   # dc-runtime（React/ReactDOM を CDN から自動ロードしマウント）
-│   └── index.html                   # エントリ（.dc.html へ自動遷移）
+├── design/                          # ClaudeDesign 出力（再取り込みの対象）
+│   ├── 気象河川施工判断支援.dc.html   # 本体（無改修。<x-dc>テンプレ ＋ <script data-dc-script>）
+│   ├── support.js                   # dc-runtime（React/ReactDOM を CDN 自動ロードしマウント）
+│   ├── data-adapter.js              # ★実APIへ接続する外部アダプタ（.dc.html を触らず prototype をラップ）
+│   └── index.html                   # ローダ（.dc.html を取得しアダプタ＋API設定を注入）
 ├── test/
-│   └── logic-smoke.mjs              # ロジック層スモークテスト（DOM 不要 / Node 実行）
+│   ├── logic-smoke.mjs              # ロジック層スモークテスト（DOM不要）
+│   └── adapter-contract.cjs         # アダプタ契約テスト（patch後 renderVals が API由来か検証）
 └── README.md
 ```
 
@@ -50,10 +52,34 @@ UI を ClaudeDesign 側で更新したら、DesignSync コネクタで `design/`
 - ファイル名は ClaudeDesign 側と一致させること（差分追跡のため）。
 - 取り込み後は `node frontend/test/logic-smoke.mjs` で回帰確認する。
 
-## データ接続計画（次フェーズ）
+## データ接続（data-adapter 方式・実装済み）
 
-現状の `<script data-dc-script>` 内のハードコード値・合成データを、バックエンド API（詳細設計 §7）に差し替える。
-**`vals` の形は変えず**、データ取得元だけ `fetch` 化し `setState` に流す方針。これでテンプレート（画面）は無改修で接続できる。
+`.dc.html` を**1バイトも変更せず**実APIへ接続する。仕組み:
+
+1. `index.html`（ローダ）が `.dc.html` を fetch し、`<head>` に API ベース設定、`</body>` 直前に `data-adapter.js` を注入して展開。
+2. `data-adapter.js` が dc-runtime 生成の Component(`window.__dcRegistry[root].Logic`) の prototype を**ラップ**:
+   - `renderVals` ラップ — 呼出前に `this.SITES`/`this.state.history` を API データへ差替え、呼出後に `vals.sources` を上書き。
+   - `genHourly`/`resultVM`/`evaluate`/`record`/`refresh` をメソッド差替えで API 化。
+   - 再描画は `window.__dcSetProps()`（= `registry.bump()`）で発火。
+3. ClaudeDesign 再取り込み（`.dc.html` 上書き）でも `data-adapter.js`/`index.html` は残るため配線は維持される。
+
+### データ付きで起動
+
+```bash
+# 1) バックエンド（空きポート）
+cd backend && BPORT=$(python3 -c "import socket;s=socket.socket();s.bind(('0.0.0.0',0));print(s.getsockname()[1]);s.close()") \
+  && python3 -m uvicorn app.main:app --host 0.0.0.0 --port "$BPORT"
+# 2) フロント（別ターミナル, 空きポート）
+cd frontend/design && python3 -m http.server 0   # 割当ポートは起動ログ参照
+# 3) ブラウザで:  http://<host>:<frontport>/?api=http://<host>:<BPORT>
+#    ?api= は localStorage に保存され、次回以降は省略可。バックエンド未起動ならモック表示にフォールバック。
+```
+
+> `vals` の形は変えていないため、テンプレート（画面）は無改修。`?api=` を付けなければ素のモック表示。
+
+### 旧計画（対応表・参考）
+
+`<script data-dc-script>` のハードコード値を API（詳細設計 §7）へ差し替える対応。data-adapter.js が下表を実装済み。
 
 | 現状（モック） | 役割 | 接続先 API（詳細設計 §7） |
 |---|---|---|
@@ -79,9 +105,12 @@ UI を ClaudeDesign 側で更新したら、DesignSync コネクタで `design/`
 - **公式優先**: 気象庁の警報・注意報を Open-Meteo 等の外部予報より優先。
 - 詳細設計 §8.2 の判定エンジン出力 JSON（`overall_level` / `reasons[]` / `data_quality_summary`）を `resultVM()` の形に合わせて返すと差し替えが最小になる。
 
-## スモークテスト
+## テスト（DOM不要 / Node）
 
 ```bash
-node frontend/test/logic-smoke.mjs
-# 6画面のビューモデル生成・判定エンジン(6作業種別)・グラフ生成・WBGT境界を検証（DOM不要）
+node frontend/test/logic-smoke.mjs       # 6画面VM・判定(6作業種別)・グラフ・WBGT境界（21件）
+node frontend/test/adapter-contract.cjs  # アダプタ: patch後 renderVals が API由来か（9件）
 ```
+
+> 本環境では Chrome がヘッドレス起動不可のため、実ブラウザ描画は各自で確認すること。
+> 上記2テストで「ロジック」と「API配線契約」を担保する。
