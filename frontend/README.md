@@ -90,6 +90,7 @@ python3 frontend/serve.py
 - **熱中症/WBGT 画面に全国地図**: OpenStreetMap で現場を WBGT リスク色（ほぼ安全〜危険）のピンで表示。スケール凡例＋現場別ランキング併設（注入パネル。`.dc.html` 無改修）。
 - **データソース画面に更新間隔を明記**: 「5分ごとに自動更新」の注記バーを画面下部に表示。
 - **ログイン/RBAC**: 未認証時はログイン画面を表示。全 fetch に `Authorization: Bearer` を付与し、401 で自動ログアウト。右上にユーザー名＋ログアウト。デモ: `admin/admin123`（管理者）, `yamada/pass1234`（現場管理者）, `viewer/pass1234`（閲覧。現場登録は403）。
+- **通知ベル**: 右上の🔔に要対応件数（中止検討/河川/障害＝severity≥2）のバッジ。クリックで通知一覧（`GET /api/notifications` を判定結果から導出）。5分ごと更新。
 
 > **ネイティブ ClaudeDesign 画面化への移行**: 現状の登録画面はアダプタ注入。正式に ClaudeDesign の画面にしたい場合は、ClaudeDesign で「現場登録」画面（フォーム）を1枚追加し `POST /api/sites`（body は上記payload）を呼ぶだけ。API は完成済みなので、デザイン側にフォームができたらアダプタの注入版は外せる。
 

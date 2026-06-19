@@ -28,6 +28,10 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # 通知（設計§14）。未設定なら画面内通知のみ（外部送信は no-op に縮退）
+    slack_webhook_url: str = ""
+    teams_webhook_url: str = ""
+
     # 認証（PoC: アプリ内ユーザー＋JWT。本番候補は Entra ID OIDC へ差し替え）
     enable_auth: bool = True
     # 本番は環境変数 JWT_SECRET で必ず上書き（32バイト以上）

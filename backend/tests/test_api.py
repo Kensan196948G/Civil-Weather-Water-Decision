@@ -101,6 +101,16 @@ def test_data_sources(client):
     assert any(d["status"] == "Warning" for d in rows)
 
 
+def test_notifications_endpoint(client):
+    r = client.get("/api/notifications")
+    assert r.status_code == 200
+    body = r.json()
+    assert "count" in body and "notifications" in body
+    for n in body["notifications"]:
+        for k in ("id", "kind", "severity", "title", "message", "disclaimer"):
+            assert k in n
+
+
 def test_work_types(client):
     rows = client.get("/api/work-types").json()
     assert len(rows) == 6

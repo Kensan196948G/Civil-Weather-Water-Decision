@@ -16,7 +16,7 @@ from ..models import (
     AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
     Site, Station, User, WorkType,
 )
-from ..services import assessment
+from ..services import assessment, notifications
 from ..services.audit import audit
 from ..services.data_collectors import open_meteo, source_probe
 
@@ -355,6 +355,19 @@ async def run_collectors(db: Session = Depends(get_db),
     probed = await source_probe.probe_all(db)
     return {"refetched": len(cards), "weatherOk": ok, "total": len(cards),
             "probed": {k: v["status"] for k, v in probed.items()}}
+
+
+# ---------- 通知（設計§14） ----------
+@router.get("/notifications")
+async def list_notifications(db: Session = Depends(get_db),
+                             user: User = Depends(get_current_user)):
+    sites = db.scalars(select(Site).where(Site.status == "active").order_by(Site.id)).all()
+    cards = await assessment.assess_all(list(sites))
+    src = db.scalars(select(DataSourceStatus).order_by(DataSourceStatus.id)).all()
+    sources = [{"id": d.id, "name": d.name, "status": d.status,
+                "fails": d.fails, "lastOk": d.last_ok} for d in src]
+    notifs = notifications.build_notifications(cards, sources)
+    return {"count": len(notifs), "notifications": notifs}
 
 
 # ---------- 監査ログ（管理者・技術管理者） ----------

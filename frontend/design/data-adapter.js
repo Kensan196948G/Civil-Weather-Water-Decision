@@ -259,6 +259,7 @@
       workTypes: workTypes, createSite: createSite,
       login: login, logout: logout, getToken: getToken,
       me: function () { return j("/api/auth/me"); },
+      notifications: function () { return j("/api/notifications"); },
       mapDashToSites: mapDashToSites, mapSources: mapSources, _state: CW
     };
   }
@@ -527,7 +528,10 @@
     }
     function startApp() {
       var rn = (window.__dcRootName && window.__dcRootName()) || "Root";
-      adapter.loadAll().then(function () { try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {} });
+      adapter.loadAll().then(function () {
+        try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {}
+        loadNotifications();
+      });
       adapter.me().then(function (u) { if (u && u.role) { hideLogin(); setUserPill(u); } }).catch(function () {});
     }
     function installLoginScreen() {
@@ -575,6 +579,57 @@
       pill.querySelector("#cw-logout").addEventListener("click", function () { adapter.logout(); location.reload(); });
     }
 
+    // ---- 通知ベル（設計§14。注入） ----
+    function notifColor(sev) { return sev >= 2 ? "#c62828" : sev === 1 ? "#e8930c" : "#5a6b7b"; }
+    function installNotifyBell() {
+      if (document.getElementById("cw-bell")) return;
+      var css = document.createElement("style");
+      css.textContent =
+        "#cw-bell{position:fixed;right:150px;top:8px;z-index:50;display:none;cursor:pointer;font-size:17px;"
+        + "color:#cfe0ef;background:#1d4d74;border:none;border-radius:8px;padding:4px 9px;position:fixed}"
+        + ".cw-bell-badge{background:#c62828;color:#fff;font:700 10px sans-serif;min-width:15px;height:15px;"
+        + "border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 3px;margin-left:3px}"
+        + ".cw-bell-badge.on{display:inline-flex}"
+        + "#cw-notif{position:fixed;right:14px;top:44px;z-index:51;display:none;width:min(380px,92vw);max-height:62vh;"
+        + "overflow:auto;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.28);font-family:'Noto Sans JP',system-ui,sans-serif}"
+        + "#cw-notif.on{display:block}"
+        + "#cw-notif h3{margin:0;padding:13px 16px;font-size:13px;color:#13344f;border-bottom:1px solid #eef1f4}"
+        + ".cw-notif-row{padding:10px 16px;border-bottom:1px solid #f1f4f7;font-size:12px;color:#16212c}"
+        + ".cw-notif-row .t{font-weight:700;margin-bottom:2px}"
+        + ".cw-notif-empty{padding:22px 16px;color:#7e8c99;font-size:12px;text-align:center}";
+      document.head.appendChild(css);
+      var bell = document.createElement("button");
+      bell.id = "cw-bell";
+      bell.innerHTML = '🔔<span class="cw-bell-badge" id="cw-bell-badge">0</span>';
+      var panel = document.createElement("div");
+      panel.id = "cw-notif";
+      panel.innerHTML = "<h3>通知</h3><div id=\"cw-notif-list\"></div>";
+      document.body.appendChild(bell);
+      document.body.appendChild(panel);
+      bell.addEventListener("click", function () { panel.classList.toggle("on"); });
+    }
+    function loadNotifications() {
+      if (!adapter.getToken()) return;
+      adapter.notifications().then(function (d) {
+        if (!d || !d.notifications) return;
+        var ns = d.notifications;
+        var high = ns.filter(function (n) { return n.severity >= 2; }).length;
+        var bell = document.getElementById("cw-bell");
+        var badge = document.getElementById("cw-bell-badge");
+        if (bell) bell.style.display = "inline-block";
+        if (badge) { badge.textContent = high; badge.className = "cw-bell-badge" + (high > 0 ? " on" : ""); }
+        var list = document.getElementById("cw-notif-list");
+        if (list) {
+          list.innerHTML = ns.length
+            ? ns.map(function (n) {
+                return '<div class="cw-notif-row"><div class="t" style="color:' + notifColor(n.severity)
+                  + '">' + n.title + "</div>" + n.message + "</div>";
+              }).join("")
+            : '<div class="cw-notif-empty">現在、通知はありません</div>';
+        }
+      }).catch(function () {});
+    }
+
     (function whenReady() {
       var n = 0;
       var t = setInterval(function () {
@@ -589,13 +644,14 @@
           installSourceNote();
           installWbgtScreen();
           installLoginScreen();
+          installNotifyBell();
           // 認証ゲート: トークンがあればデータ取得、無ければログイン画面
           if (adapter.getToken()) startApp(); else showLogin();
           // 定期自動更新（5分ごと, 認証済み時のみ）
           setInterval(function () {
             if (!adapter.getToken()) return;
             adapter.loadDashboard().then(function () { return adapter.loadSources(); })
-              .then(function () { try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {} })
+              .then(function () { loadNotifications(); try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {} })
               .catch(function () {});
           }, 300000);
           window.__cwAdapter = adapter;
