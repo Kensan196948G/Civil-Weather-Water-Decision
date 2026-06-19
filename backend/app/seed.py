@@ -5,10 +5,12 @@ WebUI(ClaudeDesign) のモックと同じ S01〜S06 を用い、見た目を一�
 """
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .core.db import Base, SessionLocal, engine
+from .core.db import SessionLocal
 from .models import DataSourceStatus, DecisionLog, Site, Station, WorkPlan, WorkType
 
 WORK_TYPES = [
@@ -113,6 +115,13 @@ def seed(db: Session) -> None:
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
+    """Alembic マイグレーションを head まで適用し、サンプルを投入（冪等）。"""
+    from alembic import command
+    from alembic.config import Config
+
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg = Config(os.path.join(backend_dir, "alembic.ini"))
+    cfg.set_main_option("script_location", os.path.join(backend_dir, "migrations"))
+    command.upgrade(cfg, "head")
     with SessionLocal() as db:
         seed(db)

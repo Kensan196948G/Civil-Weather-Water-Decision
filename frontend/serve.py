@@ -79,7 +79,8 @@ class Server(socketserver.ThreadingTCPServer):
 
 if __name__ == "__main__":
     ip = lan_ip()
-    httpd = Server(("0.0.0.0", 0), Handler)
+    _port = int(os.environ["PORT"]) if os.environ.get("PORT") else 0  # 0=空きポート自動
+    httpd = Server(("0.0.0.0", _port), Handler)
     port = httpd.server_address[1]
     print(f"IP={ip}")
     print(f"PORT={port}")

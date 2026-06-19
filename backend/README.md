@@ -45,8 +45,34 @@ echo "http://127.0.0.1:$PORT/health  /  /docs (Swagger UI)"
 ```
 
 > 注意: ポート 8000 は他プロジェクトが使用している場合がある。固定せず空きポートを使うこと。
-> ダッシュボードは6現場分のライブ予報を取得するため、外部ネットワーク（api.open-meteo.com）への到達性が必要。
+> ダッシュボードは全16現場分のライブ予報を取得するため、外部ネットワーク（api.open-meteo.com）への到達性が必要。
 > 取得失敗時も画面は落とさず、欠測として「確認不能」を返す（設計 §15.2）。
+
+## DB / マイグレーション（Alembic, #12 実装済み）
+
+スキーマの正本は **Alembic**（`create_all` は廃止）。`init_db()` が起動時に `alembic upgrade head` を実行してからシードする。**SQLite（開発）・PostgreSQL（本番候補）の双方で同一マイグレーション**が通る（モデルは両対応型のみ使用、env.py は `render_as_batch=True`）。
+
+```bash
+cd backend
+python3 -m alembic upgrade head        # スキーマ適用
+python3 -m alembic revision --autogenerate -m "xxx"  # モデル変更時に差分生成
+python3 -m alembic current             # 現在のリビジョン
+```
+
+PostgreSQL に切替（本番候補）:
+```bash
+export DATABASE_URL="postgresql+psycopg2://cw_user:cw_password@localhost:5432/civil_weather_water"
+python3 -m alembic upgrade head
+```
+
+### Docker Compose（postgres + backend + frontend）
+```bash
+cp .env.example .env
+docker compose up -d            # backend 起動時に alembic upgrade head ＋ seed
+# ホスト 5432 が使用中なら: PG_HOST_PORT=15432 docker compose up -d
+# ブラウザ: http://localhost:3000/?api=http://localhost:8000
+```
+検証済み: 同一 Alembic マイグレーションが PostgreSQL16 でテーブル作成→シード（16現場/9ソース）まで成功。
 
 ## 主なエンドポイント（設計 §7）
 
@@ -78,7 +104,6 @@ cd backend && python3 -m pytest      # 26 passed
 ## 次フェーズ（残作業）
 
 - `#46` WebUI のモックを本API へ接続（`frontend/README.md` 対応表）。CORS は許可済み。
-- `#12` Alembic マイグレーション化（現状は `create_all`）。
 - `#20` 環境省 WBGT 実データ接続（現状 derived 推定）。
 - `#23` `decision_results`/`decision_reasons` の永続化（現状は都度計算）。
 - 河川（川の防災情報）・気象庁防災XML の連携（Phase 2 / #29〜#33）。

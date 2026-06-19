@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: civil-weather-water-postgres
+    environment:
+      POSTGRES_DB: civil_weather_water
+      POSTGRES_USER: cw_user
+      POSTGRES_PASSWORD: cw_password
+    ports:
+      # ホスト側ポートは PG_HOST_PORT で上書き可（既存 Postgres と衝突する環境向け）
+      - "${PG_HOST_PORT:-5432}:5432"
+    volumes:
+      - cw_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cw_user -d civil_weather_water"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: civil-weather-water-backend
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://cw_user:cw_password@postgres:5432/civil_weather_water
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    container_name: civil-weather-water-frontend
+    environment:
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    # ブラウザで http://localhost:3000/?api=http://localhost:8000 を開く
+
+volumes:
+  cw_pgdata:
