@@ -69,7 +69,9 @@ def test_export_csv(client):
 
 def test_data_sources(client):
     rows = client.get("/api/dashboard/data-sources").json()
-    assert len(rows) == 6
+    assert len(rows) == 9
+    ids = {d["id"] for d in rows}
+    assert {"DS-JMA-CSV", "DS-JAXA", "DS-NOAA"} <= ids
     assert any(d["status"] == "Error" for d in rows)
     assert any(d["status"] == "Warning" for d in rows)
 

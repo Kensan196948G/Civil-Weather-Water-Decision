@@ -25,6 +25,9 @@ PROBE_TARGETS = {
     "DS-WBGT": "https://www.wbgt.env.go.jp/",
     "DS-RIVER-GO": "https://www.river.go.jp/",
     "DS-NASA-POWER": "https://power.larc.nasa.gov/",
+    "DS-JMA-CSV": "https://www.jma.go.jp/bosai/amedas/",
+    "DS-JAXA": "https://gportal.jaxa.jp/gpr/",
+    "DS-NOAA": "https://api.weather.gov/",
 }
 
 

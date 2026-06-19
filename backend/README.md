@@ -93,7 +93,8 @@ cd backend && python3 -m pytest      # 26 passed
 | `refresh_forecasts` | 600秒（`FORECAST_REFRESH_SECONDS`） | Open-Meteo 予報キャッシュをウォーム |
 
 - `app/services/data_collectors/source_probe.py` が実プローブ。OK / Warning(遅延・3xx/4xx) / Error(5xx・接続失敗) を判定。
-- プローブ対象（公開・認証不要）: Open-Meteo / 気象庁XML / WBGT / 川の防災情報 / NASA POWER。
+- プローブ対象（公開・認証不要, 8件）: Open-Meteo / 気象庁XML / 気象庁CSV(アメダス) / WBGT / 川の防災情報 / NASA POWER / JAXA G-Portal / NOAA。
+- データソースは計9件（設計§4.1 準拠。+ DS-JMA-CSV / DS-JAXA / DS-NOAA を追加）。
 - **水防災オープンデータ（契約制）は対象外**＝シードの Error/未接続を保持（実態以上に良く見せない）。
 - 手動再取得 `POST /api/data-collectors/run` も同期で全ソースをプローブする。
 - テストでは `ENABLE_SCHEDULER=false`（ネット非依存）。
