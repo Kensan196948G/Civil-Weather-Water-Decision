@@ -30,14 +30,18 @@ frontend/
 
 ## 起動方法（ローカル）
 
-`.dc.html` は `./support.js` を相対参照するため、**同一ディレクトリを HTTP 配信**して開く（`file://` は不可）。
+**`frontend/serve.py`（推奨）** を使う。自動IP＋空きポートで配信し、`.dc.html` をディスク上は無改修のまま
+HTTP応答時に data-adapter.js / API設定を**サーバ側注入**する（`document.write` を使わないので、
+Leaflet 等の外部 script が parser-blocking 警告なしで読み込まれる）。
 
 ```bash
-# 任意の静的サーバでよい。例:
-cd frontend/design
-python3 -m http.server 5173
-# → ブラウザで http://localhost:5173/ を開く
+python3 frontend/serve.py
+# 起動ログの URL を ?api=http://<host>:<backend-port> 付きで開く
+#   例: http://192.168.0.185:39109/?api=http://192.168.0.185:36437
 ```
+
+> 素の `python3 -m http.server`（`frontend/design` で）も可だが、その場合 `index.html` が
+> `document.write` でアダプタを注入するため Chrome の parser-blocking 警告が出る。常用は `serve.py` 推奨。
 
 > 注意: 本リポジトリの CI 実行環境（コンテナ）では Chrome がヘッドレス起動できず（SIGTRAP / core dump）、
 > 自動スクリーンショット検証は不可。**実描画は各自のブラウザで確認**すること。
@@ -69,8 +73,8 @@ UI を ClaudeDesign 側で更新したら、DesignSync コネクタで `design/`
 # 1) バックエンド（空きポート）
 cd backend && BPORT=$(python3 -c "import socket;s=socket.socket();s.bind(('0.0.0.0',0));print(s.getsockname()[1]);s.close()") \
   && python3 -m uvicorn app.main:app --host 0.0.0.0 --port "$BPORT"
-# 2) フロント（別ターミナル, 空きポート）
-cd frontend/design && python3 -m http.server 0   # 割当ポートは起動ログ参照
+# 2) フロント（別ターミナル, serve.py が自動IP＋空きポートで配信）
+python3 frontend/serve.py
 # 3) ブラウザで:  http://<host>:<frontport>/?api=http://<host>:<BPORT>
 #    ?api= は localStorage に保存され、次回以降は省略可。バックエンド未起動ならモック表示にフォールバック。
 ```

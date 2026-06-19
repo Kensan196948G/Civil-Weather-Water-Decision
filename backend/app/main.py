@@ -1,14 +1,18 @@
 """FastAPI エントリポイント（詳細設計 §3 / §7）。"""
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .api.routes import router
 from .core.config import settings
 from .seed import init_db
+
+logger = logging.getLogger("cwwd")
 
 
 @asynccontextmanager
@@ -35,6 +39,15 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,
 )
+
+
+# 例外を握って 500 でも CORS ヘッダが付く応答にする（CORSMiddleware を通すため）。設計§15
+# 内部情報を漏らさないため、詳細はサーバ側ログのみ・クライアントへは汎用メッセージ。
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    logger.exception("Unhandled error: %s %s", request.method, request.url.path, exc_info=exc)
+    return JSONResponse(status_code=500,
+                        content={"code": "INTERNAL_ERROR", "message": "Internal server error"})
 
 
 @app.get("/health")
