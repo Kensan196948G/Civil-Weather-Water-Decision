@@ -105,7 +105,6 @@ cd backend && python3 -m pytest      # 26 passed
 
 - `#46` WebUI のモックを本API へ接続（`frontend/README.md` 対応表）。CORS は許可済み。
 - `#20` 環境省 WBGT 実データ接続（現状 derived 推定）。
-- `#23` `decision_results`/`decision_reasons` の永続化（現状は都度計算）。
 - 河川（川の防災情報）・気象庁防災XML の連携（Phase 2 / #29〜#33）。
 
 ## 定期バッチ / データソース実プローブ（#47 実装済み）

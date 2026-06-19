@@ -184,7 +184,7 @@
           body: JSON.stringify({ site_id: df.siteId, work_type: df.workType, start: df.start, end: df.end })
         }).then(function (d) {
           CW.result = { key: df.workType + "|" + df.siteId, level: d.overall_level,
-            summary: d.summary, reasons: d.reasons, refs: d.refs };
+            summary: d.summary, reasons: d.reasons, refs: d.refs, id: d.resultId };
           self.setState({ result: "_api" }); bump();
           if (self.showToast) self.showToast("気象・河川データで評価しました");
         }).catch(function () { if (self.showToast) self.showToast("評価に失敗しました（APIエラー）"); });
@@ -199,7 +199,8 @@
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ site_id: site.id, work_type: this.WORK[S.dform.workType].label,
             level: lab[r.levelLabel] != null ? lab[r.levelLabel] : 1,
-            action: S.memoAction, comment: S.memoComment })
+            action: S.memoAction, comment: S.memoComment,
+            decision_result_id: (CW.result && CW.result.key === S.dform.workType + "|" + S.dform.siteId) ? CW.result.id : null })
         }).then(loadHistory).then(function () {
           self.setState({ memoComment: "" }); bump();
           if (self.showToast) self.showToast("判断履歴に記録しました");

@@ -64,9 +64,39 @@ class WorkPlan(Base):
     site: Mapped["Site"] = relationship(back_populates="plans")
 
 
+class DecisionResult(Base):
+    """判定エンジンの評価結果（設計 §6.2.11）。監査・実績分析の正本。"""
+    __tablename__ = "decision_results"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    site_id: Mapped[str] = mapped_column(String(10))
+    work_type: Mapped[str] = mapped_column(String(40))
+    evaluated_at: Mapped[str] = mapped_column(String(40), default="")
+    overall_level: Mapped[int] = mapped_column(Integer, default=0)
+    overall_label: Mapped[str] = mapped_column(String(50), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    data_quality_summary: Mapped[str] = mapped_column(Text, default="")
+    weather_status: Mapped[str] = mapped_column(String(20), default="")
+    reasons: Mapped[list["DecisionReason"]] = relationship(
+        back_populates="result", cascade="all, delete-orphan")
+
+
+class DecisionReason(Base):
+    """判定理由（設計 §6.2.12）。reason_code を保持し閾値見直しに使える。"""
+    __tablename__ = "decision_reasons"
+    id: Mapped[str] = mapped_column(String(30), primary_key=True)
+    decision_result_id: Mapped[str] = mapped_column(ForeignKey("decision_results.id"))
+    severity: Mapped[int] = mapped_column(Integer, default=0)
+    reason_code: Mapped[str] = mapped_column(String(100), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    source_id: Mapped[str] = mapped_column(String(50), default="")
+    observed_value: Mapped[str] = mapped_column(String(100), default="")
+    result: Mapped["DecisionResult"] = relationship(back_populates="reasons")
+
+
 class DecisionLog(Base):
     __tablename__ = "decision_logs"
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    decision_result_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
     site_id: Mapped[str] = mapped_column(String(10))
     site_name: Mapped[str] = mapped_column(String(200))
     work_type: Mapped[str] = mapped_column(String(40))

@@ -79,6 +79,7 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         "reasons": [{"severity": x["severity"], "text": x["message"],
                      "source": x["source_id"], "value": x["observed_value"]}
                     for x in decision["reasons"]],
+        "reasonsRaw": decision["reasons"],  # reason_code 付きの生出力（永続化用）
         "dataQuality": decision["data_quality_summary"],
         "weatherStatus": status,
         "fetchedAt": data.get("fetched_at"),
@@ -98,6 +99,7 @@ async def assess_decision(site: Site, work_type: str, start: str | None, end: st
         "siteId": site.id, "siteName": site.name, "workType": work_type,
         "overall_level": card["level"], "overall_label": card["levelLabel"],
         "summary": card["summary"], "reasons": card["reasons"],
+        "reasonsRaw": card["reasonsRaw"],
         "data_quality_summary": card["dataQuality"],
         "weatherStatus": card["weatherStatus"], "fetchedAt": card["fetchedAt"],
         "refs": ["気象: Open-Meteo", "河川: 川の防災情報", "WBGT: 環境省(推定)", "警報: 気象庁"],

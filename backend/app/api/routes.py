@@ -11,7 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
-from ..models import DataSourceStatus, DecisionLog, Site, Station, WorkType
+from ..models import (
+    DataSourceStatus, DecisionLog, DecisionReason, DecisionResult, Site, Station, WorkType,
+)
 from ..services import assessment
 from ..services.data_collectors import open_meteo, source_probe
 
@@ -223,12 +225,50 @@ class EvaluateReq(BaseModel):
     end: str | None = None
 
 
+def _next_result_id(db: Session) -> str:
+    last = db.scalar(select(DecisionResult).order_by(DecisionResult.id.desc()))
+    n = (int(last.id[2:]) + 1) if last else 1
+    return f"DR{n:05d}"
+
+
 @router.post("/decisions/evaluate")
 async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db)):
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    return await assessment.assess_decision(site, req.work_type, req.start, req.end)
+    res = await assessment.assess_decision(site, req.work_type, req.start, req.end)
+    # 判定結果と理由を永続化（監査・実績分析の正本。設計§6.2.11/§6.2.12）
+    rid = _next_result_id(db)
+    db.add(DecisionResult(
+        id=rid, site_id=site.id, work_type=req.work_type,
+        evaluated_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"),
+        overall_level=res["overall_level"], overall_label=res["overall_label"],
+        summary=res["summary"], data_quality_summary=res["data_quality_summary"],
+        weather_status=res.get("weatherStatus", "")))
+    for i, r in enumerate(res.get("reasonsRaw", []), 1):
+        db.add(DecisionReason(
+            id=f"{rid}-{i:02d}", decision_result_id=rid, severity=r["severity"],
+            reason_code=r["reason_code"], message=r["message"],
+            source_id=r["source_id"], observed_value=r["observed_value"]))
+    db.commit()
+    res["resultId"] = rid
+    return res
+
+
+@router.get("/decision-results/{result_id}")
+def get_decision_result(result_id: str, db: Session = Depends(get_db)):
+    dr = db.get(DecisionResult, result_id)
+    if not dr:
+        raise HTTPException(404, "decision result not found")
+    return {
+        "id": dr.id, "siteId": dr.site_id, "workType": dr.work_type,
+        "evaluatedAt": dr.evaluated_at, "overall_level": dr.overall_level,
+        "overall_label": dr.overall_label, "summary": dr.summary,
+        "data_quality_summary": dr.data_quality_summary, "weatherStatus": dr.weather_status,
+        "reasons": [{"severity": r.severity, "reason_code": r.reason_code,
+                     "message": r.message, "source_id": r.source_id,
+                     "observed_value": r.observed_value} for r in dr.reasons],
+    }
 
 
 # ---------- 判断履歴 ----------
@@ -239,6 +279,7 @@ class DecisionLogReq(BaseModel):
     action: str
     comment: str = ""
     decided_by: str = "山田（現場管理者）"
+    decision_result_id: str | None = None
 
 
 @router.get("/decision-logs")
@@ -263,6 +304,7 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db)):
         id=f"L{next_num:02d}", site_id=site.id, site_name=site.name,
         work_type=req.work_type, level=req.level, action=req.action,
         comment=req.comment or "（メモなし）", decided_by=req.decided_by,
+        decision_result_id=req.decision_result_id,
         decided_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"))
     db.add(entry)
     db.commit()

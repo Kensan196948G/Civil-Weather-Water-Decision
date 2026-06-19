@@ -47,6 +47,31 @@ def test_evaluate_decision(client):
     assert isinstance(body["reasons"], list)
 
 
+def test_evaluate_persists_result(client):
+    r = client.post("/api/decisions/evaluate",
+                    json={"site_id": "S01", "work_type": "river",
+                          "start": "2026-06-20T08:00", "end": "2026-06-20T12:00"})
+    assert r.status_code == 200
+    rid = r.json()["resultId"]
+    assert rid.startswith("DR")
+    got = client.get(f"/api/decision-results/{rid}")
+    assert got.status_code == 200
+    body = got.json()
+    assert body["overall_label"] in ("通常", "注意", "中止検討", "確認不能")
+    assert body["siteId"] == "S01" and body["workType"] == "river"
+    for reason in body["reasons"]:
+        assert "reason_code" in reason  # 生出力(理由コード)が保存される
+    # 判断メモへ結果IDを紐付け
+    log = client.post("/api/decision-logs", json={
+        "site_id": "S01", "work_type": "河川内作業", "level": 2, "action": "cancel",
+        "comment": "結果紐付け", "decision_result_id": rid})
+    assert log.status_code == 200
+
+
+def test_decision_result_not_found(client):
+    assert client.get("/api/decision-results/DR99999").status_code == 404
+
+
 def test_decision_log_create_and_list(client):
     before = len(client.get("/api/decision-logs").json())
     r = client.post("/api/decision-logs",
