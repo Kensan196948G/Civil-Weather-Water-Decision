@@ -9,7 +9,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 
-from .data_collectors import open_meteo
+from .data_collectors import jma_warnings, open_meteo
 from .decision_engine import LEVEL_LABELS, Reading, evaluate
 from ..models import Site
 
@@ -32,7 +32,9 @@ def clear_cache() -> None:
     _CACHE.clear()
 
 
-def build_reading(work_type: str, wr: dict, site: Site) -> Reading:
+def build_reading(work_type: str, wr: dict, site: Site,
+                  pref_warnings: set | None = None) -> Reading:
+    pref_warnings = pref_warnings or set()
     r = Reading(
         precip_mm_h=wr.get("precip_mm_h"), temp_c=wr.get("temp_c"),
         wind_ms=wr.get("wind_ms"), gust_ms=wr.get("gust_ms"),
@@ -42,20 +44,28 @@ def build_reading(work_type: str, wr: dict, site: Site) -> Reading:
     if work_type == "river":
         r.upstream_rain_mm_h = wr.get("precip_mm_h")        # PoC: 降雨を上流雨量proxy
         r.water_level_trend = "rising" if site.river_state == "rising" else None
-        r.flood_warning = bool(site.flood_info)
+        # 公式優先: 気象庁の洪水警報/注意報があれば洪水フラグ（§8.3-6）
+        r.flood_warning = (bool(site.flood_info)
+                           or "洪水警報" in pref_warnings or "洪水注意報" in pref_warnings)
         if site.river_state == "stale":
             r.missing = set(r.missing) | {"river"}
+    if "大雨警報" in pref_warnings:
+        r.heavy_rain_warning = True
     return r
 
 
 async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
-                      start: str | None = None, end: str | None = None) -> dict:
+                      start: str | None = None, end: str | None = None,
+                      warnmap: dict | None = None) -> dict:
     """1現場を評価してダッシュボード/詳細用 dict を返す。"""
     wt = work_type or site.work_type
     if fetch is None:
         data = await _cached_fetch(site.latitude, site.longitude, site.id)
     else:
         data = await fetch(site.latitude, site.longitude)
+    if warnmap is None:
+        warnmap = await jma_warnings.get_active_warnings()
+    pref_warnings = jma_warnings.warnings_for_site(warnmap, site.loc)
 
     status = data.get("status", "ERROR")
     points = data.get("points", [])
@@ -64,7 +74,7 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         "gust_ms": None, "humidity_pct": None, "wbgt": None,
         "missing": {"precip", "temp", "wind", "wbgt"},
     }
-    reading = build_reading(wt, wr, site)
+    reading = build_reading(wt, wr, site, pref_warnings)
     decision = evaluate(wt, reading)
 
     return {
@@ -88,7 +98,9 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
 
 
 async def assess_all(sites: list[Site], *, fetch=None) -> list[dict]:
-    return await asyncio.gather(*[assess_site(s, fetch=fetch) for s in sites])
+    # 警報マップは一度だけ取得して全現場に渡す（サンダリングハード回避）
+    warnmap = await jma_warnings.get_active_warnings()
+    return await asyncio.gather(*[assess_site(s, fetch=fetch, warnmap=warnmap) for s in sites])
 
 
 async def assess_decision(site: Site, work_type: str, start: str | None, end: str | None,

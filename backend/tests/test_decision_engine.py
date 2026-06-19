@@ -25,6 +25,12 @@ def test_river_known_risk_dominates_over_missing():
     assert "欠測" in res["data_quality_summary"]
 
 
+def test_official_heavy_rain_warning_raises_level():
+    # 気象庁 大雨警報（公式優先）→ 河川/土工で中止検討
+    assert evaluate("river", Reading(heavy_rain_warning=True))["overall_level"] == 2
+    assert evaluate("earthwork", Reading(heavy_rain_warning=True))["overall_label"] == "中止検討"
+
+
 def test_concrete_high_temp_is_caution():
     r = Reading(precip_mm_h=0.4, temp_c=31, wind_ms=7)
     res = evaluate("concrete", r)

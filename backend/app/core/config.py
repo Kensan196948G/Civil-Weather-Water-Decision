@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     data_fetch_timeout_seconds: int = 20
     data_fetch_retry_count: int = 3
 
+    # 気象庁 防災情報XML（警報・注意報を判定に反映。公式優先 §8.3-6）
+    enable_jma_warnings: bool = True
+    jma_feed_url: str = "https://www.data.jma.go.jp/developer/xml/feed/extra.xml"
+
     # CORS（フロントエンドの自動割り当てIP/ポートからの接続を許可するため既定は全許可。本番では絞る）
     cors_origins: str = "*"
 

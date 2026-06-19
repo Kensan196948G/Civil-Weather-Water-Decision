@@ -120,6 +120,11 @@ cd backend && python3 -m pytest      # 26 passed
 
 - `app/services/data_collectors/source_probe.py` が実プローブ。OK / Warning(遅延・3xx/4xx) / Error(5xx・接続失敗) を判定。
 - プローブ対象（公開・認証不要, 8件）: Open-Meteo / 気象庁XML / 気象庁CSV(アメダス) / WBGT / 川の防災情報 / NASA POWER / JAXA G-Portal / NOAA。
+
+## 気象庁 防災情報XML 警報の実反映（#26）
+
+`services/data_collectors/jma_warnings.py` が気象庁の防災情報XML（atomフィード→個別警報XML）を取得・パース（`defusedxml`でXXE対策）し、市町村エリア別の発表中警報を集約。`assess` が現場所在地と突き合わせ、**洪水警報/注意報→河川 sev2、大雨警報→河川/土工/打設/舗装 sev2** に引き上げる（公式優先 §8.3-6）。10分キャッシュ・取得失敗時は無警報に縮退。`ENABLE_JMA_WARNINGS=false` で無効化。
+河川の実水位は無認証APIが無いため公式「川の防災情報」リンク参照に留める（水防災オープンデータは契約制）。
 - データソースは計9件（設計§4.1 準拠。+ DS-JMA-CSV / DS-JAXA / DS-NOAA を追加）。
 - **水防災オープンデータ（契約制）は対象外**＝シードの Error/未接続を保持（実態以上に良く見せない）。
 - 手動再取得 `POST /api/data-collectors/run` も同期で全ソースをプローブする。

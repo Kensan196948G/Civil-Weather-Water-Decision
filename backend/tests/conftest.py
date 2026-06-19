@@ -5,6 +5,7 @@ import pathlib
 # app インポート前にテスト用DBへ差し替え（本番DBを汚さない）＋スケジューラ無効化（ネット非依存）
 os.environ["DATABASE_URL"] = "sqlite:///./_test_cw.db"
 os.environ["ENABLE_SCHEDULER"] = "false"
+os.environ["ENABLE_JMA_WARNINGS"] = "false"  # 気象庁XML取得を無効化（ネット非依存）
 _db = pathlib.Path("_test_cw.db")
 if _db.exists():
     _db.unlink()

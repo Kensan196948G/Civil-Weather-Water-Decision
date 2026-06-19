@@ -40,8 +40,9 @@ class Reading:
     wbgt: Optional[float] = None
     upstream_rain_mm_h: Optional[float] = None
     water_level_trend: Optional[str] = None  # 'rising' | 'stable' | 'stale' | None
-    flood_warning: bool = False              # 公式の洪水予報・水位到達情報等
+    flood_warning: bool = False              # 公式の洪水予報・水位到達情報・洪水警報等
     thunderstorm: bool = False               # 雷注意報等
+    heavy_rain_warning: bool = False         # 気象庁 大雨警報
     # 主要データが欠測/遅延しているフィールド名の集合（例 {"precip","wind"}）
     missing: set[str] = field(default_factory=set)
     source_weather: str = "DS-OPEN-METEO"
@@ -114,6 +115,11 @@ RULES: list[Rule] = [
          lambda r: r.flood_warning,
          "洪水関連情報が発表されています。河川内作業の中止・退避を検討してください。",
          lambda r: r.source_official, lambda r: "洪水注意情報"),
+    # 公式警報（気象庁）優先（§8.3-6）: 大雨警報で河川・土工・打設・舗装を引き上げ
+    Rule("heavy_rain_warning", ("river", "earthwork", "concrete", "pavement"), 2,
+         lambda r: r.heavy_rain_warning,
+         "気象庁が大雨警報を発表しています。作業中止・延期を含めて検討してください。",
+         lambda r: r.source_official, lambda r: "大雨警報"),
     # 熱中症対策
     Rule("wbgt_caution", ("heat",), 1,
          lambda r: _has(r, "wbgt") and TH["wbgt_caution"] <= r.wbgt < TH["wbgt_danger"],
