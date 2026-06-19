@@ -403,6 +403,9 @@
       screen.id = "cw-wbgt-screen";
       screen.innerHTML =
         '<div class="cw-wbgt-wrap">'
+        + '<button id="cw-wbgt-back" style="background:#16527d;color:#fff;border:none;border-radius:7px;'
+        + "padding:8px 14px;font:700 12.5px 'Noto Sans JP',sans-serif;cursor:pointer;margin-bottom:10px\">"
+        + "← ダッシュボードに戻る</button>"
         + '<div class="cw-wbgt-h">熱中症 / 暑さ指数 WBGT ・ 全国マップ</div>'
         + '<div id="cw-wbgt-map"></div>'
         + '<div class="cw-wbgt-scale">'
@@ -412,6 +415,10 @@
         + '<div class="cw-wbgt-h" style="margin-top:6px">現場別ランキング（WBGT高い順）</div>'
         + '<div id="cw-wbgt-rank"></div></div>';
       document.body.appendChild(screen);
+      var back = screen.querySelector("#cw-wbgt-back");
+      if (back) back.addEventListener("click", function () {
+        if (regInst) { try { regInst.go("dashboard"); } catch (e) {} }
+      });
     }
     function buildWbgtRank() {
       var CW = adapter._state; // CW は createAdapter のクロージャ内。外からは _state 経由で参照
