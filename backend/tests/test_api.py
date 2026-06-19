@@ -11,14 +11,14 @@ def test_dashboard_site_risk(client):
     assert r.status_code == 200
     data = r.json()
     assert len(data["summary"]) == 4
-    assert len(data["sites"]) == 6
+    assert len(data["sites"]) == 16  # 全国16現場
     for s in data["sites"]:
         assert s["levelLabel"] in ("通常", "注意", "中止検討", "確認不能")
         assert "reasons" in s and "updated" in s
 
 
 def test_sites_and_detail(client):
-    assert len(client.get("/api/sites").json()) == 6
+    assert len(client.get("/api/sites").json()) == 16
     detail = client.get("/api/sites/S01").json()
     assert detail["name"].startswith("北川")
     assert "plans" in detail and "history" in detail

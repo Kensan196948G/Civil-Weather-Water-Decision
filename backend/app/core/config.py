@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     # スケジューラ（定期プローブ＋予報リフレッシュ）。テストでは false。
     enable_scheduler: bool = True
-    probe_interval_seconds: int = 120
-    forecast_refresh_seconds: int = 600
+    probe_interval_seconds: int = 300   # データソース状態を5分ごとに実プローブ更新
+    forecast_refresh_seconds: int = 300  # 予報キャッシュも5分ごとにウォーム
     probe_timeout_seconds: int = 8
 
 

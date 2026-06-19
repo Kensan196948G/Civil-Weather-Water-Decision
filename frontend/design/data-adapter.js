@@ -18,7 +18,7 @@
     var _fetch = opts.fetch || (typeof fetch !== "undefined" ? fetch : null);
     var bump = opts.bump || function () {};
     var _open = opts.open || function () {};
-    var CW = { sites: null, meta: null, sources: null, history: null, series: {}, result: null };
+    var CW = { sites: null, meta: null, sources: null, history: null, series: {}, result: null, ver: 0 };
 
     function url(p) { return base + p; }
     function j(p, o) { return _fetch(url(p), o).then(function (r) { return r.json(); }); }
@@ -36,12 +36,18 @@
           rainNow: c.rainNow, rainPeak: c.rainPeak, windMax: c.windMax, gust: c.gust,
           tempHi: c.tempHi, tempLo: c.tempLo, wbgt: c.wbgt, river: c.river, riverState: c.riverState,
           updated: c.updated, rainy: (c.rainPeak || 0) > 0,
+          lat: meta[c.id] && meta[c.id].lat, lon: meta[c.id] && meta[c.id].lon, // 地図用
           project: (meta[c.id] && meta[c.id].project) || "公共",
           manager: (meta[c.id] && meta[c.id].manager) || "",
           reasons: mapReasons(c.reasons),
           plans: (prev[c.id] && prev[c.id].plans) || []
         };
       });
+    }
+    function buildCoords(sites, base) {
+      var c = {}; if (base) { for (var k in base) c[k] = base[k]; }
+      sites.forEach(function (s) { if (s.lat != null && s.lon != null) c[s.id] = [s.lat, s.lon]; });
+      return c;
     }
     function mapSources(src) {
       return (src || []).map(function (d) {
@@ -69,7 +75,7 @@
     // ---- データ取得 ----
     function loadDashboard() {
       return Promise.all([j("/api/sites"), j("/api/dashboard/site-risk")]).then(function (r) {
-        CW.meta = r[0]; CW.sites = mapDashToSites(r[1], r[0]); bump();
+        CW.meta = r[0]; CW.sites = mapDashToSites(r[1], r[0]); CW.ver++; bump();
       });
     }
     function loadSources() { return j("/api/dashboard/data-sources").then(function (d) { CW.sources = d; bump(); }); }
@@ -119,7 +125,10 @@
         origOpen = proto.openSite, origRefresh = proto.refresh;
 
       proto.renderVals = function () {
-        if (CW.sites) this.SITES = CW.sites;            // ダッシュボード/現場詳細/グラフが API データを参照
+        if (CW.sites) {
+          this.SITES = CW.sites;                          // ダッシュボード/現場詳細/グラフが API データを参照
+          this.COORDS = buildCoords(CW.sites, this.COORDS); // 地図ピン用に全現場の緯度経度を供給（全国対応）
+        }
         if (CW.history) this.state.history = CW.history; // 判断履歴
         var vals = origRender.call(this);
         if (CW.sources) vals.sources = mapSources(CW.sources); // データソース状態
@@ -253,6 +262,13 @@
         regInst = inst;            // 登録成功後の画面遷移に使用
         cwInjectNav(inst, vals);   // ナビに「現場登録」項目を追加
         cwToggleRegScreen(inst.state.screen === "register"); // 該当画面のみパネル表示
+        // データ更新でダッシュボード地図を作り直す（dc キャッシュは token='all' で再生成されないため）
+        if (inst._dashMap && inst.__cwDashVer !== adapter._state.ver) {
+          try { inst._dashMap.remove(); } catch (e) {}
+          inst._dashMap = null; inst.__cwDashVer = adapter._state.ver;
+        }
+        cwToggleSourceNote(inst.state.screen === "source"); // データソース画面の更新間隔注記
+        cwSyncWbgtScreen(inst);                              // WBGT画面の地図
       }
     });
 
@@ -341,6 +357,103 @@
       });
     }
 
+    // ---- データソース画面: 5分更新の注記バー ----
+    function installSourceNote() {
+      if (document.getElementById("cw-src-note")) return;
+      var n = document.createElement("div");
+      n.id = "cw-src-note";
+      n.style.cssText = "display:none;position:fixed;left:0;right:0;bottom:0;z-index:35;background:#13344f;"
+        + "color:#fff;font:600 12px 'Noto Sans JP',sans-serif;padding:9px 16px;text-align:center;box-shadow:0 -1px 4px rgba(0,0,0,.25)";
+      n.textContent = "データソース状態は5分ごとに自動更新（サーバ側プローブ）。右上「再取得」で即時更新も可能。";
+      document.body.appendChild(n);
+    }
+    function cwToggleSourceNote(show) {
+      var el = document.getElementById("cw-src-note");
+      if (el) el.style.display = show ? "block" : "none";
+    }
+
+    // ---- 熱中症/WBGT 画面: 全国地図（OpenStreetMap）＋スケール＋ランキング ----
+    function wbgtMeta(v) {
+      if (v == null) return { label: "欠測", color: "#5a6b7b" };
+      if (v < 21) return { label: "ほぼ安全", color: "#2e7d32" };
+      if (v < 25) return { label: "注意", color: "#c2920a" };
+      if (v < 28) return { label: "警戒", color: "#e07d12" };
+      if (v < 31) return { label: "厳重警戒", color: "#d6481f" };
+      return { label: "危険", color: "#c62828" };
+    }
+    var wbgtMap = null, wbgtMarkers = null, wbgtVer = -1;
+    function installWbgtScreen() {
+      if (document.getElementById("cw-wbgt-screen")) return;
+      var css = document.createElement("style");
+      css.textContent =
+        "#cw-wbgt-screen{display:none;position:fixed;left:0;right:0;top:56px;bottom:0;z-index:30;overflow:auto;"
+        + "background:#eef1f4;font-family:'Noto Sans JP',system-ui,sans-serif;color:#16212c}"
+        + ".cw-wbgt-wrap{max-width:1100px;margin:0 auto;padding:16px}"
+        + ".cw-wbgt-h{font-size:15px;font-weight:800;color:#13344f;margin:2px 0 10px}"
+        + "#cw-wbgt-map{height:46vh;min-height:300px;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1)}"
+        + ".cw-wbgt-scale{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}"
+        + ".cw-wbgt-scale span{font-size:11px;font-weight:700;color:#fff;padding:4px 9px;border-radius:5px}"
+        + ".cw-wbgt-row{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e2e8ee;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:12.5px}"
+        + ".cw-wbgt-dot{width:12px;height:12px;border-radius:50%;flex:none}"
+        + ".cw-wbgt-row b{font-size:15px;min-width:34px}"
+        + ".cw-wbgt-lab{font-weight:700;min-width:64px}.cw-wbgt-name{font-weight:700;color:#1c2935}"
+        + ".cw-wbgt-loc{color:#7e8c99;margin-left:auto}";
+      document.head.appendChild(css);
+      var screen = document.createElement("div");
+      screen.id = "cw-wbgt-screen";
+      screen.innerHTML =
+        '<div class="cw-wbgt-wrap">'
+        + '<div class="cw-wbgt-h">熱中症 / 暑さ指数 WBGT ・ 全国マップ</div>'
+        + '<div id="cw-wbgt-map"></div>'
+        + '<div class="cw-wbgt-scale">'
+        + '<span style="background:#2e7d32">~21 ほぼ安全</span><span style="background:#c2920a">21-25 注意</span>'
+        + '<span style="background:#e07d12">25-28 警戒</span><span style="background:#d6481f">28-31 厳重警戒</span>'
+        + '<span style="background:#c62828">31~ 危険</span><span style="background:#5a6b7b">欠測</span></div>'
+        + '<div class="cw-wbgt-h" style="margin-top:6px">現場別ランキング（WBGT高い順）</div>'
+        + '<div id="cw-wbgt-rank"></div></div>';
+      document.body.appendChild(screen);
+    }
+    function buildWbgtScreen() {
+      if (!CW.sites) return;
+      var L = window.L, mapEl = document.getElementById("cw-wbgt-map");
+      if (L && mapEl && !wbgtMap) {
+        wbgtMap = L.map(mapEl, { scrollWheelZoom: false }).setView([37.5, 137.0], 4);
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+          { maxZoom: 18, attribution: "&copy; OpenStreetMap contributors" }).addTo(wbgtMap);
+        wbgtMarkers = L.layerGroup().addTo(wbgtMap);
+      }
+      if (wbgtMap && wbgtVer !== CW.ver) {
+        wbgtVer = CW.ver;
+        wbgtMarkers.clearLayers();
+        var pts = [];
+        CW.sites.forEach(function (s) {
+          if (s.lat == null || s.lon == null) return;
+          var m = wbgtMeta(s.wbgt);
+          var mk = L.circleMarker([s.lat, s.lon], { radius: 8, color: "#fff", weight: 2, fillColor: m.color, fillOpacity: 0.95 });
+          mk.bindPopup("<b>" + s.name + "</b><br>WBGT " + (s.wbgt == null ? "—" : s.wbgt) + ' ・ <b style="color:' + m.color + '">' + m.label + "</b>");
+          wbgtMarkers.addLayer(mk); pts.push([s.lat, s.lon]);
+        });
+        if (pts.length) { try { wbgtMap.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch (e) {} }
+        var rank = document.getElementById("cw-wbgt-rank");
+        if (rank) {
+          var sorted = CW.sites.slice().sort(function (a, b) { return (b.wbgt || 0) - (a.wbgt || 0); });
+          rank.innerHTML = sorted.map(function (s) {
+            var m = wbgtMeta(s.wbgt);
+            return '<div class="cw-wbgt-row"><span class="cw-wbgt-dot" style="background:' + m.color + '"></span>'
+              + "<b>" + (s.wbgt == null ? "—" : s.wbgt) + '</b><span class="cw-wbgt-lab" style="color:' + m.color + '">' + m.label + "</span>"
+              + '<span class="cw-wbgt-name">' + s.name + '</span><span class="cw-wbgt-loc">' + (s.loc || "") + "</span></div>";
+          }).join("");
+        }
+      }
+      if (wbgtMap) setTimeout(function () { try { wbgtMap.invalidateSize(); } catch (e) {} }, 60);
+    }
+    function cwSyncWbgtScreen(inst) {
+      var active = inst.state.screen === "wbgt";
+      var el = document.getElementById("cw-wbgt-screen");
+      if (el) el.style.display = active ? "block" : "none";
+      if (active) buildWbgtScreen();
+    }
+
     (function whenReady() {
       var n = 0;
       var t = setInterval(function () {
@@ -355,6 +468,8 @@
             try { window.__dcSetProps(rn, { __cw: Date.now() }); } catch (_) {}
           });
           installRegisterScreen(adapter);
+          installSourceNote();
+          installWbgtScreen();
           // 定期自動更新（5分ごとにダッシュボード/ソースを再取得）
           setInterval(function () {
             adapter.loadDashboard().then(function () { return adapter.loadSources(); })

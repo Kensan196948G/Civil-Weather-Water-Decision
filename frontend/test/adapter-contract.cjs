@@ -23,7 +23,8 @@ const { createAdapter } = require("../design/data-adapter.js");
 
 // ---- バックエンド応答形の fetch モック ----
 const SITES_LIST = [
-  { id: "S01", project: "公共", manager: "山田" }, { id: "S05", project: "公共", manager: "高橋" },
+  { id: "S01", project: "公共", manager: "山田", lat: 35.76, lon: 139.78 },
+  { id: "S05", project: "公共", manager: "高橋", lat: 35.71, lon: 139.52 },
 ];
 const DASH = {
   summary: [1, 0, 1, 1],
@@ -99,6 +100,8 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
     "ナビから「現場詳細」を除外（クリック時のみ表示=ドリルダウン専用）");
   ok(v.sites[0].name.indexOf("北川") === 0, "現場名が API 由来: " + v.sites[0].name);
   ok(v.summary.reduce((a, b) => a + b.count, 0) === 2, "サマリが API 現場数に追従");
+  ok(Array.isArray(c.COORDS.S01) && c.COORDS.S01[0] === 35.76,
+    "COORDS を API 緯度経度から構築（全国地図対応）");
 
   // データソース: API由来（Error/Warning 含む）
   ok(v.sources.length === 3 && v.sources.some(s => s.status === "Error") && v.sources.some(s => s.status === "Warning"),

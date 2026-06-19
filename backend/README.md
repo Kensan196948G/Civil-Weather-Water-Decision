@@ -89,8 +89,10 @@ cd backend && python3 -m pytest      # 26 passed
 
 | ジョブ | 間隔 | 内容 |
 |---|---|---|
-| `probe_sources` | 120秒（`PROBE_INTERVAL_SECONDS`） | 各ソースへ実HTTP疎通し status/last_ok/fails/avg_ms を更新 |
-| `refresh_forecasts` | 600秒（`FORECAST_REFRESH_SECONDS`） | Open-Meteo 予報キャッシュをウォーム |
+| `probe_sources` | **300秒（5分, `PROBE_INTERVAL_SECONDS`）** | 各ソースへ実HTTP疎通し status/last_ok/fails/avg_ms を更新 |
+| `refresh_forecasts` | 300秒（5分, `FORECAST_REFRESH_SECONDS`） | Open-Meteo 予報キャッシュをウォーム |
+
+> データソース状態は **5分ごとに自動更新**（フロントの「データソース」画面にも明記）。サンプル現場は全国16件（札幌〜那覇）。
 
 - `app/services/data_collectors/source_probe.py` が実プローブ。OK / Warning(遅延・3xx/4xx) / Error(5xx・接続失敗) を判定。
 - プローブ対象（公開・認証不要, 8件）: Open-Meteo / 気象庁XML / 気象庁CSV(アメダス) / WBGT / 川の防災情報 / NASA POWER / JAXA G-Portal / NOAA。
