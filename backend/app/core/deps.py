@@ -33,7 +33,8 @@ def get_current_user(
 def require_role(*roles: str):
     """指定ロールのみ許可する依存を生成。"""
     def checker(user: User = Depends(get_current_user)) -> User:
-        if roles and user.role not in roles:
-            raise HTTPException(403, "forbidden: requires one of " + ",".join(roles))
+        # 空 roles は「全拒否」（誤って Depends(require_role()) と書いた時の安全側）#7
+        if not roles or user.role not in roles:
+            raise HTTPException(403, "forbidden: requires one of " + ",".join(roles or ["(none)"]))
         return user
     return checker

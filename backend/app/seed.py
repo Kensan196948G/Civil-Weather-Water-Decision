@@ -10,6 +10,7 @@ import os
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .core.config import settings
 from .core.db import SessionLocal
 from .core.security import hash_password
 from .models import DataSourceStatus, DecisionLog, Site, Station, User, WorkPlan, WorkType
@@ -121,10 +122,18 @@ def seed(db: Session) -> None:
     for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
         db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
                            action=act, comment=comment, decided_by=by, decided_at=dt))
-    for (uid, uname, disp, role, dept, pw) in USERS:
-        db.add(User(id=uid, username=uname, display_name=disp, role=role,
-                    department=dept, email=f"{uname}@example.com",
-                    password_hash=hash_password(pw)))
+    # デモユーザー(admin/admin123 等)は local のみ。本番は環境変数の管理者だけ作成（#2）
+    if settings.app_env == "local":
+        for (uid, uname, disp, role, dept, pw) in USERS:
+            db.add(User(id=uid, username=uname, display_name=disp, role=role,
+                        department=dept, email=f"{uname}@example.com",
+                        password_hash=hash_password(pw)))
+    else:
+        admin_pw = os.environ.get("ADMIN_PASSWORD")
+        if admin_pw:
+            db.add(User(id="U01", username="admin", display_name="システム管理者",
+                        role="admin", department="IT・DX部門", email="admin@example.com",
+                        password_hash=hash_password(admin_pw)))
     db.commit()
 
 

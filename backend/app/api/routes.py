@@ -290,8 +290,8 @@ class DecisionLogReq(BaseModel):
     level: int = 1
     action: str
     comment: str = ""
-    decided_by: str = "山田（現場管理者）"
     decision_result_id: str | None = None
+    # decided_by はクライアントから受け取らず、認証ユーザーから導出（なりすまし防止 #8）
 
 
 @router.get("/decision-logs")
@@ -316,7 +316,7 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db),
     entry = DecisionLog(
         id=f"L{next_num:02d}", site_id=site.id, site_name=site.name,
         work_type=req.work_type, level=req.level, action=req.action,
-        comment=req.comment or "（メモなし）", decided_by=req.decided_by,
+        comment=req.comment or "（メモなし）", decided_by=user.display_name,
         decision_result_id=req.decision_result_id,
         decided_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"))
     db.add(entry)

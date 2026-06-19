@@ -58,3 +58,24 @@ def test_viewer_cannot_view_audit(client):
     tok = login_token(client, "viewer")
     assert client.get("/api/admin/audit-logs",
                       headers={"Authorization": f"Bearer {tok}"}).status_code == 403
+
+
+def test_decision_log_records_authenticated_user(client):
+    # 記録者はクライアント指定でなく認証ユーザーから導出される（なりすまし防止 #8）
+    tok = login_token(client, "yamada")
+    r = client.post("/api/decision-logs", headers={"Authorization": f"Bearer {tok}"},
+                    json={"site_id": "S01", "work_type": "河川内作業", "action": "monitor",
+                          "comment": "本人記録", "decided_by": "なりすまし太郎"})
+    assert r.status_code == 200
+    lid = r.json()["id"]
+    logs = client.get("/api/decision-logs").json()
+    entry = next(x for x in logs if x["id"] == lid)
+    assert "山田" in entry["by"] and "なりすまし" not in entry["by"]
+
+
+def test_login_lockout(client):
+    # 同一ユーザー名+IP で連続失敗するとロック（試行回数制限 #4）
+    for _ in range(5):
+        client.post("/api/auth/login", json={"username": "attacker", "password": "x"})
+    r = client.post("/api/auth/login", json={"username": "attacker", "password": "x"})
+    assert r.status_code == 429

@@ -1,5 +1,8 @@
 """アプリ設定（環境変数 / .env から読み込み）。詳細設計 §20 準拠。"""
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_JWT_SECRET = "dev-secret-change-in-production-please-32+"
 
 
 class Settings(BaseSettings):
@@ -28,7 +31,7 @@ class Settings(BaseSettings):
     # 認証（PoC: アプリ内ユーザー＋JWT。本番候補は Entra ID OIDC へ差し替え）
     enable_auth: bool = True
     # 本番は環境変数 JWT_SECRET で必ず上書き（32バイト以上）
-    jwt_secret: str = "dev-secret-change-in-production-please-32+"
+    jwt_secret: str = _DEFAULT_JWT_SECRET
     jwt_expire_minutes: int = 480
 
     # スケジューラ（定期プローブ＋予報リフレッシュ）。テストでは false。
@@ -36,6 +39,16 @@ class Settings(BaseSettings):
     probe_interval_seconds: int = 300   # データソース状態を5分ごとに実プローブ更新
     forecast_refresh_seconds: int = 300  # 予報キャッシュも5分ごとにウォーム
     probe_timeout_seconds: int = 8
+
+    @model_validator(mode="after")
+    def _guard_production(self):
+        # 本番(app_env != local)では危険な既定を起動時に拒否（対抗レビュー #1/#3）
+        if self.app_env != "local":
+            if not self.enable_auth:
+                raise RuntimeError("本番では ENABLE_AUTH=true 必須（認証を無効化できません）")
+            if self.jwt_secret == _DEFAULT_JWT_SECRET or len(self.jwt_secret.encode()) < 32:
+                raise RuntimeError("本番では JWT_SECRET を 32バイト以上で必ず上書きしてください")
+        return self
 
 
 settings = Settings()
