@@ -414,6 +414,7 @@
       document.body.appendChild(screen);
     }
     function buildWbgtRank() {
+      var CW = adapter._state; // CW は createAdapter のクロージャ内。外からは _state 経由で参照
       var rank = document.getElementById("cw-wbgt-rank");
       if (!rank || !CW.sites) return;
       var sorted = CW.sites.slice().sort(function (a, b) { return (b.wbgt || 0) - (a.wbgt || 0); });
@@ -425,6 +426,7 @@
       }).join("");
     }
     function buildWbgtScreen() {
+      var CW = adapter._state; // 外からは _state 経由で参照
       if (!CW.sites) return;
       var mapEl = document.getElementById("cw-wbgt-map");
       if (!mapEl) return;
