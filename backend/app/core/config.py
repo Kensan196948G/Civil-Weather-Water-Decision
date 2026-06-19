@@ -21,5 +21,11 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # スケジューラ（定期プローブ＋予報リフレッシュ）。テストでは false。
+    enable_scheduler: bool = True
+    probe_interval_seconds: int = 120
+    forecast_refresh_seconds: int = 600
+    probe_timeout_seconds: int = 8
+
 
 settings = Settings()

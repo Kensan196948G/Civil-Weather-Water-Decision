@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..core.db import get_db
 from ..models import DataSourceStatus, DecisionLog, Site, Station, WorkType
 from ..services import assessment
-from ..services.data_collectors import open_meteo
+from ..services.data_collectors import open_meteo, source_probe
 
 router = APIRouter()
 
@@ -288,15 +288,10 @@ def export_decision_logs(db: Session = Depends(get_db)):
 @router.post("/data-collectors/run")
 async def run_collectors(db: Session = Depends(get_db)):
     assessment.clear_cache()
-    sites = db.scalars(select(Site)).all()
+    sites = db.scalars(select(Site).where(Site.status == "active")).all()
     cards = await assessment.assess_all(list(sites))
     ok = sum(1 for c in cards if c["weatherStatus"] == "OK")
-    src = db.get(DataSourceStatus, open_meteo.SOURCE_ID)
-    if src:
-        now = datetime.now(assessment.JST).strftime("%m/%d %H:%M")
-        if ok > 0:
-            src.status, src.last_ok, src.fails = "OK", now, 0
-        else:
-            src.status, src.fails = "Error", src.fails + 1
-        db.commit()
-    return {"refetched": len(cards), "weatherOk": ok, "total": len(cards)}
+    # 全データソースを実プローブして状態を更新（Open-Meteo含む）
+    probed = await source_probe.probe_all(db)
+    return {"refetched": len(cards), "weatherOk": ok, "total": len(cards),
+            "probed": {k: v["status"] for k, v in probed.items()}}

@@ -14,7 +14,13 @@ from .seed import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()  # テーブル作成＋サンプル投入（冪等）
+    if settings.enable_scheduler:
+        from .scheduler import start
+        start()  # 定期プローブ＋予報リフレッシュ
     yield
+    if settings.enable_scheduler:
+        from .scheduler import stop
+        await stop()
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)

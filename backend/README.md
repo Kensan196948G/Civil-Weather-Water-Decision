@@ -82,7 +82,21 @@ cd backend && python3 -m pytest      # 26 passed
 - `#20` 環境省 WBGT 実データ接続（現状 derived 推定）。
 - `#23` `decision_results`/`decision_reasons` の永続化（現状は都度計算）。
 - 河川（川の防災情報）・気象庁防災XML の連携（Phase 2 / #29〜#33）。
-- データソース状態の**実プローブ化**（現状 Open-Meteo 以外は固定シード）＋**定期バッチ**（APScheduler, 設計§11 JOB-001〜007）。
+
+## 定期バッチ / データソース実プローブ（#47 実装済み）
+
+`app/scheduler.py`（APScheduler `AsyncIOScheduler`）が lifespan で起動:
+
+| ジョブ | 間隔 | 内容 |
+|---|---|---|
+| `probe_sources` | 120秒（`PROBE_INTERVAL_SECONDS`） | 各ソースへ実HTTP疎通し status/last_ok/fails/avg_ms を更新 |
+| `refresh_forecasts` | 600秒（`FORECAST_REFRESH_SECONDS`） | Open-Meteo 予報キャッシュをウォーム |
+
+- `app/services/data_collectors/source_probe.py` が実プローブ。OK / Warning(遅延・3xx/4xx) / Error(5xx・接続失敗) を判定。
+- プローブ対象（公開・認証不要）: Open-Meteo / 気象庁XML / WBGT / 川の防災情報 / NASA POWER。
+- **水防災オープンデータ（契約制）は対象外**＝シードの Error/未接続を保持（実態以上に良く見せない）。
+- 手動再取得 `POST /api/data-collectors/run` も同期で全ソースをプローブする。
+- テストでは `ENABLE_SCHEDULER=false`（ネット非依存）。
 
 ## 現場の登録/更新/無効化（#14 実装済み）
 
