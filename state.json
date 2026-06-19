@@ -19,7 +19,15 @@
     }
   },
   "session": {
-    "last_phase": "Monitor",
-    "notes": "要件・設計を読了し、docs/implementation-plan.md を作成。次は Phase 0 足場構築（リポジトリ初期化・マイルストーン・Issue 起票）。"
+    "last_phase": "Build",
+    "frontend": {
+      "source": "ClaudeDesign",
+      "projectId": "4561f893-fd3f-4d53-aca0-6fc13aacbef6",
+      "location": "frontend/design/",
+      "runtime": "dc-runtime (support.js, React18 via CDN)",
+      "status": "モックデータで6画面動作。実APIへのデータ接続は次フェーズ。",
+      "note": "frontend は ClaudeDesign 管理。再取り込みは DesignSync。素React移植はしない（frontend/README.md 参照）。"
+    },
+    "notes": "実装計画作成→GitHub足場(M0-M4/Issue45)→ClaudeDesign WebUI を frontend/ に取り込み(6画面/ロジック21検証pass)。次は モック→実API のデータ接続。"
   }
 }

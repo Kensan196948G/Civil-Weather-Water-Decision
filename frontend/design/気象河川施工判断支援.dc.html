@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:'Noto Sans JP',system-ui,sans-serif;background:#eef1f4;color:#16212c;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit}
+  ::-webkit-scrollbar{height:9px;width:9px}
+  ::-webkit-scrollbar-thumb{background:#c5cfd8;border-radius:5px}
+  ::-webkit-scrollbar-track{background:transparent}
+  @keyframes cwspin{to{transform:rotate(360deg)}}
+  @keyframes cwpulse{0%,100%{opacity:1}50%{opacity:.3}}
+  @keyframes cwrise{from{transform:translateY(7px)}to{transform:translateY(0)}}
+  .cw-pin{background:transparent;border:none}
+  .leaflet-container{font-family:'Noto Sans JP',system-ui,sans-serif;background:#dfe6ec}
+  .leaflet-popup-content{margin:11px 13px;line-height:1.4}
+  .leaflet-bar a{color:#27333f}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#eef1f4">
+
+  <header style="position:sticky;top:0;z-index:40;background:#13344f;color:#fff;display:flex;align-items:center;gap:14px;padding:9px 18px;box-shadow:0 1px 0 rgba(0,0,0,.25)">
+    <div style="display:flex;align-items:center;gap:11px;min-width:0">
+      <div style="width:38px;height:38px;border-radius:10px;background:#1d4d74;display:flex;align-items:center;justify-content:center;flex:none">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none"><path d="M6.5 11.5a3.2 3.2 0 0 1 .3-6.38 4.2 4.2 0 0 1 8.06 1.2A3 3 0 0 1 17 12H7a2.5 2.5 0 0 1-.5-.05Z" fill="#cfe4f5"></path><path d="M5 16.2c1.3-.9 2.4-.9 3.7 0s2.4.9 3.7 0 2.4-.9 3.7 0 2.4.9 3.7 0" stroke="#5fb0e8" stroke-width="1.7" stroke-linecap="round"></path><path d="M5 19.4c1.3-.9 2.4-.9 3.7 0s2.4.9 3.7 0 2.4-.9 3.7 0 2.4.9 3.7 0" stroke="#5fb0e8" stroke-width="1.7" stroke-linecap="round"></path></svg>
+      </div>
+      <div style="min-width:0">
+        <div style="font-weight:900;font-size:15px;letter-spacing:.01em;line-height:1.15;white-space:nowrap">気象・河川・施工判断支援</div>
+        <div style="font-size:10px;color:#9fb6cc;letter-spacing:.02em;white-space:nowrap">Construction Weather &amp; Water Decision Support</div>
+      </div>
+    </div>
+
+    <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+      <div style="display:none;align-items:center;gap:7px;padding:5px 11px;border:1px solid #c9962f;background:rgba(201,150,47,.16);border-radius:7px;font-size:11px;font-weight:700;color:#f4d79a;white-space:nowrap" data-hidenarrow="1">
+        <span style="width:7px;height:7px;border-radius:50%;background:#f0b429;flex:none"></span>判断支援 — 最終判断は現場責任者
+      </div>
+      <div style="text-align:right;line-height:1.25;white-space:nowrap">
+        <div style="font-size:9px;color:#8aa3bb;letter-spacing:.04em">最終取得</div>
+        <div style="font-size:12px;font-weight:700;font-variant-numeric:tabular-nums">{{ lastUpdate }}</div>
+      </div>
+      <button onClick="{{ refresh }}" style="display:flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #2f5d82;background:#1d4d74;color:#dceaf6;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="{{ spinStyle }}"><path d="M20 11a8 8 0 1 0-.5 4" stroke="#9cc6ea" stroke-width="2.2" stroke-linecap="round"></path><path d="M20 5v5h-5" stroke="#9cc6ea" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        手動再取得
+      </button>
+      <div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-left:1px solid #2c4d68">
+        <div style="width:30px;height:30px;border-radius:50%;background:#2f6f4f;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none">山</div>
+        <div style="line-height:1.2;white-space:nowrap" data-hidenarrow="1">
+          <div style="font-size:12px;font-weight:700">山田 太郎</div>
+          <div style="font-size:10px;color:#9fb6cc">現場管理者</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <nav style="position:sticky;top:56px;z-index:30;background:#fff;border-bottom:1px solid #dce3ea;display:flex;gap:2px;padding:0 10px;overflow-x:auto;box-shadow:0 1px 3px rgba(20,40,60,.05)">
+    <sc-for list="{{ nav }}" as="t" hint-placeholder-count="6">
+      <button onClick="{{ t.onClick }}" style="position:relative;display:flex;align-items:center;gap:7px;padding:13px 15px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:{{ t.weight }};color:{{ t.color }};white-space:nowrap;border-bottom:3px solid {{ t.bar }}">
+        {{ t.label }}
+        <span style="min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:{{ t.badgeBg }};color:{{ t.badgeColor }};font-size:10px;font-weight:700;display:{{ t.badgeShow }};align-items:center;justify-content:center">{{ t.badge }}</span>
+      </button>
+    </sc-for>
+  </nav>
+
+  <main style="max-width:1300px;margin:0 auto;padding:18px 18px 72px">
+
+    <!-- ===================== DASHBOARD ===================== -->
+    <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:cwrise .25s ease">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <h1 style="margin:0;font-size:21px;font-weight:900;letter-spacing:.01em">現場リスク ダッシュボード</h1>
+          <p style="margin:4px 0 0;font-size:12.5px;color:#5f7081">公開気象・河川・暑さ指数データを統合し、現場ごとの注意レベルを一覧表示します</p>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onClick="{{ exportCsv }}" style="display:flex;align-items:center;gap:6px;padding:8px 13px;border:1px solid #c9d3db;background:#fff;border-radius:8px;font-size:12.5px;font-weight:700;color:#2c3e4f;cursor:pointer">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 3v11m0 0 4-4m-4 4-4-4" stroke="#2c3e4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M5 17v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2" stroke="#2c3e4f" stroke-width="2" stroke-linecap="round"></path></svg>
+            CSV出力
+          </button>
+        </div>
+      </div>
+
+      <!-- summary tiles -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;margin-bottom:14px">
+        <sc-for list="{{ summary }}" as="t" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #e2e8ee;border-left:5px solid {{ t.color }};border-radius:10px;padding:13px 15px;display:flex;align-items:center;gap:13px">
+            <div style="font-size:34px;font-weight:900;color:{{ t.color }};font-variant-numeric:tabular-nums;line-height:1;min-width:42px">{{ t.count }}</div>
+            <div style="line-height:1.3">
+              <div style="font-size:13.5px;font-weight:800;color:#27333f">{{ t.label }}</div>
+              <div style="font-size:10.5px;color:#7c8b99">{{ t.sub }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- map -->
+      <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:14px 15px 15px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="font-size:14px;font-weight:800;color:#27333f">現場マップ（OpenStreetMap ライブ）</div>
+          <div style="display:flex;gap:11px;font-size:10.5px;color:#62727f;flex-wrap:wrap">
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#2e7d32"></span>通常</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#e8930c"></span>注意</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#c62828"></span>中止検討</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#5a6b7b"></span>確認不能</span>
+          </div>
+        </div>
+        <div id="cw-map-dash" style="height:380px;border-radius:9px;overflow:hidden;position:relative;z-index:0;background:#dfe6ec"></div>
+        <div style="font-size:10px;color:#9aa7b3;margin-top:7px">ピンをクリックすると現場詳細を開けます ・ 地図データ © OpenStreetMap contributors</div>
+      </div>
+
+      <!-- filter chips -->
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:13px">
+        <span style="font-size:11.5px;font-weight:700;color:#6b7a88">絞り込み</span>
+        <sc-for list="{{ filters }}" as="f" hint-placeholder-count="5">
+          <button onClick="{{ f.onClick }}" style="padding:6px 13px;border:1.5px solid {{ f.border }};background:{{ f.bg }};color:{{ f.color }};border-radius:20px;font-size:12px;font-weight:700;cursor:pointer">{{ f.label }}</button>
+        </sc-for>
+      </div>
+
+      <!-- site cards -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:13px">
+        <sc-for list="{{ sites }}" as="s" hint-placeholder-count="6">
+          <div style="background:#fff;border:1px solid #e1e8ed;border-top:5px solid {{ s.levelColor }};border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(20,40,60,.06);display:flex;flex-direction:column">
+            <div style="padding:13px 15px 11px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+              <div style="min-width:0">
+                <div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">
+                  <span style="font-size:10px;font-weight:700;color:#fff;background:{{ s.workColor }};padding:2px 7px;border-radius:5px;white-space:nowrap">{{ s.workLabel }}</span>
+                  <span style="font-size:10px;color:#9aa7b3;font-variant-numeric:tabular-nums">{{ s.code }}</span>
+                </div>
+                <div style="font-size:15.5px;font-weight:800;color:#1c2935;line-height:1.25">{{ s.name }}</div>
+                <div style="font-size:11px;color:#7e8c99;margin-top:2px">{{ s.loc }}</div>
+              </div>
+              <div style="flex:none;text-align:center;background:{{ s.levelColor }};color:{{ s.levelInk }};border-radius:9px;padding:7px 10px;min-width:74px">
+                <div style="font-size:8.5px;font-weight:700;opacity:.85;letter-spacing:.05em">本日の判定</div>
+                <div style="font-size:15px;font-weight:900;line-height:1.2;white-space:nowrap">{{ s.levelLabel }}</div>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #eef2f5;border-bottom:1px solid #eef2f5">
+              <div style="padding:9px 4px;text-align:center;border-right:1px solid #eef2f5">
+                <div style="font-size:9.5px;color:#8b98a5;font-weight:700;margin-bottom:2px">降雨</div>
+                <div style="font-size:17px;font-weight:900;color:{{ s.rainTone }};font-variant-numeric:tabular-nums;line-height:1">{{ s.rainNow }}</div>
+                <div style="font-size:8.5px;color:#9aa7b3">mm/h</div>
+              </div>
+              <div style="padding:9px 4px;text-align:center;border-right:1px solid #eef2f5">
+                <div style="font-size:9.5px;color:#8b98a5;font-weight:700;margin-bottom:2px">最大風速</div>
+                <div style="font-size:17px;font-weight:900;color:{{ s.windTone }};font-variant-numeric:tabular-nums;line-height:1">{{ s.windMax }}</div>
+                <div style="font-size:8.5px;color:#9aa7b3">m/s</div>
+              </div>
+              <div style="padding:9px 4px;text-align:center;border-right:1px solid #eef2f5">
+                <div style="font-size:9.5px;color:#8b98a5;font-weight:700;margin-bottom:2px">気温</div>
+                <div style="font-size:17px;font-weight:900;color:{{ s.tempTone }};font-variant-numeric:tabular-nums;line-height:1">{{ s.tempHi }}</div>
+                <div style="font-size:8.5px;color:#9aa7b3">℃ / {{ s.tempLo }}</div>
+              </div>
+              <div style="padding:9px 4px;text-align:center">
+                <div style="font-size:9.5px;color:#8b98a5;font-weight:700;margin-bottom:2px">WBGT</div>
+                <div style="font-size:17px;font-weight:900;color:{{ s.wbgtTone }};font-variant-numeric:tabular-nums;line-height:1">{{ s.wbgt }}</div>
+                <div style="font-size:8.5px;color:{{ s.wbgtTone }};font-weight:700">{{ s.wbgtLabel }}</div>
+              </div>
+            </div>
+
+            <div style="padding:11px 15px;flex:1">
+              <sc-for list="{{ s.reasons }}" as="r" hint-placeholder-count="2">
+                <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">
+                  <span style="flex:none;margin-top:1px;width:16px;height:16px;border-radius:5px;background:{{ r.bg }};color:{{ r.color }};font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center">{{ r.tag }}</span>
+                  <span style="font-size:12px;color:#43525f;line-height:1.45">{{ r.text }}</span>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 15px;background:#f6f8fa;border-top:1px solid #eef2f5">
+              <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:{{ s.riverColor }};font-weight:700">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M4 14c1.3-.9 2.4-.9 3.7 0s2.4.9 3.7 0 2.4-.9 3.7 0 2.4.9 3.7 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path><path d="M4 18c1.3-.9 2.4-.9 3.7 0s2.4.9 3.7 0 2.4-.9 3.7 0 2.4.9 3.7 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
+                河川: {{ s.river }}
+              </div>
+              <span style="font-size:9.5px;color:#9aa7b3;white-space:nowrap">更新 {{ s.updated }}</span>
+            </div>
+
+            <button onClick="{{ s.onOpen }}" style="border:none;border-top:1px solid #e7edf1;background:#fff;color:#16527d;font-size:12.5px;font-weight:800;padding:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+              現場詳細を開く
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#16527d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            </button>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===================== SITE DETAIL ===================== -->
+    <sc-if value="{{ isSite }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:cwrise .25s ease">
+      <button onClick="{{ goDashboard }}" style="display:flex;align-items:center;gap:6px;background:none;border:none;color:#5d7081;font-size:12.5px;font-weight:700;cursor:pointer;padding:0;margin-bottom:12px">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="#5d7081" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        ダッシュボードへ戻る
+      </button>
+
+      <div style="background:#fff;border:1px solid #e2e8ee;border-left:6px solid {{ site.levelColor }};border-radius:12px;padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+            <span style="font-size:11px;font-weight:700;color:#fff;background:{{ site.workColor }};padding:3px 9px;border-radius:6px">{{ site.workLabel }}</span>
+            <span style="font-size:11px;color:#97a4b0;font-variant-numeric:tabular-nums">{{ site.code }}</span>
+          </div>
+          <h1 style="margin:0;font-size:22px;font-weight:900">{{ site.name }}</h1>
+          <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:7px;font-size:12px;color:#62727f">
+            <span>📍 {{ site.loc }}</span><span>担当: {{ site.manager }}</span><span>発注区分: {{ site.project }}</span>
+          </div>
+        </div>
+        <div style="text-align:center;background:{{ site.levelColor }};color:{{ site.levelInk }};border-radius:11px;padding:11px 20px">
+          <div style="font-size:10px;font-weight:700;opacity:.85;letter-spacing:.05em">本日の最大判定</div>
+          <div style="font-size:24px;font-weight:900;line-height:1.2">{{ site.levelLabel }}</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.55fr 1fr;gap:14px;align-items:start" data-stack="1">
+
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <!-- 3 day -->
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 17px">
+            <div style="font-size:14px;font-weight:800;margin-bottom:11px;color:#27333f">3日間の気象サマリ</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+              <sc-for list="{{ threeDay }}" as="d" hint-placeholder-count="3">
+                <div style="border:1px solid #e8edf1;border-radius:10px;padding:11px;text-align:center;background:{{ d.bg }}">
+                  <div style="font-size:12px;font-weight:800;color:#3a4854">{{ d.day }}</div>
+                  <div style="font-size:11px;color:#7b8995;margin:4px 0 8px">{{ d.weather }}</div>
+                  <div style="font-size:21px;font-weight:900;font-variant-numeric:tabular-nums;line-height:1"><span style="color:#d24a36">{{ d.hi }}°</span><span style="color:#9aa7b3;font-size:14px"> / {{ d.lo }}°</span></div>
+                  <div style="display:flex;justify-content:center;gap:9px;margin-top:8px;font-size:10.5px;color:#62727f">
+                    <span>☔{{ d.rain }}</span><span>🌬{{ d.wind }}</span>
+                  </div>
+                  <div style="margin-top:8px;font-size:10.5px;font-weight:800;color:{{ d.levelColor }}">{{ d.levelLabel }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- map -->
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:14px 15px 15px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+              <div style="font-size:14px;font-weight:800;color:#27333f">現場・観測所マップ</div>
+              <div style="display:flex;gap:11px;font-size:10.5px;color:#62727f;flex-wrap:wrap">
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#0e7d8f"></span>河川観測所</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#e0892a"></span>気象</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#cc4444"></span>WBGT</span>
+              </div>
+            </div>
+            <div id="cw-map-site" style="height:320px;border-radius:9px;overflow:hidden;position:relative;z-index:0;background:#dfe6ec"></div>
+            <div style="font-size:10px;color:#9aa7b3;margin-top:7px">青い破線は上流観測所と現場の関係を示します ・ © OpenStreetMap contributors</div>
+          </div>
+
+          <!-- weather chart -->
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 17px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <div style="font-size:14px;font-weight:800;color:#27333f">気温・降雨 24時間時系列</div>
+              <div style="display:flex;gap:12px;font-size:10.5px;color:#62727f">
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:14px;height:3px;background:#d64535;border-radius:2px"></span>気温</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;background:#7db6e8;border-radius:2px"></span>降雨</span>
+              </div>
+            </div>
+            <svg viewBox="0 0 680 184" style="width:100%;height:auto;display:block">
+              <sc-for list="{{ wx.grid }}" as="g" hint-placeholder-count="3"><line x1="34" x2="646" y1="{{ g.y }}" y2="{{ g.y }}" stroke="#eef1f4" stroke-width="1"></line></sc-for>
+              <sc-for list="{{ wx.rainBars }}" as="b" hint-placeholder-count="24"><rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="1.2" fill="#8fc1ea"></rect></sc-for>
+              <path d="{{ wx.tempArea }}" fill="rgba(214,69,53,.09)"></path>
+              <polyline points="{{ wx.tempPts }}" fill="none" stroke="#d64535" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></polyline>
+              <sc-for list="{{ wx.tempDots }}" as="d" hint-placeholder-count="9"><circle cx="{{ d.x }}" cy="{{ d.y }}" r="3" fill="#fff" stroke="#d64535" stroke-width="2"></circle></sc-for>
+              <line x1="{{ wx.nowX }}" x2="{{ wx.nowX }}" y1="12" y2="160" stroke="#13344f" stroke-width="1.2" stroke-dasharray="3 3"></line>
+              <text x="{{ wx.nowX }}" y="10" text-anchor="middle" font-size="9" font-weight="700" fill="#13344f">現在</text>
+              <sc-for list="{{ wx.hours }}" as="h" hint-placeholder-count="8"><text x="{{ h.x }}" y="178" text-anchor="middle" font-size="9.5" fill="#90a0ad">{{ h.label }}</text></sc-for>
+              <sc-for list="{{ wx.yLabels }}" as="y" hint-placeholder-count="3"><text x="30" y="{{ y.y }}" text-anchor="end" font-size="9" fill="#c0392b" font-weight="600">{{ y.label }}</text></sc-for>
+            </svg>
+          </div>
+
+          <!-- river chart -->
+          <sc-if value="{{ site.hasRiver }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 17px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <div style="font-size:14px;font-weight:800;color:#27333f">河川水位 時系列（上流観測所含む）</div>
+              <div style="font-size:11px;font-weight:800;color:{{ site.riverColor }}">現在 {{ rv.current }}m ・ {{ site.river }}</div>
+            </div>
+            <svg viewBox="0 0 680 196" style="width:100%;height:auto;display:block">
+              <sc-for list="{{ rv.bands }}" as="b" hint-placeholder-count="3"><rect x="34" y="{{ b.y }}" width="612" height="{{ b.h }}" fill="{{ b.fill }}"></rect></sc-for>
+              <sc-for list="{{ rv.thresholds }}" as="t" hint-placeholder-count="3"><line x1="34" x2="646" y1="{{ t.y }}" y2="{{ t.y }}" stroke="{{ t.color }}" stroke-width="1.3" stroke-dasharray="5 3"></line><text x="640" y="{{ t.ty }}" text-anchor="end" font-size="9.5" font-weight="700" fill="{{ t.color }}">{{ t.label }} {{ t.value }}m</text></sc-for>
+              <path d="{{ rv.area }}" fill="rgba(22,120,140,.12)"></path>
+              <polyline points="{{ rv.pts }}" fill="none" stroke="#0e7d8f" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
+              <sc-for list="{{ rv.dots }}" as="d" hint-placeholder-count="9"><circle cx="{{ d.x }}" cy="{{ d.y }}" r="3" fill="#fff" stroke="#0e7d8f" stroke-width="2"></circle></sc-for>
+              <line x1="{{ rv.nowX }}" x2="{{ rv.nowX }}" y1="10" y2="170" stroke="#13344f" stroke-width="1.2" stroke-dasharray="3 3"></line>
+              <sc-for list="{{ rv.hours }}" as="h" hint-placeholder-count="8"><text x="{{ h.x }}" y="190" text-anchor="middle" font-size="9.5" fill="#90a0ad">{{ h.label }}</text></sc-for>
+            </svg>
+          </div>
+          </sc-if>
+        </div>
+
+        <!-- right column -->
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <!-- work plans -->
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 17px">
+            <div style="font-size:14px;font-weight:800;margin-bottom:11px;color:#27333f">本日の作業予定と判定</div>
+            <sc-for list="{{ site.plans }}" as="p" hint-placeholder-count="2">
+              <div style="border:1px solid #e8edf1;border-left:4px solid {{ p.color }};border-radius:9px;padding:11px 12px;margin-bottom:9px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                  <span style="font-size:12.5px;font-weight:800;color:#2a3641">{{ p.title }}</span>
+                  <span style="font-size:10.5px;font-weight:900;color:{{ p.color }};white-space:nowrap">{{ p.levelLabel }}</span>
+                </div>
+                <div style="font-size:10.5px;color:#8693a0;margin:3px 0 6px;font-variant-numeric:tabular-nums">⏱ {{ p.time }} ・ {{ p.contractor }}</div>
+                <div style="font-size:11.5px;color:#54636f;line-height:1.45">{{ p.reason }}</div>
+                <button onClick="{{ p.onOpen }}" style="margin-top:8px;font-size:11px;font-weight:800;color:#16527d;background:none;border:none;padding:0;cursor:pointer">作業判断を開く →</button>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- wbgt mini -->
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 17px">
+            <div style="font-size:14px;font-weight:800;margin-bottom:9px;color:#27333f">暑さ指数 WBGT</div>
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px">
+              <div style="text-align:center;background:{{ site.wbgtBg }};border:1.5px solid {{ site.wbgtTone }};border-radius:11px;padding:8px 14px">
+                <div style="font-size:28px;font-weight:900;color:{{ site.wbgtTone }};line-height:1;font-variant-numeric:tabular-nums">{{ site.wbgt }}</div>
+                <div style="font-size:9px;color:#8b98a5;font-weight:700">WBGT</div>
+              </div>
+              <div>
+                <div style="font-size:15px;font-weight:900;color:{{ site.wbgtTone }}">{{ site.wbgtLabel }}</div>
+                <div style="font-size:11px;color:#5f7081;line-height:1.4;margin-top:3px">{{ site.wbgtAdvice }}</div>
+              </div>
+            </div>
+            <svg viewBox="0 0 680 120" style="width:100%;height:auto;display:block">
+              <sc-for list="{{ wb.bands }}" as="b" hint-placeholder-count="4"><rect x="0" y="{{ b.y }}" width="680" height="{{ b.h }}" fill="{{ b.fill }}"></rect></sc-for>
+              <polyline points="{{ wb.pts }}" fill="none" stroke="#7a4a12" stroke-width="2.4" stroke-linejoin="round"></polyline>
+              <sc-for list="{{ wb.dots }}" as="d" hint-placeholder-count="9"><circle cx="{{ d.x }}" cy="{{ d.y }}" r="2.6" fill="#7a4a12"></circle></sc-for>
+            </svg>
+          </div>
+
+          <!-- official links -->
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 17px">
+            <div style="font-size:14px;font-weight:800;margin-bottom:4px;color:#27333f">公式情報の確認リンク</div>
+            <div style="font-size:10.5px;color:#8693a0;margin-bottom:10px">警報・注意報・水位は公式発表を優先してください</div>
+            <sc-for list="{{ links }}" as="l" hint-placeholder-count="4">
+              <a href="{{ l.url }}" target="_blank" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 11px;border:1px solid #e6ebf0;border-radius:8px;margin-bottom:7px;text-decoration:none">
+                <div><div style="font-size:12.5px;font-weight:700;color:#16527d">{{ l.label }}</div><div style="font-size:10px;color:#8b98a5">{{ l.note }}</div></div>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M7 17 17 7M17 7H9M17 7v8" stroke="#9aa7b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              </a>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <!-- history -->
+      <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 17px;margin-top:14px">
+        <div style="font-size:14px;font-weight:800;margin-bottom:11px;color:#27333f">この現場の判断履歴</div>
+        <sc-for list="{{ site.history }}" as="h" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:13px;padding:10px 0;border-bottom:1px solid #f0f3f6">
+            <div style="flex:none;width:52px;text-align:center;font-size:11px;font-weight:800;color:#fff;background:{{ h.actionColor }};border-radius:7px;padding:5px 0">{{ h.action }}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12.5px;color:#3a4854;line-height:1.4">{{ h.comment }}</div>
+              <div style="font-size:10.5px;color:#9aa7b3;margin-top:2px;font-variant-numeric:tabular-nums">{{ h.datetime }} ・ {{ h.by }} ・ 判定: {{ h.levelLabel }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===================== WORK DECISION ===================== -->
+    <sc-if value="{{ isDecision }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:cwrise .25s ease">
+      <h1 style="margin:0 0 4px;font-size:21px;font-weight:900">作業判断 評価</h1>
+      <p style="margin:0 0 16px;font-size:12.5px;color:#5f7081">作業条件を入力すると、気象・河川・WBGTデータから注意レベルと根拠を提示します</p>
+
+      <div style="display:grid;grid-template-columns:0.9fr 1.25fr;gap:14px;align-items:start" data-stack="1">
+        <!-- form -->
+        <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:17px">
+          <div style="font-size:13.5px;font-weight:800;margin-bottom:13px;color:#27333f">作業条件の入力</div>
+          <label style="display:block;font-size:11.5px;font-weight:700;color:#566472;margin-bottom:5px">現場</label>
+          <select onChange="{{ df.onSite }}" value="{{ dform.siteId }}" style="width:100%;padding:9px 10px;border:1px solid #cdd6de;border-radius:8px;font-size:13px;margin-bottom:13px;background:#fff;color:#27333f">
+            <sc-for list="{{ siteOptions }}" as="o" hint-placeholder-count="6"><option value="{{ o.id }}">{{ o.name }}</option></sc-for>
+          </select>
+          <label style="display:block;font-size:11.5px;font-weight:700;color:#566472;margin-bottom:5px">作業種別</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:13px">
+            <sc-for list="{{ workTypeOptions }}" as="w" hint-placeholder-count="6">
+              <button onClick="{{ w.onClick }}" style="padding:9px 8px;border:1.5px solid {{ w.border }};background:{{ w.bg }};color:{{ w.color }};border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">{{ w.label }}</button>
+            </sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:13px">
+            <div><label style="display:block;font-size:11.5px;font-weight:700;color:#566472;margin-bottom:5px">作業開始</label><input type="datetime-local" onChange="{{ df.onStart }}" value="{{ dform.start }}" style="width:100%;padding:8px 9px;border:1px solid #cdd6de;border-radius:8px;font-size:12px;color:#27333f"></div>
+            <div><label style="display:block;font-size:11.5px;font-weight:700;color:#566472;margin-bottom:5px">作業終了</label><input type="datetime-local" onChange="{{ df.onEnd }}" value="{{ dform.end }}" style="width:100%;padding:8px 9px;border:1px solid #cdd6de;border-radius:8px;font-size:12px;color:#27333f"></div>
+          </div>
+          <label style="display:block;font-size:11.5px;font-weight:700;color:#566472;margin-bottom:5px">協力会社</label>
+          <input type="text" onChange="{{ df.onContractor }}" value="{{ dform.contractor }}" placeholder="例: ○○建設" style="width:100%;padding:9px 10px;border:1px solid #cdd6de;border-radius:8px;font-size:13px;margin-bottom:13px;color:#27333f">
+          <label style="display:block;font-size:11.5px;font-weight:700;color:#566472;margin-bottom:5px">作業概要</label>
+          <textarea onChange="{{ df.onSummary }}" value="{{ dform.summary }}" placeholder="作業内容のメモ" style="width:100%;padding:9px 10px;border:1px solid #cdd6de;border-radius:8px;font-size:13px;margin-bottom:15px;min-height:54px;resize:vertical;font-family:inherit;color:#27333f"></textarea>
+          <button onClick="{{ df.evaluate }}" style="width:100%;padding:12px;background:#13344f;color:#fff;border:none;border-radius:9px;font-size:14px;font-weight:800;cursor:pointer">気象・河川データで評価する</button>
+        </div>
+
+        <!-- result -->
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:14px 15px 15px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
+              <div style="font-size:13.5px;font-weight:800;color:#27333f">対象現場の位置（OpenStreetMap）</div>
+              <span style="font-size:10.5px;color:#8b98a5">{{ result.mapNote }}</span>
+            </div>
+            <div id="cw-map-dec" style="height:230px;border-radius:9px;overflow:hidden;position:relative;z-index:0;background:#dfe6ec"></div>
+          </div>
+          <div style="background:#fff;border:1px solid #e2e8ee;border-top:6px solid {{ result.levelColor }};border-radius:12px;padding:17px">
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+              <div style="flex:none;text-align:center;background:{{ result.levelColor }};color:{{ result.levelInk }};border-radius:11px;padding:12px 18px;min-width:120px">
+                <div style="font-size:10px;font-weight:700;opacity:.85;letter-spacing:.05em">全体レベル</div>
+                <div style="font-size:25px;font-weight:900;line-height:1.2">{{ result.levelLabel }}</div>
+              </div>
+              <div style="font-size:13px;color:#3a4854;line-height:1.6">{{ result.summary }}</div>
+            </div>
+            <div style="font-size:12.5px;font-weight:800;color:#566472;margin-bottom:8px">判定理由</div>
+            <sc-for list="{{ result.reasons }}" as="r" hint-placeholder-count="3">
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:{{ r.bg }};border:1px solid {{ r.border }};border-radius:9px;margin-bottom:8px">
+                <span style="flex:none;width:54px;text-align:center;font-size:10px;font-weight:900;color:{{ r.ink }};background:{{ r.chip }};border-radius:6px;padding:4px 0">{{ r.sevLabel }}</span>
+                <div style="min-width:0">
+                  <div style="font-size:12.5px;color:#2c3a46;line-height:1.5">{{ r.msg }}</div>
+                  <div style="font-size:10.5px;color:#8693a0;margin-top:3px;font-variant-numeric:tabular-nums">{{ r.source }} ・ {{ r.value }} ・ 取得 {{ r.time }}</div>
+                </div>
+              </div>
+            </sc-for>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+              <sc-for list="{{ result.refs }}" as="x" hint-placeholder-count="3"><span style="font-size:10.5px;color:#5f7081;background:#f1f4f7;border:1px solid #e3e9ee;padding:4px 9px;border-radius:6px">{{ x }}</span></sc-for>
+            </div>
+          </div>
+
+          <!-- memo -->
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:17px">
+            <div style="font-size:13.5px;font-weight:800;margin-bottom:5px;color:#27333f">現場判断メモの登録</div>
+            <div style="font-size:10.5px;color:#8693a0;margin-bottom:12px">最終判断は現場責任者が行います。判断結果と理由を記録してください。</div>
+            <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px">
+              <sc-for list="{{ memoActions }}" as="a" hint-placeholder-count="5">
+                <button onClick="{{ a.onClick }}" style="padding:8px 14px;border:1.5px solid {{ a.border }};background:{{ a.bg }};color:{{ a.color }};border-radius:8px;font-size:12.5px;font-weight:700;cursor:pointer">{{ a.label }}</button>
+              </sc-for>
+            </div>
+            <textarea onChange="{{ df.onMemo }}" value="{{ memoComment }}" placeholder="判断理由・現地確認結果・発注者指示など" style="width:100%;padding:10px;border:1px solid #cdd6de;border-radius:8px;font-size:13px;min-height:60px;resize:vertical;font-family:inherit;margin-bottom:12px;color:#27333f"></textarea>
+            <button onClick="{{ df.record }}" style="width:100%;padding:11px;background:#2f6f4f;color:#fff;border:none;border-radius:9px;font-size:13.5px;font-weight:800;cursor:pointer">判断履歴に記録する</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===================== WBGT ===================== -->
+    <sc-if value="{{ isWbgt }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:cwrise .25s ease">
+      <h1 style="margin:0 0 4px;font-size:21px;font-weight:900">熱中症 / 暑さ指数 WBGT</h1>
+      <p style="margin:0 0 16px;font-size:12.5px;color:#5f7081">現場別の暑さ指数と熱中症リスクレベル・注意喚起を表示します（環境省 WBGT）</p>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        <sc-for list="{{ wbgtScale }}" as="z" hint-placeholder-count="5">
+          <div style="display:flex;align-items:center;gap:7px;padding:7px 12px;background:{{ z.bg }};border:1px solid {{ z.border }};border-radius:8px">
+            <span style="font-size:13px;font-weight:900;color:{{ z.color }};font-variant-numeric:tabular-nums">{{ z.range }}</span>
+            <span style="font-size:11.5px;font-weight:700;color:{{ z.color }}">{{ z.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:13px">
+        <sc-for list="{{ wbgtSites }}" as="s" hint-placeholder-count="6">
+          <div style="background:#fff;border:1px solid #e2e8ee;border-top:5px solid {{ s.color }};border-radius:12px;padding:15px 16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+              <div style="min-width:0">
+                <div style="font-size:14px;font-weight:800;color:#27333f;line-height:1.3">{{ s.name }}</div>
+                <div style="font-size:10.5px;color:#8b98a5">{{ s.loc }}</div>
+              </div>
+              <div style="flex:none;text-align:center;background:{{ s.bg }};border:1.5px solid {{ s.color }};border-radius:10px;padding:6px 13px">
+                <div style="font-size:26px;font-weight:900;color:{{ s.color }};line-height:1;font-variant-numeric:tabular-nums">{{ s.wbgt }}</div>
+                <div style="font-size:11px;font-weight:800;color:{{ s.color }}">{{ s.label }}</div>
+              </div>
+            </div>
+            <svg viewBox="0 0 320 70" style="width:100%;height:auto;display:block;margin-bottom:9px">
+              <sc-for list="{{ s.bands }}" as="b" hint-placeholder-count="4"><rect x="0" y="{{ b.y }}" width="320" height="{{ b.h }}" fill="{{ b.fill }}"></rect></sc-for>
+              <polyline points="{{ s.pts }}" fill="none" stroke="#7a4a12" stroke-width="2" stroke-linejoin="round"></polyline>
+            </svg>
+            <div style="font-size:11.5px;color:#54636f;line-height:1.5;background:#f6f8fa;border-radius:8px;padding:9px 11px">{{ s.advice }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===================== HISTORY ===================== -->
+    <sc-if value="{{ isHistory }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:cwrise .25s ease">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <h1 style="margin:0;font-size:21px;font-weight:900">判断履歴</h1>
+          <p style="margin:4px 0 0;font-size:12.5px;color:#5f7081">作業実施・延期・中止・監視継続の記録と判断根拠</p>
+        </div>
+        <button onClick="{{ exportCsv }}" style="display:flex;align-items:center;gap:6px;padding:8px 13px;border:1px solid #c9d3db;background:#fff;border-radius:8px;font-size:12.5px;font-weight:700;color:#2c3e4f;cursor:pointer">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 3v11m0 0 4-4m-4 4-4-4" stroke="#2c3e4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M5 17v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2" stroke="#2c3e4f" stroke-width="2" stroke-linecap="round"></path></svg>
+          CSV出力
+        </button>
+      </div>
+
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:13px">
+        <sc-for list="{{ historyFilters }}" as="f" hint-placeholder-count="5"><button onClick="{{ f.onClick }}" style="padding:6px 13px;border:1.5px solid {{ f.border }};background:{{ f.bg }};color:{{ f.color }};border-radius:20px;font-size:12px;font-weight:700;cursor:pointer">{{ f.label }}</button></sc-for>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;overflow:hidden">
+        <div style="display:grid;grid-template-columns:130px 1.4fr 1fr 90px 80px 1.6fr;gap:10px;padding:11px 16px;background:#f4f7f9;border-bottom:1px solid #e6ecf1;font-size:10.5px;font-weight:800;color:#67767f" data-hidenarrow="1">
+          <span>判断日時</span><span>現場</span><span>作業種別</span><span>判定</span><span>現場判断</span><span>メモ</span>
+        </div>
+        <sc-for list="{{ historyRows }}" as="h" hint-placeholder-count="7">
+          <div style="display:grid;grid-template-columns:130px 1.4fr 1fr 90px 80px 1.6fr;gap:10px;padding:12px 16px;border-bottom:1px solid #f0f3f6;align-items:center;font-size:12px" data-row="1">
+            <span style="color:#8693a0;font-variant-numeric:tabular-nums;font-size:11px">{{ h.datetime }}</span>
+            <span style="font-weight:700;color:#2a3641">{{ h.site }}</span>
+            <span style="color:#54636f">{{ h.workType }}</span>
+            <span style="font-weight:900;color:{{ h.levelColor }};font-size:11px">{{ h.levelLabel }}</span>
+            <span><span style="font-size:10.5px;font-weight:800;color:#fff;background:{{ h.actionColor }};border-radius:6px;padding:3px 8px;white-space:nowrap">{{ h.action }}</span></span>
+            <span style="color:#5b6975;line-height:1.4">{{ h.comment }}<span style="display:block;font-size:10px;color:#a3afba;margin-top:2px">{{ h.by }}</span></span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===================== DATA SOURCE ===================== -->
+    <sc-if value="{{ isSource }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:cwrise .25s ease">
+      <h1 style="margin:0 0 4px;font-size:21px;font-weight:900">データソース状態</h1>
+      <p style="margin:0 0 16px;font-size:12.5px;color:#5f7081">外部データの接続状態・最終取得時刻・失敗回数を監視します。障害時は公式ページ参照に切り替えます。</p>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:13px">
+        <sc-for list="{{ sources }}" as="d" hint-placeholder-count="6">
+          <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:15px 16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+              <div style="min-width:0">
+                <div style="font-size:14px;font-weight:800;color:#27333f;line-height:1.3">{{ d.name }}</div>
+                <div style="font-size:10.5px;color:#8b98a5">{{ d.kind }} ・ {{ d.id }}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;background:{{ d.bg }};border:1px solid {{ d.border }};border-radius:20px;padding:5px 12px;flex:none">
+                <span style="width:8px;height:8px;border-radius:50%;background:{{ d.dot }};{{ d.pulse }}"></span>
+                <span style="font-size:11.5px;font-weight:800;color:{{ d.color }}">{{ d.status }}</span>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:11px">
+              <div style="background:#f6f8fa;border-radius:8px;padding:8px 10px"><div style="font-size:9.5px;color:#8b98a5;font-weight:700">最終取得成功</div><div style="font-size:12.5px;font-weight:700;color:#2a3641;font-variant-numeric:tabular-nums">{{ d.lastOk }}</div></div>
+              <div style="background:#f6f8fa;border-radius:8px;padding:8px 10px"><div style="font-size:9.5px;color:#8b98a5;font-weight:700">連続失敗</div><div style="font-size:12.5px;font-weight:700;color:{{ d.failColor }};font-variant-numeric:tabular-nums">{{ d.fails }} 回</div></div>
+              <div style="background:#f6f8fa;border-radius:8px;padding:8px 10px"><div style="font-size:9.5px;color:#8b98a5;font-weight:700">平均応答</div><div style="font-size:12.5px;font-weight:700;color:#2a3641;font-variant-numeric:tabular-nums">{{ d.ms }} ms</div></div>
+              <div style="background:#f6f8fa;border-radius:8px;padding:8px 10px"><div style="font-size:9.5px;color:#8b98a5;font-weight:700">信頼区分</div><div style="font-size:12.5px;font-weight:700;color:#2a3641">{{ d.trust }}</div></div>
+            </div>
+            <div style="font-size:11px;color:#62727f;line-height:1.5;border-top:1px solid #f0f3f6;padding-top:9px">{{ d.note }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- footer disclaimer -->
+    <div style="margin-top:26px;padding:14px 18px;background:#fbf6ec;border:1px solid #ecdcb8;border-radius:10px;display:flex;align-items:flex-start;gap:11px">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" style="flex:none;margin-top:1px"><path d="M12 9v4m0 4h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke="#b8860b" stroke-width="1.8" stroke-linejoin="round"></path></svg>
+      <div style="font-size:11.5px;color:#6b5a2e;line-height:1.6">
+        <strong style="color:#5a4a20">本システムは施工判断を支援するものであり、作業の実施・中止・延期を自動決定するものではありません。</strong>
+        最終判断は現場責任者が、発注者指示・施工計画書・社内安全基準・現地目視確認・気象庁/国土交通省/自治体等の公式発表を踏まえて行ってください。表示データは取得元・取得時刻を併記しています。欠測・遅延時は「確認不能」と表示します。
+      </div>
+    </div>
+  </main>
+
+  <!-- toast -->
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:60;background:#13344f;color:#fff;padding:12px 20px;border-radius:10px;box-shadow:0 8px 28px rgba(10,30,50,.35);font-size:13px;font-weight:700;display:flex;align-items:center;gap:9px;animation:cwrise .2s ease">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="#7fdca0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      {{ toast }}
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:860}}">
+class Component extends DCLogic {
+  state = {
+    screen: 'dashboard',
+    siteId: 'S01',
+    filter: 'all',
+    lastUpdate: '06/19 08:35',
+    refreshing: false,
+    toast: null,
+    dform: { siteId: 'S01', workType: 'river', start: '2026-06-20T08:00', end: '2026-06-20T12:00', contractor: '', summary: '' },
+    result: null,
+    memoAction: 'monitor',
+    memoComment: '',
+    hFilter: 'all',
+    history: [
+      { id: 'L07', datetime: '06/19 08:10', siteId: 'S01', site: '北川 下流右岸 護岸工事', workType: '河川内作業', level: 2, action: 'cancel', comment: '上流雨量増加・水位上昇傾向のため午前のブロック据付を中止。午後再評価。', by: '山田（現場管理者）' },
+      { id: 'L06', datetime: '06/19 07:55', siteId: 'S03', site: '中央高架橋 下部工', workType: 'コンクリート打設', level: 1, action: 'execute', comment: '高温だが暑中コンクリート対策を確認し打設実施。養生強化。', by: '佐藤（主任技術者）' },
+      { id: 'L05', datetime: '06/18 16:40', siteId: 'S02', site: '東部丘陵 道路改良', workType: '土工', level: 1, action: 'postpone', comment: '翌日午前の降雨予報により法面整形を午後へ変更。', by: '鈴木（現場管理者）' },
+      { id: 'L04', datetime: '06/18 13:20', siteId: 'S05', site: '西沢川 樋門設置', workType: '河川内作業', level: 3, action: 'monitor', comment: '河川データ更新遅延。公式ページと現地目視で監視継続。', by: '高橋（安全担当）' },
+      { id: 'L03', datetime: '06/18 09:05', siteId: 'S03', site: '中央高架橋 下部工', workType: 'クレーン作業', level: 2, action: 'cancel', comment: '突風リスクのため大型クレーン揚重を中止・待機。', by: '佐藤（主任技術者）' },
+      { id: 'L02', datetime: '06/17 14:10', siteId: 'S06', site: '港南 臨港道路 舗装', workType: '舗装', level: 0, action: 'execute', comment: '気象条件良好。予定どおり舗設実施。', by: '田中（現場管理者）' },
+      { id: 'L01', datetime: '06/17 10:30', siteId: 'S02', site: '東部丘陵 道路改良', workType: '土工', level: 0, action: 'execute', comment: '注意条件なし。通常確認で作業実施。', by: '鈴木（現場管理者）' }
+    ]
+  };
+
+  LEVELS = {
+    0: { label: '通常', color: '#2e7d32', ink: '#ffffff', bg: '#e7f3e9', border: '#bcdcc0', chip: '#2e7d32', tag: '◯' },
+    1: { label: '注意', color: '#e8930c', ink: '#3a2600', bg: '#fdf3da', border: '#f0d79a', chip: '#f2a517', tag: '!' },
+    2: { label: '中止検討', color: '#c62828', ink: '#ffffff', bg: '#fbe8e8', border: '#f0bcbc', chip: '#c62828', tag: '!!' },
+    3: { label: '確認不能', color: '#5a6b7b', ink: '#ffffff', bg: '#eef1f4', border: '#d3dae1', chip: '#5a6b7b', tag: '?' }
+  };
+  WORK = {
+    river: { label: '河川内作業', color: '#0e7d8f' },
+    concrete: { label: 'コンクリート打設', color: '#7a5cc0' },
+    earthwork: { label: '土工', color: '#8a6d3b' },
+    pavement: { label: '舗装', color: '#566472' },
+    crane: { label: 'クレーン作業', color: '#c0682c' },
+    heat: { label: '熱中症対策', color: '#cc4444' }
+  };
+  ACTIONS = {
+    execute: { label: '実施', color: '#2e7d32' },
+    postpone: { label: '延期', color: '#e8930c' },
+    cancel: { label: '中止', color: '#c62828' },
+    monitor: { label: '監視継続', color: '#2f6f87' },
+    other: { label: 'その他', color: '#5a6b7b' }
+  };
+
+  SITES = [
+    { id: 'S01', name: '北川 下流右岸 護岸工事', code: 'CW-031', loc: 'X市 北川流域', work: 'river', level: 2, rainNow: 3.5, rainPeak: 12, windMax: 6, gust: 11, tempHi: 28, tempLo: 21, wbgt: 27, river: '上昇傾向 +0.4m/h', riverState: 'rising', updated: '08:32', rainy: true, project: '公共', manager: '山田',
+      reasons: [{ sev: 1, text: '上流域で雨量が増加しています（到達時間差に注意）' }, { sev: 1, text: '水位が上昇傾向です（退避基準を確認）' }, { sev: 2, text: '洪水注意情報が発表されています' }],
+      plans: [{ title: '護岸ブロック据付', time: '08:00–12:00', contractor: '○○建設', level: 2, reason: '上流雨量増加・水位上昇により河川内作業は中止検討。退避基準と公式情報を確認。' }, { title: '法面整形', time: '13:00–16:00', contractor: '○○建設', level: 1, reason: '午後は降雨弱まる見込み。現地確認のうえ判断。' }] },
+    { id: 'S02', name: '東部丘陵 道路改良', code: 'CW-018', loc: 'Y市 東部地区', work: 'earthwork', level: 1, rainNow: 1.5, rainPeak: 4, windMax: 5, gust: 9, tempHi: 30, tempLo: 22, wbgt: 28, river: '近接なし', riverState: 'none', updated: '08:30', rainy: true, project: '公共', manager: '鈴木',
+      reasons: [{ sev: 1, text: '作業時間帯に弱い降雨予報があります' }, { sev: 1, text: '連続雨量増加で法面・仮設排水に注意' }],
+      plans: [{ title: '掘削・残土搬出', time: '08:00–17:00', contractor: '△△土建', level: 1, reason: '時間雨量は小さいが連続雨量に注意。締固め品質と排水を確認。' }] },
+    { id: 'S03', name: '中央高架橋 下部工', code: 'CW-024', loc: 'Z市 中央地区', work: 'concrete', level: 1, rainNow: 0.4, rainPeak: 2, windMax: 7, gust: 12, tempHi: 31, tempLo: 24, wbgt: 29, river: '近接なし', riverState: 'none', updated: '08:33', rainy: false, project: '公共', manager: '佐藤',
+      reasons: [{ sev: 1, text: '気温が高く暑中コンクリート対策が必要です' }, { sev: 1, text: '風速がやや高め（養生・ポンプ作業に影響）' }],
+      plans: [{ title: '橋脚 コンクリート打設', time: '09:00–15:00', contractor: '□□工業', level: 1, reason: '高温により暑中コンクリート対策を確認。養生計画を強化。' }, { title: '型枠解体', time: '15:00–17:00', contractor: '□□工業', level: 0, reason: '注意条件なし。' }] },
+    { id: 'S04', name: '南台ニュータウン 造成', code: 'CW-009', loc: 'Y市 南台地区', work: 'earthwork', level: 0, rainNow: 0, rainPeak: 0, windMax: 3, gust: 6, tempHi: 29, tempLo: 20, wbgt: 25, river: '近接なし', riverState: 'none', updated: '08:31', rainy: false, project: '民間', manager: '伊藤',
+      reasons: [{ sev: 0, text: '主要な注意条件はありません。通常確認で作業検討可能です' }],
+      plans: [{ title: '盛土・敷均し', time: '08:00–17:00', contractor: '◇◇建設', level: 0, reason: '注意条件なし。通常確認で作業検討可能。' }] },
+    { id: 'S05', name: '西沢川 樋門設置', code: 'CW-027', loc: 'X市 西沢川流域', work: 'river', level: 3, rainNow: null, rainPeak: null, windMax: 4, gust: 8, tempHi: 27, tempLo: 21, wbgt: 26, river: 'データ更新遅延', riverState: 'stale', updated: '06:10', rainy: false, project: '公共', manager: '高橋',
+      reasons: [{ sev: 3, text: '河川データが更新遅延しています（確認不能）' }, { sev: 3, text: '公式ページと現地目視確認を行ってください' }],
+      plans: [{ title: '樋門据付・基礎', time: '08:00–16:00', contractor: '○○建設', level: 3, reason: '河川データ更新遅延により確認不能。公式情報・現地確認を優先。' }] },
+    { id: 'S06', name: '港南 臨港道路 舗装', code: 'CW-012', loc: 'Z市 港南地区', work: 'pavement', level: 0, rainNow: 0, rainPeak: 0, windMax: 4, gust: 7, tempHi: 30, tempLo: 23, wbgt: 27, river: '近接なし', riverState: 'none', updated: '08:34', rainy: false, project: '公共', manager: '田中',
+      reasons: [{ sev: 0, text: '主要な注意条件はありません。路面乾燥条件は良好です' }],
+      plans: [{ title: '表層 舗設', time: '08:00–15:00', contractor: '◎◎道路', level: 0, reason: '気象条件良好。予定どおり舗設可能。' }] }
+  ];
+
+  COORDS = { S01: [35.760, 139.780], S02: [35.620, 139.460], S03: [35.460, 139.630], S04: [35.500, 139.410], S05: [35.710, 139.520], S06: [35.440, 139.680] };
+  STATIONS = {
+    S01: [{ name: '北川 上流 雨量・水位観測所', type: 'river', rel: '上流', d: [35.787, 139.769] }, { name: '北川 護岸地点 水位観測所', type: 'river', rel: '最寄り', d: [35.766, 139.776] }, { name: '東部 アメダス', type: 'weather', rel: '参照', d: [35.754, 139.792] }, { name: 'X市 WBGT地点', type: 'wbgt', rel: '参照', d: [35.758, 139.770] }],
+    S02: [{ name: '丘陵 アメダス', type: 'weather', rel: '最寄り', d: [35.625, 139.452] }, { name: 'Y市 WBGT地点', type: 'wbgt', rel: '参照', d: [35.615, 139.467] }],
+    S03: [{ name: '中央 アメダス', type: 'weather', rel: '最寄り', d: [35.464, 139.622] }, { name: 'Z市 WBGT地点', type: 'wbgt', rel: '参照', d: [35.456, 139.636] }],
+    S04: [{ name: '南台 アメダス', type: 'weather', rel: '最寄り', d: [35.504, 139.405] }, { name: 'Y市 WBGT地点', type: 'wbgt', rel: '参照', d: [35.496, 139.416] }],
+    S05: [{ name: '西沢川 上流 観測所', type: 'river', rel: '上流', d: [35.724, 139.511] }, { name: '西沢川 樋門地点 水位観測所', type: 'river', rel: '最寄り', d: [35.713, 139.517] }, { name: '西部 アメダス', type: 'weather', rel: '参照', d: [35.706, 139.527] }, { name: 'X市 WBGT地点', type: 'wbgt', rel: '参照', d: [35.714, 139.514] }],
+    S06: [{ name: '港南 アメダス', type: 'weather', rel: '最寄り', d: [35.444, 139.674] }, { name: 'Z市 WBGT地点', type: 'wbgt', rel: '参照', d: [35.436, 139.686] }]
+  };
+
+  // ---------- maps ----------
+  componentDidMount() { this.ensureMaps(); }
+  componentDidUpdate() { this.ensureMaps(); }
+  pin(L, color, ch) {
+    return L.divIcon({ className: 'cw-pin', html: `<div style="width:30px;height:30px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:${color};border:2.5px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center"><span style="transform:rotate(45deg);color:#fff;font-weight:900;font-size:12px;line-height:1">${ch || ''}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -29] });
+  }
+  dotPin(L, color) {
+    return L.divIcon({ className: 'cw-pin', html: `<div style="width:15px;height:15px;border-radius:50%;background:${color};border:2.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.45)"></div>`, iconSize: [15, 15], iconAnchor: [8, 8], popupAnchor: [0, -8] });
+  }
+  osm(L, map) { L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }).addTo(map); }
+  buildDashMap(L, el) {
+    const map = L.map(el, { scrollWheelZoom: false }).setView([35.58, 139.6], 10);
+    this.osm(L, map);
+    const pts = [];
+    this.SITES.forEach(s => {
+      const c = this.COORDS[s.id]; if (!c) return;
+      const lv = this.LEVELS[s.level];
+      const m = L.marker(c, { icon: this.pin(L, lv.color, lv.tag) }).addTo(map);
+      m.bindPopup(`<div style="min-width:166px"><div style="font-weight:800;font-size:13px;color:#1c2935;margin-bottom:2px">${s.name}</div><div style="font-size:11px;color:#62727f;margin-bottom:8px">${this.WORK[s.work].label} ・ <b style="color:${lv.color}">${lv.label}</b></div><button class="cw-open" style="width:100%;padding:6px;border:none;background:#16527d;color:#fff;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">現場詳細を開く</button></div>`);
+      m.on('popupopen', e => { const b = e.popup._contentNode.querySelector('.cw-open'); if (b) b.onclick = () => this.openSite(s.id); });
+      pts.push(c);
+    });
+    if (pts.length) map.fitBounds(pts, { padding: [46, 46] });
+    return map;
+  }
+  buildSiteMap(L, el, siteId) {
+    const s = this.SITES.find(x => x.id === siteId) || this.SITES[0];
+    const c = this.COORDS[s.id] || [35.58, 139.6];
+    const map = L.map(el, { scrollWheelZoom: false }).setView(c, 13);
+    this.osm(L, map);
+    const lv = this.LEVELS[s.level];
+    const pts = [c];
+    L.marker(c, { icon: this.pin(L, lv.color, '現') }).addTo(map).bindPopup(`<div><b>${s.name}</b><br><span style="font-size:11px;color:#62727f">${this.WORK[s.work].label} ・ <b style="color:${lv.color}">${lv.label}</b></span></div>`);
+    const sts = this.STATIONS[s.id] || [], up = [];
+    sts.forEach(st => {
+      const col = st.type === 'river' ? '#0e7d8f' : st.type === 'wbgt' ? '#cc4444' : '#e0892a';
+      L.marker(st.d, { icon: this.dotPin(L, col) }).addTo(map).bindPopup(`<div><b>${st.name}</b><br><span style="font-size:11px;color:#62727f">${st.rel} 観測所</span></div>`);
+      pts.push(st.d);
+      if (st.type === 'river' && st.rel === '上流') up.push(st.d);
+    });
+    if (up.length) L.polyline(up.concat([c]), { color: '#2a8fb0', weight: 3, opacity: .65, dashArray: '7 5' }).addTo(map);
+    map.fitBounds(pts, { padding: [40, 40], maxZoom: 14 });
+    return map;
+  }
+  ensureMaps() {
+    if (!window.L) { clearTimeout(this._mt); this._mt = setTimeout(() => this.ensureMaps(), 120); return; }
+    const L = window.L, S = this.state;
+    const cfg = [
+      { screen: 'dashboard', id: 'cw-map-dash', key: '_dashMap', tok: 'all', build: el => this.buildDashMap(L, el) },
+      { screen: 'site', id: 'cw-map-site', key: '_siteMap', tok: S.siteId, build: el => this.buildSiteMap(L, el, S.siteId) },
+      { screen: 'decision', id: 'cw-map-dec', key: '_decMap', tok: S.dform.siteId, build: el => this.buildSiteMap(L, el, S.dform.siteId) }
+    ];
+    cfg.forEach(c => {
+      if (S.screen !== c.screen) return;
+      const el = document.getElementById(c.id); if (!el) return;
+      const cur = this[c.key];
+      const stale = !cur || !document.body.contains(cur._container) || cur._container !== el || this[c.key + 'T'] !== c.tok;
+      if (stale) {
+        if (cur) { try { cur.remove(); } catch (e) {} }
+        const m = c.build(el); this[c.key] = m; this[c.key + 'T'] = c.tok;
+        setTimeout(() => { try { m.invalidateSize(); } catch (e) {} }, 90);
+      } else { try { cur.invalidateSize(); } catch (e) {} }
+    });
+  }
+
+  // ---------- helpers ----------
+  go(screen) { this.setState({ screen }); window.scrollTo({ top: 0 }); }
+  openSite(id) { this.setState({ screen: 'site', siteId: id }); window.scrollTo({ top: 0 }); }
+  showToast(msg) { this.setState({ toast: msg }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: null }), 2600); }
+  refresh() {
+    if (this.state.refreshing) return;
+    this.setState({ refreshing: true });
+    setTimeout(() => {
+      const d = new Date();
+      const p = n => String(n).padStart(2, '0');
+      this.setState({ refreshing: false, lastUpdate: `06/19 ${p(8 + (d.getSeconds() % 3))}:${p(35 + (d.getSeconds() % 20))}` });
+      this.showToast('最新データを取得しました');
+    }, 750);
+  }
+  wbgtMeta(v) {
+    if (v == null) return { label: '欠測', color: '#5a6b7b', bg: '#eef1f4', advice: 'WBGTデータが取得できません。気温・湿度から追加確認してください。' };
+    if (v < 21) return { label: 'ほぼ安全', color: '#2e7d32', bg: '#e7f3e9', advice: '通常の水分補給で作業可能です。' };
+    if (v < 25) return { label: '注意', color: '#c2920a', bg: '#fdf6e0', advice: '積極的に水分・塩分を補給してください。' };
+    if (v < 28) return { label: '警戒', color: '#e07d12', bg: '#fdeedc', advice: '定期的な休憩と水分補給を徹底してください。' };
+    if (v < 31) return { label: '厳重警戒', color: '#d6481f', bg: '#fce5dc', advice: '作業強度・休憩計画を調整。激しい作業は避けてください。' };
+    return { label: '危険', color: '#c62828', bg: '#fbe2e2', advice: '作業時間の変更・中止を検討してください。' };
+  }
+  toneRain(v) { return v == null ? '#5a6b7b' : v >= 5 ? '#c62828' : v >= 1 ? '#e8930c' : '#3a4854'; }
+  toneWind(v) { return v >= 10 ? '#c62828' : v >= 6 ? '#e8930c' : '#3a4854'; }
+  toneTemp(v) { return v >= 31 ? '#c62828' : v >= 28 ? '#e8930c' : '#3a4854'; }
+
+  genHourly(s) {
+    const seed = parseInt(s.id.slice(1));
+    const temp = [], rain = [], wind = [], wbgt = [], level = [];
+    for (let h = 0; h < 24; h++) {
+      const t = 25 + 5 * Math.sin((h - 14) * Math.PI / 12) + (seed % 3) * 0.7 - 1;
+      temp.push(t);
+      let r = 0;
+      if (s.rainy) {
+        if (h >= 4 && h <= 9) r = Math.max(0, 3.2 * Math.sin((h - 4) / 5 * Math.PI));
+        if (h >= 11 && h <= 18) r += Math.max(0, (s.id === 'S01' ? 12 : 4.2) * Math.sin((h - 11) / 7 * Math.PI));
+      } else { r = h === 16 ? 0.4 : 0; }
+      rain.push(r);
+      wind.push(2.5 + 2.4 * Math.abs(Math.sin((h - 3) * Math.PI / 9)) + (s.windMax > 5 ? 1.6 : 0));
+      wbgt.push(t - 2.6 + (s.rainy ? 0.4 : 1.4));
+      level.push(1.45 + (s.id === 'S01' ? h * 0.042 + Math.max(0, h - 11) * 0.03 : 0.18 * Math.sin(h / 24 * Math.PI)));
+    }
+    return { temp, rain, wind, wbgt, level };
+  }
+
+  weatherVM(s) {
+    const hr = this.genHourly(s);
+    const W = 680, base = 158, top = 14, px = 34, pr = 34, iw = W - px - pr;
+    const X = i => px + iw * i / 23;
+    const tmin = Math.floor(Math.min(...hr.temp)) - 1, tmax = Math.ceil(Math.max(...hr.temp)) + 1;
+    const TY = v => top + (base - top) * (1 - (v - tmin) / (tmax - tmin));
+    const tempPts = hr.temp.map((v, i) => `${X(i).toFixed(1)},${TY(v).toFixed(1)}`).join(' ');
+    const tempArea = `M ${X(0).toFixed(1)},${base} ` + hr.temp.map((v, i) => `L ${X(i).toFixed(1)},${TY(v).toFixed(1)}`).join(' ') + ` L ${X(23).toFixed(1)},${base} Z`;
+    const idx = [0, 3, 6, 9, 12, 15, 18, 21, 23];
+    const tempDots = idx.map(i => ({ x: X(i).toFixed(1), y: TY(hr.temp[i]).toFixed(1) }));
+    const rmax = Math.max(5, Math.ceil(Math.max(...hr.rain)));
+    const rainBars = hr.rain.map((v, i) => { const bw = iw / 24 * 0.6; const bh = (base - top) * (v / rmax); return { x: (X(i) - bw / 2).toFixed(1), y: (base - bh).toFixed(1), w: bw.toFixed(1), h: Math.max(0, bh).toFixed(1) }; });
+    const hours = [0, 3, 6, 9, 12, 15, 18, 21].map(i => ({ x: X(i).toFixed(1), label: String(i).padStart(2, '0') + ':00' }));
+    const yLabels = [tmin, Math.round((tmin + tmax) / 2), tmax].map(v => ({ y: TY(v).toFixed(1), label: v + '℃' }));
+    const grid = yLabels.map(y => ({ y: y.y }));
+    return { tempPts, tempArea, tempDots, rainBars, hours, yLabels, grid, nowX: X(8).toFixed(1) };
+  }
+
+  riverVM(s) {
+    const hr = this.genHourly(s);
+    const W = 680, base = 170, top = 12, px = 34, pr = 34, iw = W - px - pr;
+    const X = i => px + iw * i / 23;
+    const lmin = 1, lmax = 4.2;
+    const LY = v => top + (base - top) * (1 - (v - lmin) / (lmax - lmin));
+    const lvl = hr.level;
+    const pts = lvl.map((v, i) => `${X(i).toFixed(1)},${LY(v).toFixed(1)}`).join(' ');
+    const area = `M ${X(0).toFixed(1)},${base} ` + lvl.map((v, i) => `L ${X(i).toFixed(1)},${LY(v).toFixed(1)}`).join(' ') + ` L ${X(23).toFixed(1)},${base} Z`;
+    const idx = [0, 3, 6, 9, 12, 15, 18, 21, 23];
+    const dots = idx.map(i => ({ x: X(i).toFixed(1), y: LY(lvl[i]).toFixed(1) }));
+    const th = [{ label: '氾濫注意水位', value: 3.0, color: '#e8930c' }, { label: '避難判断水位', value: 3.5, color: '#e0561f' }, { label: '氾濫危険水位', value: 4.0, color: '#c62828' }];
+    const thresholds = th.map(t => ({ y: LY(t.value).toFixed(1), ty: (LY(t.value) - 3).toFixed(1), label: t.label, value: t.value.toFixed(1), color: t.color }));
+    const bands = [{ fill: 'rgba(46,125,50,.05)', y: LY(3.0).toFixed(1), h: (base - LY(3.0)).toFixed(1) }, { fill: 'rgba(232,147,12,.07)', y: LY(3.5).toFixed(1), h: (LY(3.0) - LY(3.5)).toFixed(1) }, { fill: 'rgba(198,40,40,.07)', y: top, h: (LY(3.5) - top).toFixed(1) }];
+    const hours = [0, 3, 6, 9, 12, 15, 18, 21].map(i => ({ x: X(i).toFixed(1), label: String(i).padStart(2, '0') + ':00' }));
+    return { pts, area, dots, thresholds, bands, hours, nowX: X(8).toFixed(1), current: lvl[8].toFixed(2) };
+  }
+
+  wbgtVM(s, W, H) {
+    const hr = this.genHourly(s);
+    const base = H - 6, top = 4, px = 2, iw = W - 4;
+    const X = i => px + iw * i / 23;
+    const wmin = 18, wmax = 33;
+    const WY = v => top + (base - top) * (1 - (v - wmin) / (wmax - wmin));
+    const pts = hr.wbgt.map((v, i) => `${X(i).toFixed(1)},${WY(v).toFixed(1)}`).join(' ');
+    const idx = [0, 3, 6, 9, 12, 15, 18, 21, 23];
+    const dots = idx.map(i => ({ x: X(i).toFixed(1), y: WY(hr.wbgt[i]).toFixed(1) }));
+    const zones = [[33, 31, 'rgba(198,40,40,.16)'], [31, 28, 'rgba(214,72,31,.13)'], [28, 25, 'rgba(224,125,18,.11)'], [25, 21, 'rgba(194,146,10,.09)'], [21, 18, 'rgba(46,125,50,.08)']];
+    const bands = zones.map(z => ({ y: WY(z[0]).toFixed(1), h: (WY(z[1]) - WY(z[0])).toFixed(1), fill: z[2] }));
+    return { pts, dots, bands };
+  }
+
+  renderVals() {
+    const S = this.state, L = this.LEVELS, W = this.WORK, A = this.ACTIONS;
+    const counts = [0, 0, 0, 0];
+    this.SITES.forEach(s => counts[s.level]++);
+
+    // nav
+    const navDef = [['dashboard', 'ダッシュボード'], ['site', '現場詳細'], ['decision', '作業判断'], ['wbgt', '熱中症/WBGT'], ['history', '判断履歴'], ['source', 'データソース']];
+    const alertCount = counts[2] + counts[3];
+    const nav = navDef.map(([key, label]) => {
+      const active = S.screen === key;
+      const showBadge = key === 'dashboard' && alertCount > 0;
+      return { label, weight: active ? 800 : 600, color: active ? '#13344f' : '#697A88', bar: active ? '#13344f' : 'transparent', onClick: () => this.go(key),
+        badge: alertCount, badgeShow: showBadge ? 'flex' : 'none', badgeBg: '#c62828', badgeColor: '#fff' };
+    });
+
+    const vals = {
+      lastUpdate: S.lastUpdate,
+      spinStyle: S.refreshing ? 'animation:cwspin .8s linear infinite' : '',
+      refresh: () => this.refresh(),
+      toast: S.toast,
+      nav,
+      isDashboard: S.screen === 'dashboard', isSite: S.screen === 'site', isDecision: S.screen === 'decision', isWbgt: S.screen === 'wbgt', isHistory: S.screen === 'history', isSource: S.screen === 'source',
+      goDashboard: () => this.go('dashboard'),
+      exportCsv: () => this.showToast('CSVを出力しました（サンプル）')
+    };
+
+    // ---------- dashboard ----------
+    vals.summary = [
+      { count: counts[0], label: '通常', sub: '主要注意条件なし', color: L[0].color },
+      { count: counts[1], label: '注意', sub: '現地・追加確認', color: L[1].color },
+      { count: counts[2], label: '中止検討', sub: '中止・延期を検討', color: L[2].color },
+      { count: counts[3], label: '確認不能', sub: 'データ不足・遅延', color: L[3].color }
+    ];
+    const fdef = [['all', 'すべて', '#13344f'], ['2', '中止検討', L[2].color], ['1', '注意', L[1].color], ['3', '確認不能', L[3].color], ['0', '通常', L[0].color]];
+    vals.filters = fdef.map(([key, label, c]) => {
+      const on = S.filter === key;
+      return { label, onClick: () => this.setState({ filter: key }), border: on ? c : '#d4dce2', bg: on ? c : '#fff', color: on ? '#fff' : '#5a6b7b' };
+    });
+    const cardSites = this.SITES.filter(s => S.filter === 'all' || String(s.level) === S.filter);
+    vals.sites = cardSites.map(s => {
+      const lv = L[s.level], wk = W[s.work], wm = this.wbgtMeta(s.wbgt);
+      const riverColor = s.riverState === 'rising' ? '#c62828' : s.riverState === 'stale' ? '#5a6b7b' : '#7e8c99';
+      return {
+        id: s.id, name: s.name, code: s.code, loc: s.loc, workLabel: wk.label, workColor: wk.color,
+        levelColor: lv.color, levelInk: lv.ink, levelLabel: lv.label,
+        rainNow: s.rainNow == null ? '—' : s.rainNow, rainTone: this.toneRain(s.rainNow),
+        windMax: s.windMax, windTone: this.toneWind(s.windMax),
+        tempHi: s.tempHi, tempLo: s.tempLo, tempTone: this.toneTemp(s.tempHi),
+        wbgt: s.wbgt == null ? '—' : s.wbgt, wbgtTone: wm.color, wbgtLabel: wm.label,
+        river: s.river, riverColor, updated: s.updated,
+        reasons: s.reasons.slice(0, 3).map(r => ({ tag: L[r.sev].tag, color: L[r.sev].color, bg: L[r.sev].bg, text: r.text })),
+        onOpen: () => this.openSite(s.id)
+      };
+    });
+
+    // ---------- site detail ----------
+    const s = this.SITES.find(x => x.id === S.siteId) || this.SITES[0];
+    const lv = L[s.level], wk = W[s.work], wm = this.wbgtMeta(s.wbgt);
+    vals.site = {
+      name: s.name, code: s.code, loc: s.loc, manager: s.manager + '（現場管理者）', project: s.project,
+      workLabel: wk.label, workColor: wk.color, levelColor: lv.color, levelInk: lv.ink, levelLabel: lv.label,
+      hasRiver: s.work === 'river', river: s.river,
+      riverColor: s.riverState === 'rising' ? '#c62828' : s.riverState === 'stale' ? '#5a6b7b' : '#7e8c99',
+      wbgt: s.wbgt == null ? '—' : s.wbgt, wbgtTone: wm.color, wbgtBg: wm.bg, wbgtLabel: wm.label, wbgtAdvice: wm.advice,
+      plans: s.plans.map((p, i) => ({ title: p.title, time: p.time, contractor: p.contractor, levelLabel: L[p.level].label, color: L[p.level].color, reason: p.reason, onOpen: () => { this.setState({ screen: 'decision', dform: { ...S.dform, siteId: s.id, workType: s.work }, result: null }); window.scrollTo({ top: 0 }); } })),
+      history: S.history.filter(h => h.siteId === s.id).slice(0, 4).map(h => ({ action: A[h.action].label, actionColor: A[h.action].color, comment: h.comment, datetime: h.datetime, by: h.by, levelLabel: L[h.level].label }))
+    };
+    const days = [['今日 06/19', s.tempHi, s.tempLo, s.level], ['明日 06/20', s.tempHi + 1, s.tempLo, s.rainy ? 1 : s.level], ['明後日 06/21', s.tempHi - 1, s.tempLo - 1, 0]];
+    const wcond = s.rainy ? ['雨のち曇', '曇一時雨', '曇'] : ['晴れ', '晴れ時々曇', '晴れ'];
+    vals.threeDay = days.map((d, i) => ({ day: d[0], weather: wcond[i], hi: d[1], lo: d[2], rain: s.rainy ? (i === 0 ? '60%' : i === 1 ? '40%' : '10%') : '0%', wind: s.windMax + 'm/s', levelLabel: L[d[3]].label, levelColor: L[d[3]].color, bg: d[3] >= 2 ? L[d[3]].bg : '#fff' }));
+    vals.wx = this.weatherVM(s);
+    if (s.work === 'river') vals.rv = this.riverVM(s);
+    vals.wb = this.wbgtVM(s, 680, 120);
+    vals.links = [
+      { label: '気象庁 防災情報', note: 'jma.go.jp/bosai — 警報・注意報', url: 'https://www.jma.go.jp/bosai/' },
+      { label: '国土交通省 川の防災情報', note: 'river.go.jp — 水位・洪水予報', url: 'https://www.river.go.jp/' },
+      { label: '環境省 暑さ指数 WBGT', note: 'wbgt.env.go.jp — 熱中症リスク', url: 'https://www.wbgt.env.go.jp/' },
+      { label: 'Open-Meteo 予報', note: 'open-meteo.com — 時系列予報', url: 'https://open-meteo.com/' }
+    ];
+
+    // ---------- decision ----------
+    const df = S.dform;
+    vals.dform = df;
+    vals.siteOptions = this.SITES.map(x => ({ id: x.id, name: x.name }));
+    const wtKeys = ['river', 'concrete', 'earthwork', 'pavement', 'crane', 'heat'];
+    vals.workTypeOptions = wtKeys.map(k => { const on = df.workType === k; return { label: W[k].label, onClick: () => this.setState({ dform: { ...df, workType: k }, result: null }), border: on ? W[k].color : '#d4dce2', bg: on ? W[k].color : '#fff', color: on ? '#fff' : '#5a6b7b' }; });
+    vals.df = {
+      onSite: e => this.setState({ dform: { ...df, siteId: e.target.value }, result: null }),
+      onStart: e => this.setState({ dform: { ...df, start: e.target.value } }),
+      onEnd: e => this.setState({ dform: { ...df, end: e.target.value } }),
+      onContractor: e => this.setState({ dform: { ...df, contractor: e.target.value } }),
+      onSummary: e => this.setState({ dform: { ...df, summary: e.target.value } }),
+      onMemo: e => this.setState({ memoComment: e.target.value }),
+      evaluate: () => this.evaluate(),
+      record: () => this.record()
+    };
+    vals.result = this.resultVM();
+    vals.memoComment = S.memoComment;
+    const mdef = [['execute', '実施'], ['postpone', '延期'], ['cancel', '中止'], ['monitor', '監視継続'], ['other', 'その他']];
+    vals.memoActions = mdef.map(([k, label]) => { const on = S.memoAction === k; const c = A[k].color; return { label, onClick: () => this.setState({ memoAction: k }), border: on ? c : '#d4dce2', bg: on ? c : '#fff', color: on ? '#fff' : '#5a6b7b' }; });
+
+    // ---------- wbgt screen ----------
+    vals.wbgtScale = [
+      { range: '~21', label: 'ほぼ安全', color: '#2e7d32', bg: '#e7f3e9', border: '#bcdcc0' },
+      { range: '21-25', label: '注意', color: '#c2920a', bg: '#fdf6e0', border: '#ecdca0' },
+      { range: '25-28', label: '警戒', color: '#e07d12', bg: '#fdeedc', border: '#f1cfa3' },
+      { range: '28-31', label: '厳重警戒', color: '#d6481f', bg: '#fce5dc', border: '#f0c0ad' },
+      { range: '31~', label: '危険', color: '#c62828', bg: '#fbe2e2', border: '#f0bcbc' }
+    ];
+    vals.wbgtSites = [...this.SITES].sort((a, b) => (b.wbgt || 0) - (a.wbgt || 0)).map(x => { const m = this.wbgtMeta(x.wbgt); const vm = this.wbgtVM(x, 320, 70); return { name: x.name, loc: x.loc, wbgt: x.wbgt == null ? '—' : x.wbgt, label: m.label, color: m.color, bg: m.bg, advice: m.advice, pts: vm.pts, bands: vm.bands }; });
+
+    // ---------- history ----------
+    const hf = [['all', 'すべて', '#13344f'], ['cancel', '中止', A.cancel.color], ['postpone', '延期', A.postpone.color], ['monitor', '監視継続', A.monitor.color], ['execute', '実施', A.execute.color]];
+    vals.historyFilters = hf.map(([k, label, c]) => { const on = S.hFilter === k; return { label, onClick: () => this.setState({ hFilter: k }), border: on ? c : '#d4dce2', bg: on ? c : '#fff', color: on ? '#fff' : '#5a6b7b' }; });
+    vals.historyRows = S.history.filter(h => S.hFilter === 'all' || h.action === S.hFilter).map(h => ({ datetime: h.datetime, site: h.site, workType: h.workType, levelLabel: L[h.level].label, levelColor: L[h.level].color, action: A[h.action].label, actionColor: A[h.action].color, comment: h.comment, by: h.by }));
+
+    // ---------- data source ----------
+    vals.sources = [
+      { name: 'Open-Meteo', id: 'DS-OPEN-METEO', kind: '外部API', status: 'OK', lastOk: '06/19 08:35', fails: 0, ms: 240, trust: '補完', note: '予報・時系列の補完データ。APIキー不要。公式警報を優先します。' },
+      { name: '気象庁 防災情報XML', id: 'DS-JMA-XML', kind: '公式', status: 'OK', lastOk: '06/19 08:30', fails: 0, ms: 410, trust: '公式', note: '警報・注意報・防災気象情報。最優先で扱います。' },
+      { name: '環境省 WBGT', id: 'DS-WBGT', kind: '公式', status: 'OK', lastOk: '06/19 08:00', fails: 0, ms: 320, trust: '公式', note: '暑さ指数 実況・予測。夏期重点監視。' },
+      { name: '川の防災情報', id: 'DS-RIVER-GO', kind: '公式（参照）', status: 'Warning', lastOk: '06/19 06:10', fails: 2, ms: 980, trust: '公式', note: '一部観測所で更新遅延。該当現場は確認不能とし公式ページ参照を案内します。' },
+      { name: '水防災オープンデータ', id: 'DS-WATER-OPEN', kind: '準公式', status: 'Error', lastOk: '—', fails: 12, ms: 0, trust: '準公式', note: '本格利用には契約・利用条件確認が必要。PoCでは未接続。' },
+      { name: 'NASA POWER', id: 'DS-NASA-POWER', kind: '公式', status: 'OK', lastOk: '06/19 04:00', fails: 0, ms: 660, trust: '補助', note: '日射・長期傾向。日次更新の参考データ。' }
+    ].map(d => {
+      const m = d.status === 'OK' ? { color: '#2e7d32', bg: '#e7f3e9', border: '#bcdcc0', dot: '#2e7d32' } : d.status === 'Warning' ? { color: '#c2920a', bg: '#fdf6e0', border: '#ecdca0', dot: '#e8930c' } : { color: '#c62828', bg: '#fbe8e8', border: '#f0bcbc', dot: '#c62828' };
+      return { ...d, color: m.color, bg: m.bg, border: m.border, dot: m.dot, pulse: d.status === 'Error' ? 'animation:cwpulse 1.4s ease infinite' : '', failColor: d.fails > 0 ? (d.status === 'Error' ? '#c62828' : '#c2920a') : '#2a3641' };
+    });
+
+    return vals;
+  }
+
+  evaluate() {
+    this.setState({ result: '_pending' });
+    this.showToast('気象・河川データで評価しました');
+  }
+  resultVM() {
+    const S = this.state, L = this.LEVELS;
+    const wt = S.dform.workType;
+    const RT = {
+      river: { level: 2, summary: '上流域で雨量が増加し、水位が上昇傾向です。河川内作業は中止・退避基準と公式情報を確認してください。', reasons: [
+        { sev: 1, msg: '上流域で雨量が増加しています。水位上昇に注意してください。', source: 'DS-OPEN-METEO', value: '上流雨量 8mm/h', time: '08:35' },
+        { sev: 1, msg: '水位が上昇傾向です。退避基準と作業継続条件を確認してください。', source: 'DS-RIVER-GO', value: '水位 +0.4m/h', time: '08:32' },
+        { sev: 2, msg: '洪水関連情報が発表されています。中止・退避を検討してください。', source: 'DS-JMA-XML', value: '洪水注意情報', time: '08:30' }
+      ] },
+      concrete: { level: 1, summary: '作業時間帯は高温が見込まれます。暑中コンクリート対策と養生計画を確認してください。', reasons: [
+        { sev: 1, msg: '気温が高くなる見込みです。暑中コンクリート対策を確認してください。', source: 'DS-OPEN-METEO', value: '最高気温 31℃', time: '08:35' },
+        { sev: 1, msg: '風速がやや高めです。養生・ポンプ作業条件を確認してください。', source: 'DS-OPEN-METEO', value: '最大風速 7m/s', time: '08:35' }
+      ] },
+      earthwork: { level: 1, summary: '連続雨量の増加が見込まれます。法面・仮設排水・締固め品質を確認してください。', reasons: [
+        { sev: 1, msg: '作業時間帯に降雨予報があります。', source: 'DS-OPEN-METEO', value: '降雨 1.5mm/h', time: '08:35' },
+        { sev: 1, msg: '連続雨量が増加しています。法面・排水に注意してください。', source: 'DS-JMA-CSV', value: '連続雨量 22mm', time: '08:30' }
+      ] },
+      pavement: { level: 0, summary: '主要な注意条件はありません。路面乾燥条件は良好で、予定どおり舗設を検討できます。', reasons: [
+        { sev: 0, msg: '降雨予報はなく、路面乾燥条件は良好です。', source: 'DS-OPEN-METEO', value: '降水確率 0%', time: '08:35' }
+      ] },
+      crane: { level: 2, summary: '突風リスクがあります。クレーンの作業限界を優先し、中止・待機を検討してください。', reasons: [
+        { sev: 1, msg: '風速が高くなる見込みです。吊荷条件を確認してください。', source: 'DS-OPEN-METEO', value: '平均風速 9m/s', time: '08:35' },
+        { sev: 2, msg: '突風リスクがあります。作業中止・待機を検討してください。', source: 'DS-OPEN-METEO', value: '最大瞬間 14m/s', time: '08:35' }
+      ] },
+      heat: { level: 2, summary: '暑さ指数が高く危険域に近づいています。作業時間の変更・休憩計画を調整してください。', reasons: [
+        { sev: 1, msg: '暑さ指数が上昇しています。水分補給と休憩を徹底してください。', source: 'DS-WBGT', value: 'WBGT 29', time: '08:00' },
+        { sev: 2, msg: '厳重警戒以上です。作業強度・作業時間の調整を検討してください。', source: 'DS-WBGT', value: '予測 WBGT 31', time: '08:00' }
+      ] }
+    };
+    const base = RT[wt] || RT.river;
+    const lv = L[base.level];
+    const site = this.SITES.find(x => x.id === S.dform.siteId) || this.SITES[0];
+    return {
+      mapNote: site.name,
+      levelColor: lv.color, levelInk: lv.ink, levelLabel: lv.label, summary: base.summary,
+      reasons: base.reasons.map(r => { const m = L[r.sev]; return { sevLabel: m.label, chip: m.chip, ink: m.ink, bg: m.bg, border: m.border, msg: r.msg, source: r.source, value: r.value, time: r.time }; }),
+      refs: ['気象: Open-Meteo', '河川: 川の防災情報', 'WBGT: 環境省', '警報: 気象庁']
+    };
+  }
+  record() {
+    const S = this.state, L = this.LEVELS, A = this.ACTIONS;
+    const site = this.SITES.find(x => x.id === S.dform.siteId) || this.SITES[0];
+    const r = this.resultVM();
+    const levelByLabel = { '通常': 0, '注意': 1, '中止検討': 2, '確認不能': 3 };
+    const entry = {
+      id: 'L' + (S.history.length + 1), datetime: '06/19 08:40', siteId: site.id, site: site.name,
+      workType: this.WORK[S.dform.workType].label, level: levelByLabel[r.levelLabel] ?? 1,
+      action: S.memoAction, comment: S.memoComment || '（メモなし）', by: '山田（現場管理者）'
+    };
+    this.setState({ history: [entry, ...S.history], memoComment: '' });
+    this.showToast('判断履歴に記録しました');
+  }
+}
+</script>
+</body>
+</html>

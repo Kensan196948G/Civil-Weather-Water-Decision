@@ -51,6 +51,11 @@ Construction Weather & Water Decision Support
 - [詳細仕様設計書](./Civil-Weather-Water-Decision_Detailed_Design.md)
 - [実装計画書（ロードマップ・WBS・リスク）](./docs/implementation-plan.md)
 
+## WebUI
+
+WebUI は ClaudeDesign で作成し `frontend/` に取り込み済み（モックデータで動作する6画面 SPA）。
+起動方法・ClaudeDesign 再取り込み手順・モック→実API のデータ接続計画は [frontend/README.md](./frontend/README.md) を参照。
+
 ## 開発ステータス / Status
 
 | 項目 | 内容 |
