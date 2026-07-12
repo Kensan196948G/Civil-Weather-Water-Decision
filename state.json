@@ -58,9 +58,14 @@
     "notes": "2026-07-12 PR#48 CodeRabbitレビュー対応: 実バグ6件修正(WorkPlan日時比較のTZ混在バグ・WorkPlanUpdate ISO未検証・LIKEワイルドカード誤爆・ci.yml権限過多・README/catalogの表記不整合)、GraphQL reviewThreads.isResolvedで解決確認済み。ID採番の桁上がり/非原子性はIssue #49へ分離(意図的に本PR対象外)。ガバナンステンプレート(.claude/CLAUDE.md, safe-auto-merge.md)への4件の指摘は技術的に正当だが自己改変せず人間判断待ち。"
   },
   "issue_audit_2026_07_12": {
-    "done_not_closed": [1, 2, 5, 15, 24, 26, 40, 42, 44, 46, 47],
-    "partial_in_progress": [9, 20, 29, 30, 33, 37, 38, 39, 43, 45],
-    "not_started": [31, 34, 35]
+    "audited_at": "2026-07-12",
+    "note": "3並列エージェントによる独立検証で本セクションの旧内容が陳腐化していたと判明。done_not_closed 11件中9件(#1,#2,#5,#15,#24,#26,#40,#46,#47)は既に他プロセスがクローズ済み。うち#1/#2/#46/#47はクローズ根拠に一部漏れがあり各Issueへコメント記録済み。#46/#47の不足分は#31/#38が既にカバー、独立分は#55(STATIONS配線漏れ)/#56(branch protection未設定)として新規起票。open issue一覧はgh issue list --state openで都度確認すること(このリストは手動監査時点のスナップショット)。",
+    "epic_pending_milestone": [42],
+    "epic_incomplete": [41, 44],
+    "partial_in_progress": [9, 29, 30, 33, 37, 38, 39, 43, 45],
+    "not_started": [31, 34, 35, 36, 55, 56],
+    "closed_verified": [5, 15, 24, 26, 40],
+    "closed_with_gaps_recorded": [1, 2, 46, 47]
   },
   "pr48_review_2026_07_12": {
     "pr": 48,
