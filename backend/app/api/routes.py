@@ -3,19 +3,22 @@ from __future__ import annotations
 
 import csv
 import io
+import random
 import re
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
     AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
-    Site, User, WorkPlan, WorkType,
+    IdCounter, Site, User, WorkPlan, WorkType,
 )
 from ..services import assessment, notifications
 from ..services.audit import audit
@@ -26,6 +29,92 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 WORK_KEYS = {"river", "concrete", "earthwork", "pavement", "crane", "heat"}
 RIVER_STATES = {"none", "stable", "rising", "stale"}
+_ID_COMMIT_ATTEMPTS = 5
+
+
+def _max_existing_numeric(db: Session, model, prefix: str) -> int:
+    """既存IDを全件パースし数値maxを返す（#49: 文字列順ソートは桁上がりで崩れるため使わない）。"""
+    ids = db.scalars(select(model.id)).all()
+    nums = [int(x[len(prefix):]) for x in ids if x[len(prefix):].isdigit()]
+    return max(nums) if nums else 0
+
+
+def _allocate_id(db: Session, model, prefix: str, width: int) -> str:
+    """id_counters の行UPDATE（DB側で直列化される）により一意な次番号を確保する（#49）。
+
+    max(id)+1 の読取→INSERT方式は同時実行で同じ候補を計算し得るため、採番自体を
+    カウンタ行の原子的 UPDATE ... RETURNING に寄せる（PostgreSQL は行ロック、
+    SQLite は単一ライタで直列化）。カウンタ行が無い初回のみ既存IDのmaxから遅延初期化し、
+    同時初期化の PK 衝突は _commit_with_retry 側のリトライで一方が UPDATE 経路に乗る。
+    """
+    nxt = db.execute(
+        update(IdCounter)
+        .where(IdCounter.name == prefix)
+        .values(value=IdCounter.value + 1)
+        .returning(IdCounter.value)
+    ).scalar_one_or_none()
+    if nxt is None:
+        nxt = _max_existing_numeric(db, model, prefix) + 1
+        db.add(IdCounter(name=prefix, value=nxt))
+        db.flush()
+    return f"{prefix}{nxt:0{width}d}"
+
+
+# 採番対象の (モデル, プレフィックス)。重複検出時のカウンタ再同期に使う
+_COUNTER_SPECS = ((Site, "S"), (DecisionResult, "DR"), (WorkPlan, "WP"), (DecisionLog, "L"))
+
+# リトライしてよい一時エラーのみ許可（恒久障害を409に偽装しない: 対抗レビュー[medium]）
+_SQLITE_TRANSIENT_MARKERS = ("database is locked", "database table is locked")
+_PG_TRANSIENT_SQLSTATES = {"40001", "40P01", "55P03"}  # serialization/deadlock/lock_not_available
+
+
+def _is_transient_db_error(e: OperationalError) -> bool:
+    """ロック/直列化系の一時エラーのみ真。テーブル不存在・接続断などは偽（5xxで顕在化）。"""
+    pgcode = getattr(getattr(e, "orig", None), "pgcode", None)
+    if pgcode:
+        return pgcode in _PG_TRANSIENT_SQLSTATES
+    msg = str(getattr(e, "orig", e)).lower()
+    return any(m in msg for m in _SQLITE_TRANSIENT_MARKERS)
+
+
+def _resync_counters(db: Session) -> None:
+    """カウンタを実テーブルのmaxまで進める（対抗レビュー[high]: リストア・手動修復等で
+    カウンタが実IDより遅れると採番が衝突し続けるため、重複検出時に自己修復する）。"""
+    for model, prefix in _COUNTER_SPECS:
+        real = _max_existing_numeric(db, model, prefix)
+        db.execute(
+            update(IdCounter)
+            .where(IdCounter.name == prefix)
+            .where(IdCounter.value < real)
+            .values(value=real)
+        )
+    db.commit()
+
+
+def _commit_with_retry(db: Session, build_and_add):
+    """build_and_add() でID採番〜db.add()まで行い、競合時は採番からやり直す。
+
+    通常は _allocate_id のカウンタ行更新がDB側で直列化されるため衝突しないが、
+    カウンタ遅延（リストア等）による重複や SQLite のロック競合に備え、
+    再同期＋ジッタ付きリトライを保険として持つ（#49 対抗レビュー指摘対応）。
+    """
+    for attempt in range(1, _ID_COMMIT_ATTEMPTS + 1):
+        try:
+            result = build_and_add()
+            db.commit()
+            return result
+        except IntegrityError:
+            db.rollback()
+            _resync_counters(db)  # 重複＝カウンタ遅延の可能性。実maxまで進めて再採番
+            if attempt < _ID_COMMIT_ATTEMPTS:
+                time.sleep(random.uniform(0.01, 0.05) * attempt)  # jitter+backoff
+        except OperationalError as e:
+            db.rollback()
+            if not _is_transient_db_error(e):
+                raise  # 恒久障害（テーブル不存在・接続断等）は409に偽装せず5xxで顕在化
+            if attempt < _ID_COMMIT_ATTEMPTS:
+                time.sleep(random.uniform(0.01, 0.05) * attempt)
+    raise HTTPException(409, "同時登録が競合しました。再試行してください。")
 
 
 # ---------- 現場 ----------
@@ -153,27 +242,24 @@ class SiteUpdate(BaseModel):
     status: str | None = None
 
 
-def _next_site_id(db: Session) -> str:
-    ids = db.scalars(select(Site.id)).all()
-    nums = [int(x[1:]) for x in ids if x[1:].isdigit()]
-    return f"S{(max(nums) + 1) if nums else 1:02d}"
-
-
 @router.post("/sites", status_code=201)
 def create_site(req: SiteCreate, db: Session = Depends(get_db),
                 user: User = Depends(require_role("admin", "tech_manager"))):
-    sid = _next_site_id(db)
-    site = Site(
-        id=sid, site_code=req.site_code or f"CW-{sid}", name=req.name, loc=req.loc,
-        latitude=req.latitude, longitude=req.longitude, work_type=req.work_type,
-        project_type=req.project_type, river_work_flag=req.river_work_flag,
-        river_state=req.river_state, river_note=req.river_note, flood_info=req.flood_info,
-        manager=req.manager, status="active",
-    )
-    db.add(site)
-    db.commit()
-    audit(db, user, "site_create", f"{sid} {site.name}", site_id=sid)
-    return {"id": sid, "code": site.site_code, "name": site.name, "status": "created"}
+    def _build():
+        sid = _allocate_id(db, Site, "S", 2)
+        site = Site(
+            id=sid, site_code=req.site_code or f"CW-{sid}", name=req.name, loc=req.loc,
+            latitude=req.latitude, longitude=req.longitude, work_type=req.work_type,
+            project_type=req.project_type, river_work_flag=req.river_work_flag,
+            river_state=req.river_state, river_note=req.river_note, flood_info=req.flood_info,
+            manager=req.manager, status="active",
+        )
+        db.add(site)
+        return site
+
+    site = _commit_with_retry(db, _build)
+    audit(db, user, "site_create", f"{site.id} {site.name}", site_id=site.id)
+    return {"id": site.id, "code": site.site_code, "name": site.name, "status": "created"}
 
 
 @router.put("/sites/{site_id}")
@@ -245,28 +331,27 @@ class EvaluateReq(BaseModel):
     end: str | None = None
 
 
-def _next_result_id(db: Session) -> str:
-    last = db.scalar(select(DecisionResult).order_by(DecisionResult.id.desc()))
-    n = (int(last.id[2:]) + 1) if last else 1
-    return f"DR{n:05d}"
-
-
 def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dict) -> str:
-    """判定結果と理由を永続化し、結果IDを返す（監査・実績分析の正本。設計§6.2.11/§6.2.12）。"""
-    rid = _next_result_id(db)
-    db.add(DecisionResult(
-        id=rid, site_id=site_id, work_type=work_type,
-        evaluated_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"),
-        overall_level=res["overall_level"], overall_label=res["overall_label"],
-        summary=res["summary"], data_quality_summary=res["data_quality_summary"],
-        weather_status=res.get("weatherStatus", "")))
-    for i, r in enumerate(res.get("reasonsRaw", []), 1):
-        db.add(DecisionReason(
-            id=f"{rid}-{i:02d}", decision_result_id=rid, severity=r["severity"],
-            reason_code=r["reason_code"], message=r["message"],
-            source_id=r["source_id"], observed_value=r["observed_value"]))
-    db.commit()
-    return rid
+    """判定結果と理由を永続化し、結果IDを返す（監査・実績分析の正本。設計§6.2.11/§6.2.12）。
+    #49: 採番〜INSERTを _commit_with_retry() でラップし、同時リクエストによるID重複を防ぐ。"""
+    def _build():
+        rid = _allocate_id(db, DecisionResult, "DR", 5)
+        result = DecisionResult(
+            id=rid, site_id=site_id, work_type=work_type,
+            evaluated_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"),
+            overall_level=res["overall_level"], overall_label=res["overall_label"],
+            summary=res["summary"], data_quality_summary=res["data_quality_summary"],
+            weather_status=res.get("weatherStatus", ""))
+        db.add(result)
+        for i, r in enumerate(res.get("reasonsRaw", []), 1):
+            db.add(DecisionReason(
+                id=f"{rid}-{i:02d}", decision_result_id=rid, severity=r["severity"],
+                reason_code=r["reason_code"], message=r["message"],
+                source_id=r["source_id"], observed_value=r["observed_value"]))
+        return result
+
+    result = _commit_with_retry(db, _build)
+    return result.id
 
 
 @router.post("/decisions/evaluate")
@@ -380,12 +465,6 @@ class WorkPlanUpdate(BaseModel):
         return v
 
 
-def _next_plan_id(db: Session) -> str:
-    ids = db.scalars(select(WorkPlan.id)).all()
-    nums = [int(x[2:]) for x in ids if x[2:].isdigit()]
-    return f"WP{(max(nums) + 1) if nums else 1:02d}"
-
-
 @router.get("/work-plans")
 def list_work_plans(site_id: str | None = None, date: str | None = None,
                     db: Session = Depends(get_db)):
@@ -416,14 +495,18 @@ def create_work_plan(req: WorkPlanCreate, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    pid = _next_plan_id(db)
-    plan = WorkPlan(id=pid, site_id=req.site_id, work_type=req.work_type, title=req.title,
-                    planned_start=req.planned_start, planned_end=req.planned_end,
-                    contractor=req.contractor, summary=req.summary, status=req.status)
-    db.add(plan)
-    db.commit()
-    audit(db, user, "work_plan_create", f"{pid} {plan.title or plan.work_type}", site_id=site.id)
-    return {"id": pid, "status": "created"}
+
+    def _build():
+        plan = WorkPlan(id=_allocate_id(db, WorkPlan, "WP", 2), site_id=req.site_id,
+                        work_type=req.work_type, title=req.title,
+                        planned_start=req.planned_start, planned_end=req.planned_end,
+                        contractor=req.contractor, summary=req.summary, status=req.status)
+        db.add(plan)
+        return plan
+
+    plan = _commit_with_retry(db, _build)
+    audit(db, user, "work_plan_create", f"{plan.id} {plan.title or plan.work_type}", site_id=site.id)
+    return {"id": plan.id, "status": "created"}
 
 
 @router.put("/work-plans/{plan_id}")
@@ -502,16 +585,18 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    n = db.scalar(select(DecisionLog).order_by(DecisionLog.id.desc()))
-    next_num = (int(n.id[1:]) + 1) if n else 1
-    entry = DecisionLog(
-        id=f"L{next_num:02d}", site_id=site.id, site_name=site.name,
-        work_type=req.work_type, level=req.level, action=req.action,
-        comment=req.comment or "（メモなし）", decided_by=user.display_name,
-        decision_result_id=req.decision_result_id,
-        decided_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"))
-    db.add(entry)
-    db.commit()
+
+    def _build():
+        entry = DecisionLog(
+            id=_allocate_id(db, DecisionLog, "L", 2), site_id=site.id, site_name=site.name,
+            work_type=req.work_type, level=req.level, action=req.action,
+            comment=req.comment or "（メモなし）", decided_by=user.display_name,
+            decision_result_id=req.decision_result_id,
+            decided_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"))
+        db.add(entry)
+        return entry
+
+    entry = _commit_with_retry(db, _build)
     audit(db, user, "decision_log", f"{entry.id} {req.action} L{req.level}", site_id=site.id)
     return {"id": entry.id, "status": "recorded"}
 
