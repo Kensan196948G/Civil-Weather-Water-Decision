@@ -29,7 +29,7 @@ backend/
 │   │   ├── assessment.py             # 気象取得→Reading→判定 のオーケストレーション
 │   │   └── data_collectors/open_meteo.py  # Open-Meteo 取得・正規化・WBGT推定
 │   └── api/routes.py                 # エンドポイント（設計§7）
-├── tests/                            # 26 tests（engine12 / collector5 / api9）
+├── tests/                            # 71 tests（engine/collector/api/auth/audit/notifications/jma_warnings/source_probe 等）
 ├── requirements.txt / pyproject.toml
 ```
 
@@ -91,7 +91,7 @@ docker compose up -d            # backend 起動時に alembic upgrade head ＋ 
 ## テスト
 
 ```bash
-cd backend && python3 -m pytest      # 26 passed
+cd backend && python3 -m pytest      # 71 passed
 ```
 
 ## 設計準拠ポイント
@@ -101,11 +101,22 @@ cd backend && python3 -m pytest      # 26 passed
 - **公式優先**: 河川の洪水情報・気象庁警報は外部予報より高い severity（`flood_warning` 等）。
 - **WBGT は derived**: 公式（環境省）未接続のため気温・湿度から推定し `wbgtDerived=true` で明示。
 
+## 認証 / RBAC / 監査ログ / 通知（#25, T3-04 実装済み）
+
+- `core/security.py`: JWT発行・bcryptハッシュ・ログイン試行回数制限・タイミング攻撃対策。
+- `core/deps.py`: `require_role()` によるロールベース認可（管理者 / 現場管理者 / 閲覧者）。
+- `services/audit.py`: 認証・現場変更・判断記録などの監査ログを永続化。
+- `services/notifications.py`: 判定結果（severity≥2 = 中止検討/河川/障害）から通知を導出。画面内通知ベルに加え、Slack/Teams 連携の拡張点あり。
+- フロント側の対応は [frontend/README.md](../frontend/README.md) の「ログイン/RBAC」「通知ベル」を参照。
+
 ## 次フェーズ（残作業）
 
-- `#46` WebUI のモックを本API へ接続（`frontend/README.md` 対応表）。CORS は許可済み。
-- `#20` 環境省 WBGT 実データ接続（現状 derived 推定）。
-- 河川（川の防災情報）・気象庁防災XML の連携（Phase 2 / #29〜#33）。
+- `#20` / `#9` 環境省 WBGT 実データ接続（現状 `estimate_wbgt()` による derived 推定）。
+- `#29`〜`#31` 河川観測所マスタの正規化（`site_stations` 多対多）・河川観測取り込み・専用時系列API。
+- `#34` / `#35` 閾値設定画面・判定ルール管理API（`/api/admin/rules`）。現状 `decision_engine.py` 内の `TH` 辞書にハードコード。
+- `#33` データ品質サービス（異常値・重複検知の専用化。欠測処理は実装済み）。
+- `#38` バッチジョブ拡張（設計書 JOB-001〜006 のうち未実装分）・リトライ/バックオフ。
+- `#39` データソース監視強化（連続失敗閾値判定・代替案内ロジック）。
 
 ## 定期バッチ / データソース実プローブ（#47 実装済み）
 
@@ -138,3 +149,17 @@ cd backend && python3 -m pytest      # 26 passed
 | POST | `/api/sites` | 現場登録（id自動採番・バリデーション） |
 | PUT | `/api/sites/{id}` | 現場更新（部分） |
 | DELETE | `/api/sites/{id}` | 現場無効化（status=inactive、ダッシュボードから除外） |
+
+## 作業予定 API（#16 T1-05・FR-011〜014 実装済み）
+
+`WorkPlan` モデル（現場ごとの作業予定）に対する CRUD 相当（物理削除エンドポイントはなく、取消は `status=cancelled` への更新で対応）＋ 評価実行。詳細設計 §7 準拠。
+
+| メソッド | パス | 概要 |
+|---|---|---|
+| GET | `/api/work-plans` | 作業予定一覧（`site_id` / `date`（YYYY-MM-DD, 日別表示 FR-014）で絞込可） |
+| GET | `/api/work-plans/{id}` | 作業予定詳細 |
+| POST | `/api/work-plans` | 作業予定登録（id自動採番 `WP##`。site存在チェック・時刻整合・XSS入力境界チェック） |
+| PUT | `/api/work-plans/{id}` | 作業予定更新（部分。status は `planned/done/postponed/cancelled`） |
+| POST | `/api/work-plans/{id}/evaluate` | 作業予定に紐づく気象・河川リスクの自動評価（`/api/decisions/evaluate` と同じ判定エンジン経路。結果は `DecisionResult` として永続化） |
+
+登録・更新は `admin` / `tech_manager` / `site_manager` ロールのみ許可（`viewer` は403）。
