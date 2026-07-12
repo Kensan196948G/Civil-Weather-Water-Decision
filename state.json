@@ -21,7 +21,8 @@
       "subdomain": "cwwd.mirai-dx-platform.com",
       "decided_at": "2026-07-12",
       "provisioned": false,
-      "note": "名称予約のみ。systemd常駐化・Cloudflare Tunnel作成は未着手（docs/deploy.md参照）。"
+      "templates_prepared_at": "2026-07-12",
+      "note": "deploy/ に cloudflared-config.yml.example・systemd unit(backend/frontend)テンプレートを整備済み。実Tunnel作成・DNSルーティング(cloudflared tunnel route dns)・CORS本番切替は人間実行待ち。docs/deploy.md記載の「Tunnel 1本+複数サブドメイン」設計と、実機`cloudflared tunnel list`で確認した兄弟プロジェクトの個別Tunnel運用(arcsphere-civil-twin等)に食い違いがあり、新規作成/既存集約の方針は人間確認待ち。"
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",

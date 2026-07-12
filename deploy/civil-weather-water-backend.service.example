@@ -1,0 +1,32 @@
+# systemd unit テンプレート（backend）
+#
+# 位置づけ: docs/deploy.md「公開ドメイン（予定・未着手）」節の雛形。
+# 配置・有効化は人間実行:
+#   sudo cp civil-weather-water-backend.service.example \
+#       /etc/systemd/system/civil-weather-water-backend.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now civil-weather-water-backend
+#
+# 前提: backend/.env に APP_ENV=production ほか docs/deploy.md
+# 「本番デプロイ前チェックリスト」を満たす値を設定しておくこと
+# （JWT_SECRET 32バイト以上・ENABLE_AUTH=true・ADMIN_PASSWORD・DATABASE_URL 等）。
+# <service-user> / パス / ポートは環境に合わせて置換すること。
+
+[Unit]
+Description=Civil-Weather-Water-Decision backend (FastAPI/uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=<service-user>
+Group=<service-user>
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/backend
+EnvironmentFile=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/backend/.env
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port <BACKEND_PORT>
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

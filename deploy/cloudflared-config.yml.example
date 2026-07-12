@@ -1,0 +1,37 @@
+# Cloudflare Tunnel 設定テンプレート（cwwd.mirai-dx-platform.com 用）
+#
+# 位置づけ: docs/deploy.md「公開ドメイン（予定・未着手）」節のテンプレート。
+# Tunnel の作成・DNS ルーティングは人間実行（CLAUDE.md / docs/deploy.md 明記）。
+# このファイル自体は雛形であり、実行可能な設定ファイルではない。
+#
+# 手順（人間実行）:
+#   1. cloudflared tunnel login
+#   2. 新規 Tunnel を作るか、Mirai-DX-Project 共通 Tunnel（1本運用の場合）に
+#      ingress ルールを追加するかを選択する。
+#        新規例: cloudflared tunnel create cwwd-civil-weather-water
+#   3. 生成された <TUNNEL_ID> と credentials-file のパスで下記を置換し、
+#      ~/.cloudflared/config.yml （または任意パス）へ配置する。
+#   4. cloudflared tunnel route dns <TUNNEL_NAME_OR_ID> cwwd.mirai-dx-platform.com
+#   5. systemd 常駐化（civil-weather-water-*.service.example 参照）した上で
+#      cloudflared を service として起動する。
+#
+# 未決定事項（デプロイ準備フェーズで確定させること）:
+#   - フロントエンド/バックエンドを同一サブドメイン配下でパス分割するか
+#     （例: /api/* のみバックエンドへ）、別サブドメインに分けるか。
+#   - フロントエンドの systemd 常駐時の固定ポート（現状は動的割当のため要変更）。
+
+tunnel: <TUNNEL_ID>
+credentials-file: /home/<service-user>/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # 例: バックエンドAPIを /api/* にパス分割する場合（先着マッチのため上に置く）
+  - hostname: cwwd.mirai-dx-platform.com
+    path: /api/*
+    service: http://localhost:<BACKEND_PORT>
+
+  # フロントエンド（それ以外の全パス）
+  - hostname: cwwd.mirai-dx-platform.com
+    service: http://localhost:<FRONTEND_PORT>
+
+  # cloudflared の ingress は最後に catch-all が必須
+  - service: http_status:404
