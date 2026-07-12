@@ -314,10 +314,12 @@ def create_site(req: SiteCreate, db: Session = Depends(get_db),
             manager=req.manager, status="active",
         )
         db.add(site)
+        # 監査行を同一トランザクションへ（#63: commit後のaudit失敗で作成済みリソースが500になり、
+        # クライアント再試行で二重登録するのを防ぐ）。リトライ時はrollbackで監査行も破棄され重複しない
+        audit_add(db, user, "site_create", f"{site.id} {site.name}", site_id=site.id)
         return site
 
     site = _commit_with_retry(db, _build)
-    audit(db, user, "site_create", f"{site.id} {site.name}", site_id=site.id)
     return {"id": site.id, "code": site.site_code, "name": site.name, "status": "created"}
 
 
@@ -334,8 +336,9 @@ def update_site(site_id: str, req: SiteUpdate, db: Session = Depends(get_db),
         raise HTTPException(422, "invalid river_state")
     for k, v in data.items():
         setattr(site, k, v)
+    # 監査行を更新と同一commitへ（#63: commit後のaudit失敗で「更新は永続・監査は欠落」を防ぐ）
+    audit_add(db, user, "site_update", f"{site_id} {','.join(data.keys())}", site_id=site_id)
     db.commit()
-    audit(db, user, "site_update", f"{site_id} {','.join(data.keys())}", site_id=site_id)
     return {"id": site.id, "status": "updated"}
 
 
@@ -346,8 +349,9 @@ def deactivate_site(site_id: str, db: Session = Depends(get_db),
     if not site:
         raise HTTPException(404, "site not found")
     site.status = "inactive"
+    # 監査行を無効化と同一commitへ（#63）
+    audit_add(db, user, "site_deactivate", f"{site_id} {site.name}", site_id=site_id)
     db.commit()
-    audit(db, user, "site_deactivate", f"{site_id} {site.name}", site_id=site_id)
     return {"id": site.id, "status": "inactive"}
 
 
@@ -391,9 +395,12 @@ class EvaluateReq(BaseModel):
 
 
 def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dict,
-                             thresholds: dict | None = None) -> str:
+                             thresholds: dict | None = None, *, user, audit_label: str) -> str:
     """判定結果と理由を永続化し、結果IDを返す（監査・実績分析の正本。設計§6.2.11/§6.2.12）。
-    #49: 採番〜INSERTを _commit_with_retry() でラップし、同時リクエストによるID重複を防ぐ。"""
+    #49: 採番〜INSERTを _commit_with_retry() でラップし、同時リクエストによるID重複を防ぐ。
+    #63: 監査行も同一トランザクションに含める（commit後のaudit失敗で「結果は永続・監査は欠落」となり、
+    500応答でクライアントが再評価して結果を二重生成するのを防ぐ）。audit_label は評価対象の識別子
+    （evaluate=work_type / 作業予定評価=plan_id）で、従来の監査メッセージ形式を維持する。"""
     def _build():
         rid = _allocate_id(db, DecisionResult, "DR", 5)
         result = DecisionResult(
@@ -409,6 +416,7 @@ def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dic
                 id=f"{rid}-{i:02d}", decision_result_id=rid, severity=r["severity"],
                 reason_code=r["reason_code"], message=r["message"],
                 source_id=r["source_id"], observed_value=r["observed_value"]))
+        audit_add(db, user, "evaluate", f"{rid} {audit_label} L{res['overall_level']}", site_id=site_id)
         return result
 
     result = _commit_with_retry(db, _build)
@@ -425,8 +433,8 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
     # 保存する(古い閾値での保存を防ぐ)。応答には閾値を含めない(admin読み取り境界の維持)
     th = rules_service.effective_th(fresh=True)
     res = await assessment.assess_decision(site, req.work_type, req.start, req.end, th=th)
-    rid = _persist_decision_result(db, site.id, req.work_type, res, thresholds=th)
-    audit(db, user, "evaluate", f"{rid} {req.work_type} L{res['overall_level']}", site_id=site.id)
+    rid = _persist_decision_result(db, site.id, req.work_type, res, thresholds=th,
+                                   user=user, audit_label=req.work_type)
     res["resultId"] = rid
     return res
 
@@ -566,10 +574,11 @@ def create_work_plan(req: WorkPlanCreate, db: Session = Depends(get_db),
                         planned_start=req.planned_start, planned_end=req.planned_end,
                         contractor=req.contractor, summary=req.summary, status=req.status)
         db.add(plan)
+        # 監査行を同一トランザクションへ（#63）
+        audit_add(db, user, "work_plan_create", f"{plan.id} {plan.title or plan.work_type}", site_id=site.id)
         return plan
 
     plan = _commit_with_retry(db, _build)
-    audit(db, user, "work_plan_create", f"{plan.id} {plan.title or plan.work_type}", site_id=site.id)
     return {"id": plan.id, "status": "created"}
 
 
@@ -599,8 +608,9 @@ def update_work_plan(plan_id: str, req: WorkPlanUpdate, db: Session = Depends(ge
             raise HTTPException(422, "planned_end は planned_start より後である必要があります")
     for k, v in data.items():
         setattr(plan, k, v)
+    # 監査行を更新と同一commitへ（#63）
+    audit_add(db, user, "work_plan_update", f"{plan_id} {','.join(data.keys())}", site_id=plan.site_id)
     db.commit()
-    audit(db, user, "work_plan_update", f"{plan_id} {','.join(data.keys())}", site_id=plan.site_id)
     return {"id": plan.id, "status": "updated"}
 
 
@@ -617,8 +627,8 @@ async def evaluate_work_plan(plan_id: str, db: Session = Depends(get_db),
     th = rules_service.effective_th(fresh=True)
     res = await assessment.assess_decision(site, plan.work_type, plan.planned_start,
                                            plan.planned_end, th=th)
-    rid = _persist_decision_result(db, site.id, plan.work_type, res, thresholds=th)
-    audit(db, user, "evaluate", f"{rid} {plan_id} L{res['overall_level']}", site_id=site.id)
+    rid = _persist_decision_result(db, site.id, plan.work_type, res, thresholds=th,
+                                   user=user, audit_label=plan_id)
     res["resultId"] = rid
     res["workPlanId"] = plan_id
     return res
@@ -661,10 +671,11 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db),
             decision_result_id=req.decision_result_id,
             decided_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"))
         db.add(entry)
+        # 監査行を同一トランザクションへ（#63）
+        audit_add(db, user, "decision_log", f"{entry.id} {req.action} L{req.level}", site_id=site.id)
         return entry
 
     entry = _commit_with_retry(db, _build)
-    audit(db, user, "decision_log", f"{entry.id} {req.action} L{req.level}", site_id=site.id)
     return {"id": entry.id, "status": "recorded"}
 
 
