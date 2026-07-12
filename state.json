@@ -16,6 +16,12 @@
       "improvement_taper": "2026-11-19",
       "feature_freeze": "2026-12-05",
       "release_prep_only": "2026-12-12"
+    },
+    "deploy_plan": {
+      "subdomain": "cwwd.mirai-dx-platform.com",
+      "decided_at": "2026-07-12",
+      "provisioned": false,
+      "note": "名称予約のみ。systemd常駐化・Cloudflare Tunnel作成は未着手（docs/deploy.md参照）。"
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",

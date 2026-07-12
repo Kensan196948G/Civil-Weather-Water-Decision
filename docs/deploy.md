@@ -30,6 +30,22 @@ docker compose up -d   # postgres + backend(+migrate&seed) + frontend
 
 代替: Cloudflare Pages（フロント静的）＋ コンテナ基盤（backend）。
 
+## 公開ドメイン（予定・未着手）
+
+Mirai-DX-Project 系の兄弟プロジェクトは `mirai-dx-platform.com` を共通ドメインとし、
+「Cloudflare Tunnel 1本 ＋ 専用サブドメイン ＋ systemd常駐サービス」という構成で公開している
+（例: `arcsphere.mirai-dx-platform.com`, `railway.mirai-dx-platform.com`, `riskchecker.mirai-dx-platform.com`）。
+
+本プロジェクトの割当サブドメインは **`cwwd.mirai-dx-platform.com`** に決定（2026-07-12）。
+ただし現時点では **名称の予約のみ**で、以下は未着手（Phase 2 の現段階では時期尚早と判断し、
+デプロイ準備フェーズで着手）:
+
+- [ ] backend/frontend の systemd 常駐化（`*.service` unit作成）
+- [ ] `deploy/cloudflared-config.yml.example`（tunnel設定テンプレ）作成
+- [ ] Cloudflare Tunnel 作成・DNS ルーティング（`cloudflared tunnel route dns` ― 人間実行）
+- [ ] `CORS_ORIGINS` を `https://cwwd.mirai-dx-platform.com` に更新
+- [ ] state.json への `deploy.public_url` 反映（実デプロイ後）
+
 ## 本番デプロイ前チェックリスト（必須）
 
 セキュリティ・ハードニングで起動ガードを実装済み。**以下を満たさないと本番(APP_ENV≠local)では起動失敗する**。
