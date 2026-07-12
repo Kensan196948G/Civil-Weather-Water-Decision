@@ -60,22 +60,60 @@ def _allocate_id(db: Session, model, prefix: str, width: int) -> str:
     return f"{prefix}{nxt:0{width}d}"
 
 
+# 採番対象の (モデル, プレフィックス)。重複検出時のカウンタ再同期に使う
+_COUNTER_SPECS = ((Site, "S"), (DecisionResult, "DR"), (WorkPlan, "WP"), (DecisionLog, "L"))
+
+# リトライしてよい一時エラーのみ許可（恒久障害を409に偽装しない: 対抗レビュー[medium]）
+_SQLITE_TRANSIENT_MARKERS = ("database is locked", "database table is locked")
+_PG_TRANSIENT_SQLSTATES = {"40001", "40P01", "55P03"}  # serialization/deadlock/lock_not_available
+
+
+def _is_transient_db_error(e: OperationalError) -> bool:
+    """ロック/直列化系の一時エラーのみ真。テーブル不存在・接続断などは偽（5xxで顕在化）。"""
+    pgcode = getattr(getattr(e, "orig", None), "pgcode", None)
+    if pgcode:
+        return pgcode in _PG_TRANSIENT_SQLSTATES
+    msg = str(getattr(e, "orig", e)).lower()
+    return any(m in msg for m in _SQLITE_TRANSIENT_MARKERS)
+
+
+def _resync_counters(db: Session) -> None:
+    """カウンタを実テーブルのmaxまで進める（対抗レビュー[high]: リストア・手動修復等で
+    カウンタが実IDより遅れると採番が衝突し続けるため、重複検出時に自己修復する）。"""
+    for model, prefix in _COUNTER_SPECS:
+        real = _max_existing_numeric(db, model, prefix)
+        db.execute(
+            update(IdCounter)
+            .where(IdCounter.name == prefix)
+            .where(IdCounter.value < real)
+            .values(value=real)
+        )
+    db.commit()
+
+
 def _commit_with_retry(db: Session, build_and_add):
     """build_and_add() でID採番〜db.add()まで行い、競合時は採番からやり直す。
 
     通常は _allocate_id のカウンタ行更新がDB側で直列化されるため衝突しないが、
-    カウンタ初期化の同時実行（PK衝突）や SQLite のロック競合（OperationalError）に
-    備えたジッタ付きリトライを保険として残す（#49 対抗レビュー指摘対応）。
+    カウンタ遅延（リストア等）による重複や SQLite のロック競合に備え、
+    再同期＋ジッタ付きリトライを保険として持つ（#49 対抗レビュー指摘対応）。
     """
     for attempt in range(1, _ID_COMMIT_ATTEMPTS + 1):
         try:
             result = build_and_add()
             db.commit()
             return result
-        except (IntegrityError, OperationalError):
+        except IntegrityError:
             db.rollback()
+            _resync_counters(db)  # 重複＝カウンタ遅延の可能性。実maxまで進めて再採番
             if attempt < _ID_COMMIT_ATTEMPTS:
                 time.sleep(random.uniform(0.01, 0.05) * attempt)  # jitter+backoff
+        except OperationalError as e:
+            db.rollback()
+            if not _is_transient_db_error(e):
+                raise  # 恒久障害（テーブル不存在・接続断等）は409に偽装せず5xxで顕在化
+            if attempt < _ID_COMMIT_ATTEMPTS:
+                time.sleep(random.uniform(0.01, 0.05) * attempt)
     raise HTTPException(409, "同時登録が競合しました。再試行してください。")
 
 

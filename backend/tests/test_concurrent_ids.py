@@ -128,3 +128,90 @@ def test_concurrent_evaluate_all_succeed(client):
     finally:
         _delete_reasons_for(ids)
         _delete_rows(DecisionResult, ids)
+
+
+def test_stale_counter_self_heals(client):
+    """カウンタが実テーブルより遅れていても、重複検出→再同期で採番が自己修復する（対抗レビュー[high]）。"""
+    from app.models import IdCounter
+
+    db = SessionLocal()
+    try:
+        row = db.get(IdCounter, "S")
+        if row is None:
+            db.add(IdCounter(name="S", value=1))
+        else:
+            row.value = 1  # 実テーブル(S01..S16+)より大幅に遅らせる
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.post("/api/sites", json={
+        "name": "カウンタ遅延回復テスト", "loc": "X市",
+        "latitude": 35.9, "longitude": 139.9, "work_type": "earthwork",
+    })
+    sid = r.json().get("id")
+    try:
+        assert r.status_code == 201, f"再同期リトライで成功すべき: {r.status_code} {r.json()}"
+        db = SessionLocal()
+        try:
+            assert db.get(IdCounter, "S").value >= _maxnum_sites(db), "カウンタが実maxまで回復すべき"
+        finally:
+            db.close()
+    finally:
+        _delete_rows(Site, [sid] if sid else [])
+
+
+def _maxnum_sites(db) -> int:
+    ids = db.scalars(select(Site.id)).all()
+    nums = [int(x[1:]) for x in ids if x[1:].isdigit()]
+    return max(nums) if nums else 0
+
+
+def test_permanent_db_error_not_masked_as_409():
+    """恒久的なDB障害（テーブル不存在等）は409に偽装せずそのまま送出する（対抗レビュー[medium]）。"""
+    import sqlite3
+
+    import pytest
+    from sqlalchemy.exc import OperationalError
+
+    from app.api.routes import _commit_with_retry
+
+    class _StubDb:
+        def rollback(self):
+            pass
+
+        def commit(self):
+            pass
+
+        def execute(self, *a, **kw):  # _resync_counters は呼ばれない想定（IntegrityErrorのみ）
+            raise AssertionError("unexpected")
+
+    def _raise_permanent():
+        raise OperationalError("stmt", {}, sqlite3.OperationalError("no such table: id_counters"))
+
+    with pytest.raises(OperationalError):
+        _commit_with_retry(_StubDb(), _raise_permanent)
+
+
+def test_transient_lock_error_exhausts_to_409(monkeypatch):
+    """一時的なロックエラーはリトライし、枯渇時のみ409を返す。"""
+    import sqlite3
+
+    import pytest
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from app.api import routes as routes_mod
+
+    monkeypatch.setattr(routes_mod.time, "sleep", lambda *_: None)  # テスト高速化
+
+    class _StubDb:
+        def rollback(self):
+            pass
+
+    def _raise_locked():
+        raise OperationalError("stmt", {}, sqlite3.OperationalError("database is locked"))
+
+    with pytest.raises(HTTPException) as ei:
+        routes_mod._commit_with_retry(_StubDb(), _raise_locked)
+    assert ei.value.status_code == 409

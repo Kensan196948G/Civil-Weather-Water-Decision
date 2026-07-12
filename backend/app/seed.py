@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from .core.config import settings
 from .core.db import SessionLocal
 from .core.security import hash_password
-from .models import DataSourceStatus, DecisionLog, Site, Station, User, WorkPlan, WorkType
+from .models import (
+    DataSourceStatus, DecisionLog, IdCounter, Site, Station, User, WorkPlan, WorkType,
+)
 
 # デモ用ユーザー（5ロール）。本番では各自パスワード変更／Entra ID 連携。
 USERS = [
@@ -134,6 +136,25 @@ def seed(db: Session) -> None:
             db.add(User(id="U01", username="admin", display_name="システム管理者",
                         role="admin", department="IT・DX部門", email="admin@example.com",
                         password_hash=hash_password(admin_pw)))
+
+    # 固定IDシード後にID採番カウンタを実データのmaxへ同期（#49: カウンタ遅延による採番衝突を防ぐ）
+    def _maxnum(ids: list[str], prefix: str) -> int:
+        nums = [int(x[len(prefix):]) for x in ids
+                if x.startswith(prefix) and x[len(prefix):].isdigit()]
+        return max(nums) if nums else 0
+
+    counter_values = {
+        "S": _maxnum([s[0] for s in SITES], "S"),
+        "WP": _maxnum([p[0] for p in PLANS], "WP"),
+        "L": _maxnum([h[0] for h in HISTORY], "L"),
+        "DR": 0,
+    }
+    for cname, cval in counter_values.items():
+        row = db.get(IdCounter, cname)
+        if row is None:
+            db.add(IdCounter(name=cname, value=cval))
+        elif row.value < cval:
+            row.value = cval
     db.commit()
 
 
