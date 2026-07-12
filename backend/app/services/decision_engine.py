@@ -247,6 +247,7 @@ def evaluate(work_type: str, reading: Reading, th: dict | None = None) -> dict:
     return {
         "work_type": work_type,
         "overall_level": overall,
+        "thresholds_used": dict(th),  # 使用した実効閾値(監査再現用。persist側でJSON保存)
         "overall_label": LEVEL_LABELS[overall],
         "summary": summary,
         "reasons": reasons,

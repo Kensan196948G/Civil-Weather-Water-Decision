@@ -78,10 +78,16 @@ def _load_overrides(db: Session) -> dict:
             if r.key in DEFAULT_TH}
 
 
-def effective_th(db: Session | None = None) -> dict:
-    """現在の実効閾値（既定値＋DB上書き）を返す。評価パスから毎回呼ばれる想定。"""
+def effective_th(db: Session | None = None, *, fresh: bool = False) -> dict:
+    """現在の実効閾値（既定値＋DB上書き）を返す。
+
+    fresh=True はキャッシュをバイパスしてDBを直読みする。**判定結果を永続化する
+    評価パスでは必ず fresh=True を使う**（他ワーカーのTTL内キャッシュ起因で
+    古い閾値の判定が保存されるのを防ぐ。対抗レビュー3巡目[high]）。
+    表示用途（ダッシュボード一覧等）は fresh=False の短TTLキャッシュで足りる。
+    """
     now = time.monotonic()
-    if _cache["th"] is not None and now - _cache["at"] < _CACHE_TTL:
+    if not fresh and _cache["th"] is not None and now - _cache["at"] < _CACHE_TTL:
         return _cache["th"]
     own = db is None
     if own:

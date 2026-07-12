@@ -29,8 +29,11 @@ def upgrade() -> None:
         sa.Column('updated_by', sa.String(length=100), nullable=False),
         sa.PrimaryKeyConstraint('key'),
     )
+    # 判定結果に使用閾値スナップショットを保存(監査再現性。既存行はNULL=可変化以前)
+    op.add_column('decision_results', sa.Column('thresholds_json', sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.drop_column('decision_results', 'thresholds_json')
     op.drop_table('decision_rules')

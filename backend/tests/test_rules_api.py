@@ -145,3 +145,56 @@ def test_rules_update_is_audited(client):
                for x in rows)
     client.put("/api/admin/rules",
                json={"updates": {"wbgt_danger": None, "wbgt_caution": None}})
+
+
+def test_persisted_decision_records_threshold_snapshot(client):
+    """永続化された判定は使用閾値スナップショットを持ち、閾値変更後も当時のルールで監査できる。"""
+    import json as _json
+
+    from app.core.db import SessionLocal
+    from app.models import DecisionResult
+
+    r1 = client.post("/api/decisions/evaluate",
+                     json={"site_id": "S01", "work_type": "earthwork"})
+    rid1 = r1.json()["resultId"]
+
+    client.put("/api/admin/rules", json={"updates": {"rain_heavy": 25.0}})
+    r2 = client.post("/api/decisions/evaluate",
+                     json={"site_id": "S01", "work_type": "earthwork"})
+    rid2 = r2.json()["resultId"]
+
+    db = SessionLocal()
+    try:
+        th1 = _json.loads(db.get(DecisionResult, rid1).thresholds_json)
+        th2 = _json.loads(db.get(DecisionResult, rid2).thresholds_json)
+    finally:
+        db.close()
+    assert th1["rain_heavy"] == 5.0   # 変更前の判定は当時の閾値を保持
+    assert th2["rain_heavy"] == 25.0  # 変更後の判定は新閾値(freshバイパスで即時反映)
+    client.put("/api/admin/rules", json={"updates": {"rain_heavy": None}})
+
+
+def test_persisting_evaluation_bypasses_stale_cache(client, monkeypatch):
+    """他ワーカーがTTL内の古いキャッシュを持っていても、永続化パスはDB直読みで最新閾値を使う。"""
+    import json as _json
+
+    from app.core.db import SessionLocal
+    from app.models import DecisionResult
+
+    rules_service.effective_th()  # キャッシュを既定値で温める
+    client.put("/api/admin/rules", json={"updates": {"rain_heavy": 30.0}})
+    # 「別ワーカー」を模擬: clear_cacheの効果を打ち消し、古いキャッシュが残った状態を再現
+    rules_service._cache["at"] = __import__("time").monotonic()
+    rules_service._cache["th"] = dict(DEFAULT_TH)
+    assert rules_service.effective_th()["rain_heavy"] == 5.0  # 表示用は古いまま(TTL内)
+
+    r = client.post("/api/decisions/evaluate",
+                    json={"site_id": "S01", "work_type": "earthwork"})
+    rid = r.json()["resultId"]
+    db = SessionLocal()
+    try:
+        th = _json.loads(db.get(DecisionResult, rid).thresholds_json)
+    finally:
+        db.close()
+    assert th["rain_heavy"] == 30.0  # 永続化パスはキャッシュをバイパスして最新を使用
+    client.put("/api/admin/rules", json={"updates": {"rain_heavy": None}})

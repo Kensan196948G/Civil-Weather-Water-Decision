@@ -105,6 +105,9 @@ class DecisionResult(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     data_quality_summary: Mapped[str] = mapped_column(Text, default="")
     weather_status: Mapped[str] = mapped_column(String(20), default="")
+    # 判定に使用した実効閾値のスナップショット(JSON)。閾値は#35で可変になったため、
+    # 過去判定を当時のルールで監査・再現できるよう保存する(NULL=閾値可変化以前の行)
+    thresholds_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     reasons: Mapped[list["DecisionReason"]] = relationship(
         back_populates="result", cascade="all, delete-orphan")
 

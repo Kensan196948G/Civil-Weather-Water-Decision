@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import random
 import re
 import time
@@ -388,7 +389,8 @@ def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dic
             evaluated_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"),
             overall_level=res["overall_level"], overall_label=res["overall_label"],
             summary=res["summary"], data_quality_summary=res["data_quality_summary"],
-            weather_status=res.get("weatherStatus", ""))
+            weather_status=res.get("weatherStatus", ""),
+            thresholds_json=json.dumps(res.get("thresholdsUsed") or {}, ensure_ascii=False))
         db.add(result)
         for i, r in enumerate(res.get("reasonsRaw", []), 1):
             db.add(DecisionReason(
@@ -407,7 +409,8 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    res = await assessment.assess_decision(site, req.work_type, req.start, req.end)
+    # 永続化する判定は閾値キャッシュをバイパス(古い閾値での保存を防ぐ。#35対抗レビュー)
+    res = await assessment.assess_decision(site, req.work_type, req.start, req.end, fresh_th=True)
     rid = _persist_decision_result(db, site.id, req.work_type, res)
     audit(db, user, "evaluate", f"{rid} {req.work_type} L{res['overall_level']}", site_id=site.id)
     res["resultId"] = rid
