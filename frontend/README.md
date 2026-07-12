@@ -126,7 +126,7 @@ python3 frontend/serve.py
 
 ```bash
 node frontend/test/logic-smoke.mjs       # 6画面VM・判定(6作業種別)・グラフ・WBGT境界（21件）
-node frontend/test/adapter-contract.cjs  # アダプタ: patch後 renderVals が API由来か（9件）
+node frontend/test/adapter-contract.cjs  # アダプタ: patch後 renderVals が API由来か（14件）
 ```
 
 > 本環境では Chrome がヘッドレス起動不可のため、実ブラウザ描画は各自で確認すること。

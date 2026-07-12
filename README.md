@@ -60,19 +60,24 @@ WebUI は ClaudeDesign で作成し `frontend/` に取り込み済み（モッ�
 
 | 項目 | 内容 |
 |---|---|
-| フェーズ | Phase 0（足場・調査） |
+| フェーズ | Phase 2 進行中（Phase 1 MVP完了・Phase 3 認証/監査/通知は大幅先行・Phase 4 CI/CD着手済み） |
 | 登録日 | 2026-06-19 |
 | 本番リリース期限 | 2026-12-19（登録から6ヶ月） |
+| テスト状況 | backend 71 / frontend logic 21 + adapter契約 14、全pass（2026-07-12時点） |
+| CI | GitHub Actions（backend lint+test / 依存脆弱性スキャン / frontend test / docker build） |
 
 マイルストーン・タスクは GitHub Issues / Milestones で管理します。
 
-## 技術スタック（PoC） / Tech Stack
+## 技術スタック / Tech Stack
 
-- フロントエンド: React + Vite + TypeScript + Tailwind CSS
-- バックエンド: FastAPI (Python 3.12) + SQLAlchemy + Alembic
-- DB: PostgreSQL 16
-- バッチ: APScheduler
-- コンテナ: Docker Compose
+- フロントエンド: ClaudeDesign 生成の静的 UI（dc-runtime、React 18 を CDN 経由でロード）＋ `data-adapter.js` による実 API 接続（`.dc.html` 無改修）
+- バックエンド: FastAPI (Python 3.12) + SQLAlchemy + Alembic + APScheduler
+- 認証/認可: JWT + RBAC（管理者・現場管理者・閲覧者）＋ 監査ログ
+- DB: SQLite（開発）/ PostgreSQL 16（本番候補）※同一 Alembic マイグレーションが両対応
+- コンテナ: Docker Compose（postgres + backend + frontend）
+- CI/CD: GitHub Actions（lint・test・docker build）
+
+> フロントエンドは PoC 当初計画（React+Vite+TypeScript+Tailwind の自前実装）から、ClaudeDesign 生成 UI ＋ 外部データアダプタ方式へ変更されています。詳細は [frontend/README.md](./frontend/README.md) を参照してください。
 
 ## ライセンス / License
 
