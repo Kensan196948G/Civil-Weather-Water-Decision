@@ -115,6 +115,12 @@ def _commit_with_retry(db: Session, build_and_add):
                 raise  # 恒久障害（テーブル不存在・接続断等）は409に偽装せず5xxで顕在化
             if attempt < _ID_COMMIT_ATTEMPTS:
                 time.sleep(random.uniform(0.01, 0.05) * attempt)
+        except Exception:
+            # 非DB例外（監査書き込み失敗等）でも helper 内でトランザクション後始末を完結させる。
+            # 現行は get_db() の close() でも rollback されるが、将来の長寿命 Session 利用時に
+            # pending 変更が後続 commit へ混入しない防御（#63 対抗レビュー[low]）
+            db.rollback()
+            raise
     raise HTTPException(409, "同時登録が競合しました。再試行してください。")
 
 
@@ -700,6 +706,8 @@ def export_decision_logs(db: Session = Depends(get_db),
 @router.post("/data-collectors/run")
 async def run_collectors(db: Session = Depends(get_db),
                          user: User = Depends(get_current_user)):
+    # 実行「要求」の監査（後続プローブ結果の成否によらず要求事実を 1 件残す設計。
+    # 「成功した更新の監査」へ変える場合は probe_all を no-commit 化して同一 tx へ寄せること — #63 対抗レビューで意図明示）
     audit(db, user, "collectors_run", "手動再取得")
     assessment.clear_cache()
     sites = db.scalars(select(Site).where(Site.status == "active")).all()

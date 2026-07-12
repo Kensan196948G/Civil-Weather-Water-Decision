@@ -214,3 +214,109 @@ def test_audit_written_in_same_commit(client):
     finally:
         _delete_rows(WorkPlan, [wpid])
         _delete_audit_after(baseline_audit)
+
+
+# ---------------------------------------------------------------------------
+# 対抗レビュー[medium]対応: 「Python 例外の monkeypatch」ではなく、実際の flush/commit
+# 段階で audit_logs INSERT が SQL として失敗するケースを engine イベントで注入する。
+# Site+AuditLog が同一 flush に乗る実経路・commit 時 DB 障害・failed transaction 状態を検証する。
+# ---------------------------------------------------------------------------
+from sqlalchemy import event  # noqa: E402
+
+from app.core.db import engine  # noqa: E402
+
+
+class _AuditInsertFails:
+    """audit_logs への INSERT を DBAPI 実行直前（カーソル実行）で失敗させるフック。"""
+
+    def __init__(self):
+        self.fired = 0
+
+    def __call__(self, conn, cursor, statement, parameters, context, executemany):
+        s = statement.lstrip().lower()
+        if s.startswith("insert") and "audit_logs" in s:
+            self.fired += 1
+            raise RuntimeError("injected: audit_logs INSERT failure at flush/commit (#63)")
+
+
+def _inject_audit_insert_failure():
+    hook = _AuditInsertFails()
+    event.listen(engine, "before_cursor_execute", hook)
+    return hook
+
+
+def _remove_injection(hook):
+    event.remove(engine, "before_cursor_execute", hook)
+
+
+def test_site_create_atomic_on_db_level_audit_failure(client):
+    """create_site: commit 時に audit INSERT が DB 層で失敗 → Site も残らず、復旧後はちょうど1件。"""
+    payload = {"name": "原子性テストDB障害63", "loc": "Z市", "latitude": 35.56,
+               "longitude": 139.56, "work_type": "earthwork"}
+    baseline_audit = _max_audit_id()
+    sites_before = _count(Site)
+    hook = _inject_audit_insert_failure()
+    try:
+        with pytest.raises(Exception):
+            client.post("/api/sites", json=payload)
+    finally:
+        _remove_injection(hook)
+    assert hook.fired >= 1, "audit INSERT が SQL 段階まで到達して失敗しているべき（テストの実効性）"
+    assert _count(Site) == sites_before, "commit 時障害でも Site 行はロールバックされるべき"
+    assert _max_audit_id() == baseline_audit, "監査行も残らないべき"
+
+    # 復旧後の再試行はちょうど 1 件（重複登録なし）
+    r = client.post("/api/sites", json=payload)
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    try:
+        assert _count(Site, name=payload["name"]) == 1, "再試行で二重登録が起きないべき"
+        assert _find_audit("site_create", sid) is not None, "復旧後は監査も記録されるべき"
+    finally:
+        _delete_rows(Site, [sid])
+        _delete_audit_after(baseline_audit)
+
+
+def test_site_update_atomic_on_db_level_audit_failure(client):
+    """update_site: commit 時の audit INSERT 失敗で名称変更もロールバックされる（別Sessionで検証）。"""
+    original_name = _site_name("S01")
+    baseline_audit = _max_audit_id()
+    hook = _inject_audit_insert_failure()
+    try:
+        with pytest.raises(Exception):
+            client.put("/api/sites/S01", json={"name": "DB層障害で消えるべき名前63"})
+    finally:
+        _remove_injection(hook)
+    assert hook.fired >= 1
+    try:
+        assert _site_name("S01") == original_name, "commit 時障害では更新もロールバックされるべき"
+        assert _max_audit_id() == baseline_audit, "監査行も残らないべき"
+    finally:
+        _set_site_name("S01", original_name)  # 念のため復元（共有シードDB保護）
+        _delete_audit_after(baseline_audit)
+
+
+def test_evaluate_atomic_on_db_level_audit_failure(client):
+    """evaluate: DecisionResult+reasons+監査が同一 flush で失敗 → 全て残らず、復旧後は +1。"""
+    payload = {"site_id": "S01", "work_type": "river",
+               "start": "2026-06-20T08:00", "end": "2026-06-20T12:00"}
+    baseline_audit = _max_audit_id()
+    results_before = _count(DecisionResult)
+    hook = _inject_audit_insert_failure()
+    try:
+        with pytest.raises(Exception):
+            client.post("/api/decisions/evaluate", json=payload)
+    finally:
+        _remove_injection(hook)
+    assert hook.fired >= 1
+    assert _count(DecisionResult) == results_before, "判定結果もロールバックされるべき"
+    assert _max_audit_id() == baseline_audit
+
+    r = client.post("/api/decisions/evaluate", json=payload)
+    assert r.status_code == 200, r.text
+    rid = r.json()["resultId"]
+    try:
+        assert _count(DecisionResult) == results_before + 1, "復旧後はちょうど +1"
+    finally:
+        _delete_rows(DecisionResult, [rid])
+        _delete_audit_after(baseline_audit)
