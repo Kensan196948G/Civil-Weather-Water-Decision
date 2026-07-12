@@ -16,6 +16,7 @@ from ..models import Site
 
 JST = timezone(timedelta(hours=9))
 _CACHE: dict[str, tuple[float, dict]] = {}
+_LAST_GOOD: dict[str, dict] = {}  # 取得成功時の最終良品（STALE縮退用、TTL対象外）
 _TTL = 300  # 秒
 
 
@@ -25,6 +26,12 @@ async def _cached_fetch(lat: float, lon: float, key: str) -> dict:
     if hit and now - hit[0] < _TTL:
         return hit[1]
     data = await open_meteo.fetch_forecast(lat, lon)
+    if data.get("status") == "OK":
+        _LAST_GOOD[key] = data
+    elif key in _LAST_GOOD:
+        # 取得失敗時は前回良品へ縮退（§5.2 STALE / §15.2 画面を落とさない）。
+        # fetched_at は前回取得時刻のまま残し、鮮度が古いことを隠さない。
+        data = {**_LAST_GOOD[key], "status": "STALE", "error": data.get("error")}
     _CACHE[key] = (now, data)
     return data
 
@@ -43,6 +50,7 @@ async def _cached_wbgt(station: str) -> dict:
 
 def clear_cache() -> None:
     _CACHE.clear()
+    _LAST_GOOD.clear()
 
 
 def build_reading(work_type: str, wr: dict, site: Site,
@@ -100,6 +108,8 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
             wr["missing"] = set(wr.get("missing") or set()) - {"wbgt"}
 
     reading = build_reading(wt, wr, site, pref_warnings)
+    if status == "STALE":
+        reading.stale_weather = True  # 前回取得値での参考表示を判定理由に明示（§5.3）
     decision = evaluate(wt, reading)
 
     return {

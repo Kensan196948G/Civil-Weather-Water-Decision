@@ -45,6 +45,8 @@ class Reading:
     heavy_rain_warning: bool = False         # 気象庁 大雨警報
     # 主要データが欠測/遅延しているフィールド名の集合（例 {"precip","wind"}）
     missing: set[str] = field(default_factory=set)
+    # 気象データが前回取得値（更新遅延・STALE）であることを示す（§5.2/§5.3）
+    stale_weather: bool = False
     source_weather: str = "DS-OPEN-METEO"
     source_river: str = "DS-RIVER-GO"
     source_wbgt: str = "DS-WBGT"
@@ -199,6 +201,14 @@ def evaluate(work_type: str, reading: Reading) -> dict:
         reasons.append({
             "severity": 3, "reason_code": f"missing_{f}", "message": msg,
             "source_id": src, "observed_value": "欠測/遅延",
+        })
+
+    # 更新遅延（STALE）→ 確認不能要因（§5.3: 値はあるが鮮度が古いことを隠さず明示）
+    if reading.stale_weather:
+        reasons.append({
+            "severity": 3, "reason_code": "stale_weather",
+            "message": "気象データが更新遅延しています（前回取得値で参考表示）。最新の公式情報・現地確認を優先してください。",
+            "source_id": reading.source_weather, "observed_value": "更新遅延",
         })
 
     actionable = [r["severity"] for r in reasons if r["severity"] in (0, 1, 2)]
