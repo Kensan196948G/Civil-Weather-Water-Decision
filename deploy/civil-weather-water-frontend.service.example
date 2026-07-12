@@ -1,0 +1,34 @@
+# systemd unit テンプレート（frontend）
+#
+# 位置づけ: docs/deploy.md「公開ドメイン（予定・未着手）」節の雛形。
+# 配置・有効化は人間実行:
+#   sudo cp civil-weather-water-frontend.service.example \
+#       /etc/systemd/system/civil-weather-water-frontend.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now civil-weather-water-frontend
+#
+# frontend/serve.py は環境変数 PORT が未設定だと空きポートを自動選択する
+# （serve.py 実装: `int(os.environ["PORT"]) if os.environ.get("PORT") else 0`）。
+# systemd 常駐化時は Environment=PORT=<FRONTEND_PORT> で固定しないと、
+# 再起動のたびにポートが変わり cloudflared-config.yml の
+# service: http://localhost:<FRONTEND_PORT> と食い違う。
+# <service-user> / パスは環境に合わせて置換すること。
+
+[Unit]
+Description=Civil-Weather-Water-Decision frontend (ClaudeDesign static server)
+After=network.target
+
+[Service]
+Type=simple
+User=<service-user>
+Group=<service-user>
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/frontend
+Environment=PORT=<FRONTEND_PORT>
+ExecStart=/usr/bin/python3 serve.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
