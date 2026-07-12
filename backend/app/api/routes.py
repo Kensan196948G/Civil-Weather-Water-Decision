@@ -8,9 +8,10 @@ import random
 import re
 import time
 from datetime import datetime
+from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -233,6 +234,9 @@ _RETENTION_KEY = "data_retention_days"
 _USER_PREFS_KEY = "user_prefs"
 _RETENTION_DEFAULT = 365
 _RETENTION_MIN, _RETENTION_MAX = 30, 3650
+# 通知設定は固定2フラグ（API契約）。GET は常にこの2キーを bool で返す。
+_NOTIFY_SUBKEYS = ("slack_enabled", "teams_enabled")
+_NOTIFY_DEFAULT = {"slack_enabled": False, "teams_enabled": False}
 # 通知/ユーザー設定JSONの肥大化・悪用の保険（キー名はwhitelist前提のため緩めの上限）
 _SETTINGS_JSON_MAX = 8192
 # Anthropic 疎通確認先。キー値は x-api-key ヘッダのみで送り、応答・ログ・監査には出さない
@@ -291,11 +295,17 @@ def _current_retention(db: Session) -> int:
         return _RETENTION_DEFAULT
 
 
+def _current_notify(db: Session) -> dict:
+    """通知設定を既定値の上にマージして返す（常に slack_enabled/teams_enabled を bool で含む）。"""
+    stored = _load_json_setting(db, _NOTIFY_KEY, {})
+    return {k: bool(stored.get(k, _NOTIFY_DEFAULT[k])) for k in _NOTIFY_SUBKEYS}
+
+
 def _settings_payload(db: Session) -> dict:
     """設定画面の表示用ペイロード（GET応答・PUT応答で共通。AI平文は含めない）。"""
     return {
         "ai": _ai_status(db),
-        "notify": _load_json_setting(db, _NOTIFY_KEY, {}),
+        "notify": _current_notify(db),
         "data_retention_days": _current_retention(db),
         "user_prefs": _load_json_setting(db, _USER_PREFS_KEY, {}),
     }
@@ -307,54 +317,96 @@ def get_settings(db: Session = Depends(get_db),
     return _settings_payload(db)
 
 
-class SettingsUpdate(BaseModel):
-    # 未知トップレベルキーは422（whitelist: ai_api_key/notify/data_retention_days/user_prefs）
-    model_config = ConfigDict(extra="forbid")
-    ai_api_key: str | None = None
-    notify: dict | None = None
-    data_retention_days: int | None = None
-    user_prefs: dict | None = None
+def _validate_retention(value: object) -> int:
+    """data_retention_days を検証して int を返す（非整数・真偽値・範囲外は 422）。"""
+    # JSONの true/false は Python では bool（int のサブクラス）。閾値管理#35と同様に明示拒否。
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HTTPException(422, "data_retention_days: 整数を指定してください（真偽値は不可）")
+    if not (_RETENTION_MIN <= value <= _RETENTION_MAX):
+        raise HTTPException(
+            422, f"data_retention_days: {_RETENTION_MIN}〜{_RETENTION_MAX} の整数で指定してください")
+    return value
 
-    @field_validator("data_retention_days")
-    @classmethod
-    def _check_retention(cls, v):
-        if v is None:
-            return v
-        # PydanticのintはJSON真偽値を1/0へ暗黙変換するため境界で明示拒否（#35と同方針）
-        if isinstance(v, bool):
-            raise ValueError("data_retention_days: 整数を指定してください（真偽値は不可）")
-        if not (_RETENTION_MIN <= v <= _RETENTION_MAX):
-            raise ValueError(
-                f"data_retention_days: {_RETENTION_MIN}〜{_RETENTION_MAX} の整数で指定してください")
-        return v
+
+def _validate_notify_flag(key: str, value: object) -> bool:
+    if not isinstance(value, bool):
+        raise HTTPException(422, f"{key}: 真偽値（true/false）で指定してください")
+    return value
+
+
+def _store_json_setting(db: Session, key: str, obj: dict, username: str) -> None:
+    """JSON設定を直列化・サイズ検証してUPSERT（commitしない。肥大化を防ぐ）。"""
+    serialized = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > _SETTINGS_JSON_MAX:
+        raise HTTPException(422, f"{key}: 設定が大きすぎます")
+    _upsert_setting(db, key, serialized, username)
 
 
 @router.put("/admin/settings")
-def put_settings(req: SettingsUpdate, db: Session = Depends(get_db),
+def put_settings(body: dict[str, Any] = Body(...), db: Session = Depends(get_db),
                  user: User = Depends(require_role("admin"))):
-    # 明示指定されたフィールドのみ部分更新（未指定は据え置き）
-    provided = req.model_dump(exclude_unset=True)
-    if not provided:
+    """設定の部分更新。API契約はフラットな dotted key（notify.slack_enabled 等）だが、
+    フロント現行実装との整合のため nested（notify:{...}）も等価に受理する。whitelist 外は 422。
+    変更は監査行と同一トランザクションで commit する（#35/#63: 監査なき設定変更を残さない）。
+    """
+    if not body:
         raise HTTPException(422, "更新するフィールドがありません")
 
-    audit_keys: list[str] = []  # 監査メッセージにはキー名のみ（秘密値は載せない。AIは末尾4桁マスク可）
-    for field, value in provided.items():
-        if field == "ai_api_key":
+    # ---- フェーズ1: 全キーを検証・正規化（1つでも不正なら 422。部分適用しない） ----
+    ai_secret: str | None = None
+    retention: int | None = None
+    notify_changes: dict[str, bool] = {}
+    prefs_changes: dict[str, Any] = {}
+    audit_keys: list[str] = []  # 監査にはキー名のみ（秘密値は載せない。AIは末尾4桁マスク可）
+
+    for key, value in body.items():
+        if key == _AI_KEY:  # ai_api_key（平文は監査・応答に出さない）
             if not isinstance(value, str) or not value.strip():
-                # 解除は DELETE /admin/settings/ai を使う（空値での上書きは受け付けない）
+                # 空値での上書きは不可。解除は DELETE /admin/settings/ai を使う
                 raise HTTPException(422, "ai_api_key: 空にできません（解除は DELETE を使用してください）")
-            secret = value.strip()
-            _upsert_setting(db, _AI_KEY, crypto.encrypt(secret), user.username)
-            audit_keys.append(f"{_AI_KEY}({_mask_tail(secret)})")
-        elif field == "data_retention_days":
-            _upsert_setting(db, _RETENTION_KEY, str(value), user.username)
-            audit_keys.append(f"{_RETENTION_KEY}={value}")
-        else:  # notify / user_prefs（JSONとして保持。サイズ上限で肥大化を防ぐ）
-            serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-            if len(serialized) > _SETTINGS_JSON_MAX:
-                raise HTTPException(422, f"{field}: 設定が大きすぎます")
-            _upsert_setting(db, field, serialized, user.username)
-            audit_keys.append(field)
+            ai_secret = value.strip()
+            audit_keys.append(f"{_AI_KEY}({_mask_tail(ai_secret)})")
+        elif key == _RETENTION_KEY:  # data_retention_days
+            retention = _validate_retention(value)
+            audit_keys.append(f"{_RETENTION_KEY}={retention}")
+        elif key == _NOTIFY_KEY:  # nested: {"notify": {...}}（フロント現行形・互換）
+            if not isinstance(value, dict):
+                raise HTTPException(422, "notify: オブジェクトで指定してください")
+            for sub, sub_val in value.items():
+                if sub not in _NOTIFY_SUBKEYS:
+                    raise HTTPException(422, f"未知の設定キー: notify.{sub}")
+                notify_changes[sub] = _validate_notify_flag(f"notify.{sub}", sub_val)
+                audit_keys.append(f"notify.{sub}")
+        elif key.startswith("notify."):  # dotted: {"notify.slack_enabled": true}（API契約）
+            sub = key.split(".", 1)[1]
+            if sub not in _NOTIFY_SUBKEYS:
+                raise HTTPException(422, f"未知の設定キー: {key}")
+            notify_changes[sub] = _validate_notify_flag(key, value)
+            audit_keys.append(key)
+        elif key == _USER_PREFS_KEY:  # nested: {"user_prefs": {...}}
+            if not isinstance(value, dict):
+                raise HTTPException(422, "user_prefs: オブジェクトで指定してください")
+            prefs_changes.update(value)
+            audit_keys.append(_USER_PREFS_KEY)
+        elif key.startswith("user_prefs.") and len(key) > len("user_prefs."):
+            prefs_changes[key.split(".", 1)[1]] = value
+            audit_keys.append(key)
+        else:
+            raise HTTPException(422, f"未知の設定キー: {key}")
+
+    # ---- フェーズ2: 適用（全検証通過後にのみ書き込む） ----
+    if ai_secret is not None:
+        _upsert_setting(db, _AI_KEY, crypto.encrypt(ai_secret), user.username)
+    if retention is not None:
+        _upsert_setting(db, _RETENTION_KEY, str(retention), user.username)
+    if notify_changes:
+        merged = _current_notify(db)  # 既定+既存の上に差分を重ねる（両フラグを常に保持）
+        merged.update(notify_changes)
+        _store_json_setting(db, _NOTIFY_KEY, merged, user.username)
+    if prefs_changes:
+        merged = _load_json_setting(db, _USER_PREFS_KEY, {})
+        merged.update(prefs_changes)
+        _store_json_setting(db, _USER_PREFS_KEY, merged, user.username)
 
     # 監査行を同一トランザクションに含める（commit後のaudit失敗で監査欠落を防ぐ。#35/#63）
     audit_add(db, user, "settings_update", ", ".join(audit_keys))
@@ -365,7 +417,7 @@ def put_settings(req: SettingsUpdate, db: Session = Depends(get_db),
         db.rollback()
         raise HTTPException(409, "設定が競合しました。再試行してください。") from None
 
-    return {"status": "updated", **_settings_payload(db)}
+    return _settings_payload(db)
 
 
 async def _anthropic_check(api_key: str) -> dict:
@@ -405,7 +457,7 @@ async def test_ai_key(req: AiKeyTest | None = None, db: Session = Depends(get_db
         row = db.get(AppSetting, _AI_KEY)
         api_key = crypto.decrypt(row.value) if row and row.value else None
     if not api_key:
-        return {"ok": False, "error": "APIキーが設定されていません"}
+        return {"ok": False, "error": "APIキーが未設定です"}
     return await _anthropic_check(api_key)
 
 
@@ -418,7 +470,7 @@ def delete_ai_key(db: Session = Depends(get_db),
         # 削除（ドメイン変更）と監査を同一トランザクションでcommit
         audit_add(db, user, "ai_key_removed", _AI_KEY)
         db.commit()
-    return {"status": "deleted", "ai": {"configured": False, "masked": None}}
+    return {"ok": True, "ai": {"configured": False, "masked": None}}
 
 
 # ---------- 作業種別マスタ ----------

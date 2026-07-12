@@ -72,7 +72,8 @@ def test_get_settings_initial_defaults(client):
     body = r.json()
     assert body["ai"] == {"configured": False, "masked": None}
     assert body["data_retention_days"] == 365
-    assert body["notify"] == {}
+    # notify は常に2フラグを bool で返す（API契約。未設定時は既定 false/false）
+    assert body["notify"] == {"slack_enabled": False, "teams_enabled": False}
     assert body["user_prefs"] == {}
 
 
@@ -126,15 +127,52 @@ def test_put_ai_key_empty_is_422(client):
 
 
 # ---------- 通知設定・ユーザー設定 ----------
-def test_put_notify_and_user_prefs(client):
+def test_put_notify_nested_and_user_prefs(client):
+    # nested 形式（フロント現行実装の送信形）を受理する
     r = client.put("/api/admin/settings", json={
-        "notify": {"slack": True, "min_level": 2},
+        "notify": {"slack_enabled": True, "teams_enabled": False},
         "user_prefs": {"display_name": "管理者太郎", "theme": "light"},
     })
     assert r.status_code == 200
     got = client.get("/api/admin/settings").json()
-    assert got["notify"] == {"slack": True, "min_level": 2}
+    assert got["notify"] == {"slack_enabled": True, "teams_enabled": False}
     assert got["user_prefs"] == {"display_name": "管理者太郎", "theme": "light"}
+
+
+def test_put_notify_dotted_keys(client):
+    # dotted 形式（API契約の正式形）も等価に受理する
+    r = client.put("/api/admin/settings",
+                   json={"notify.slack_enabled": True, "notify.teams_enabled": True})
+    assert r.status_code == 200
+    assert r.json()["notify"] == {"slack_enabled": True, "teams_enabled": True}
+    # 片方だけ更新しても、もう片方は保持される（部分更新）
+    r2 = client.put("/api/admin/settings", json={"notify.slack_enabled": False})
+    assert r2.json()["notify"] == {"slack_enabled": False, "teams_enabled": True}
+
+
+def test_put_notify_rejects_unknown_subkey(client):
+    assert client.put("/api/admin/settings",
+                      json={"notify.bogus": True}).status_code == 422
+    assert client.put("/api/admin/settings",
+                      json={"notify": {"bogus": True}}).status_code == 422
+
+
+def test_put_notify_rejects_non_bool(client):
+    assert client.put("/api/admin/settings",
+                      json={"notify.slack_enabled": "yes"}).status_code == 422
+
+
+def test_put_matches_frontend_general_save_payload(client):
+    # フロント cwSaveAppSettingsGeneral の送信形（notify nested + data_retention_days）を丸ごと検証
+    r = client.put("/api/admin/settings", json={
+        "notify": {"slack_enabled": True, "teams_enabled": False},
+        "data_retention_days": 400,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["notify"] == {"slack_enabled": True, "teams_enabled": False}
+    assert body["data_retention_days"] == 400
+    assert "ai" in body  # PUT 応答は GET と同形（res.body.ai をフロントが参照する）
 
 
 def test_partial_update_leaves_other_fields(client):
@@ -200,7 +238,7 @@ def test_ai_test_no_key_configured(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False
-    assert "設定されて" in body["error"]
+    assert "未設定" in body["error"]
 
 
 # ---------- AI設定 解除（DELETE） ----------
@@ -209,6 +247,7 @@ def test_delete_ai_key(client):
     assert client.get("/api/admin/settings").json()["ai"]["configured"] is True
     r = client.delete("/api/admin/settings/ai")
     assert r.status_code == 200
+    assert r.json()["ok"] is True
     assert r.json()["ai"] == {"configured": False, "masked": None}
     assert client.get("/api/admin/settings").json()["ai"]["configured"] is False
 
@@ -217,6 +256,7 @@ def test_delete_ai_key_is_idempotent(client):
     # 未設定でもエラーにしない
     r = client.delete("/api/admin/settings/ai")
     assert r.status_code == 200
+    assert r.json()["ok"] is True
     assert r.json()["ai"]["configured"] is False
 
 
