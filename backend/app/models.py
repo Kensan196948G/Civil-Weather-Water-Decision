@@ -58,6 +58,9 @@ class Site(Base):
 
     stations: Mapped[list["Station"]] = relationship(back_populates="site", cascade="all, delete-orphan")
     plans: Mapped[list["WorkPlan"]] = relationship(back_populates="site", cascade="all, delete-orphan")
+    # 現場別の公式リンク（#30 T2-02 / FR-035）。現場物理削除時は cascade で一緒に削除
+    links: Mapped[list["SiteLink"]] = relationship(
+        back_populates="site", cascade="all, delete-orphan", order_by="SiteLink.sort_order")
 
 
 class Station(Base):
@@ -70,6 +73,23 @@ class Station(Base):
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
     site: Mapped["Site"] = relationship(back_populates="stations")
+
+
+class SiteLink(Base):
+    """現場別の公式リンク（#30 T2-02 / FR-035）。川の防災情報など外部公式ページへの導線。
+
+    現場ごとに名称・URL・種別を CRUD 管理し、現場詳細に公式導線として表示する。
+    観測所マスタ正規化(#29)とは独立: リンクは site_id への単純な紐付けで観測データを持たない。
+    URL は https のみ許可する（生成側 API で検証）。表示側でクリック導線に使われるため。
+    """
+    __tablename__ = "site_links"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.id"))
+    label: Mapped[str] = mapped_column(String(100))
+    url: Mapped[str] = mapped_column(String(500))
+    kind: Mapped[str] = mapped_column(String(30), default="river")  # river/weather/wbgt/disaster/other
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    site: Mapped["Site"] = relationship(back_populates="links")
 
 
 class WorkType(Base):
