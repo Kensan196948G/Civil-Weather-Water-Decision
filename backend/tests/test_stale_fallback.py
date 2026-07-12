@@ -88,6 +88,39 @@ async def test_cached_fetch_no_last_good_stays_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failure_cache_expires_quickly_and_recovers(monkeypatch):
+    """失敗由来のSTALEは_FAIL_TTLで失効し、復旧後は成功TTLを待たず最新データに戻る。"""
+    assessment.clear_cache()
+    calls = {"n": 0}
+
+    async def fake_om(lat, lon, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:  # 2回目だけ失敗（1回目OK→失敗→復旧）
+            return {"source_id": "DS-OPEN-METEO", "points": [],
+                    "fetched_at": "2026-06-20T09:00:00Z", "status": "ERROR", "error": "boom"}
+        norm = open_meteo.normalize(OM_SAMPLE)
+        norm.update(status="OK", fetched_at=f"2026-06-20T0{calls['n']}:00:00Z", error=None)
+        return norm
+
+    monkeypatch.setattr(open_meteo, "fetch_forecast", fake_om)
+
+    first = await assessment._cached_fetch(35.7, 139.7, "S98")
+    assert first["status"] == "OK"
+
+    monkeypatch.setattr(assessment, "_TTL", 0)  # 成功キャッシュを失効させ失敗を発生させる
+    second = await assessment._cached_fetch(35.7, 139.7, "S98")
+    assert second["status"] == "STALE"
+
+    # 成功TTLは復活させたまま、失敗TTLだけ0に → STALEは保持されず即座に再試行して復旧
+    monkeypatch.setattr(assessment, "_TTL", 300)
+    monkeypatch.setattr(assessment, "_FAIL_TTL", 0)
+    third = await assessment._cached_fetch(35.7, 139.7, "S98")
+    assert third["status"] == "OK"
+    assert calls["n"] == 3
+    assessment.clear_cache()
+
+
+@pytest.mark.asyncio
 async def test_assess_site_stale_flow(monkeypatch):
     """OK→失効→失敗の流れで、カードが STALE 状態＋確認不能理由を返す。"""
     assessment.clear_cache()
