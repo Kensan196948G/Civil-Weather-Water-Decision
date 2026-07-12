@@ -53,8 +53,10 @@ function points24() {
   return p;
 }
 let lastPost = null;
+let lastReq = null;
 function fetchMock(u, opts) {
   var method = (opts && opts.method) || "GET";
+  lastReq = { url: u, method: method };
   let data = {}, status = 200;
   if (method === "POST" && u.indexOf("/api/sites") >= 0 && u.indexOf("/api/sites/") < 0) {
     lastPost = JSON.parse(opts.body); data = { id: "S07", code: "CW-S07", name: lastPost.name, status: "created" }; status = 201;
@@ -67,6 +69,20 @@ function fetchMock(u, opts) {
     data = { rules: [
       { key: "rain_heavy", label: "降雨 中止検討", unit: "mm/h", desc: "", min: 0, max: 300,
         default: 5.0, value: 5.0, overridden: false, updated_at: null, updated_by: null }] };
+  } else if (u.indexOf("/api/admin/settings/ai/test") >= 0) {
+    lastPost = opts && opts.body ? JSON.parse(opts.body) : null;
+    data = { ok: true, models: ["claude-sonnet-5", "claude-opus-4-8"] };
+  } else if (u.indexOf("/api/admin/settings/ai") >= 0 && method === "DELETE") {
+    data = { ok: true, ai: { configured: false, masked: null } };
+  } else if (u.indexOf("/api/admin/settings") >= 0 && method === "PUT") {
+    lastPost = JSON.parse(opts.body);
+    data = { ai: { configured: true, masked: "****abcd" }, notify: { slack_enabled: true, teams_enabled: false },
+      data_retention_days: 400, user_prefs: {} };
+  } else if (u.indexOf("/api/admin/settings") >= 0) {
+    data = { ai: { configured: false, masked: null }, notify: { slack_enabled: false, teams_enabled: false },
+      data_retention_days: 365, user_prefs: {} };
+  } else if (u.indexOf("/api/admin/audit-logs") >= 0) {
+    data = [{ id: 1, timestamp: "2026-07-12 21:00:00", user: "admin", action: "login", message: "ログイン成功", siteId: null }];
   } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/stations") >= 0) {
     data = [{ id: "ST1", name: "北川 護岸地点 水位観測所", type: "river", rel: "最寄り", lat: 35.766, lon: 139.776 }];
   } else if (u.indexOf("/api/sites/") >= 0) {
@@ -161,6 +177,30 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   ok(sres.ok && lastPost && lastPost.updates && lastPost.updates.rain_heavy === 20.0
     && lastPost.updates.rain_light === null,
     "saveRules が PUT /api/admin/rules へ updates(null=リセット含む) を送信");
+
+  // ---- #79/#80: 管理系API 契約（監査ログ・アプリ設定・AI設定） ----
+  const al = await adapter.auditLogs(200);
+  ok(Array.isArray(al) && al[0].action === "login" && lastReq.url.indexOf("/api/admin/audit-logs?limit=200") >= 0,
+    "auditLogs が GET /api/admin/audit-logs?limit=N で監査証跡を取得");
+  const as = await adapter.appSettings();
+  ok(as && as.ai && as.ai.configured === false && as.data_retention_days === 365,
+    "appSettings が GET /api/admin/settings から設定を取得");
+  const sv = await adapter.saveAppSettings({ notify: { slack_enabled: true, teams_enabled: false }, data_retention_days: 400 });
+  ok(sv.ok && lastReq.method === "PUT" && lastPost.notify && lastPost.notify.slack_enabled === true
+    && lastPost.data_retention_days === 400,
+    "saveAppSettings が PUT /api/admin/settings へ nested 部分更新を送信（#82契約）");
+  const t1 = await adapter.aiTest("sk-test-123");
+  ok(t1.ok && t1.body.ok === true && lastPost && lastPost.api_key === "sk-test-123",
+    "aiTest が api_key 指定で POST /api/admin/settings/ai/test");
+  const t2 = await adapter.aiTest();
+  ok(t2.body.ok === true && lastPost && lastPost.api_key === undefined,
+    "aiTest が省略時は保存済みキーでテスト（body に api_key を含めない）");
+  const dc2 = await adapter.aiDisconnect();
+  ok(dc2.ok && dc2.body.ai.configured === false && lastReq.method === "DELETE",
+    "aiDisconnect が DELETE /api/admin/settings/ai で接続解除");
+  const raw = await adapter.authedFetch("/api/decision-logs/export.csv");
+  ok(raw && raw.ok && lastReq.url.indexOf("/api/decision-logs/export.csv") >= 0,
+    "authedFetch が認証付きの素 fetch 応答を返す（CSVダウンロード用）");
 
   console.log("\nRESULT: " + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);

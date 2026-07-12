@@ -1,0 +1,20 @@
+[Unit]
+Description=Civil-Weather-Water-Decision backend (FastAPI/uvicorn, port 55019)
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kensan
+Group=kensan
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/backend
+EnvironmentFile=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/backend/.env
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 55019
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

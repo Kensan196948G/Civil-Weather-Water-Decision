@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -49,6 +50,16 @@ async def _unhandled(request: Request, exc: Exception):
     logger.exception("Unhandled error: %s %s", request.method, request.url.path, exc_info=exc)
     return JSONResponse(status_code=500,
                         content={"code": "INTERNAL_ERROR", "message": "Internal server error"})
+
+
+# 検証エラー(422)の既定応答は投入値(input)と ctx を反射する。誤ったキー名で送られた
+# APIキー等の秘密値がエコーされ漏洩する経路になるため、loc/msg/type のみへ絞る（#80 high-1）。
+# frontend は detail[].msg を参照するため、この3項目は維持する。
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    safe = [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")}
+            for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": safe})
 
 
 @app.get("/health")

@@ -1,0 +1,16 @@
+[Unit]
+Description=Civil-Weather-Water-Decision Cloudflare Tunnel (cwwd.mirai-dx-platform.com)
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+After=network-online.target cwwd-backend.service cwwd-frontend.service
+Wants=network-online.target cwwd-backend.service cwwd-frontend.service
+
+[Service]
+Type=simple
+User=kensan
+Restart=always
+RestartSec=5
+ExecStart=/usr/local/bin/cloudflared tunnel --config /home/kensan/.cloudflared/config-cwwd.yml run cwwd-civil-weather-water
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

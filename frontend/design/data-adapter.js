@@ -282,6 +282,44 @@
           return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
         });
       },
+      // ---- #79/#80: 管理系API（監査ログ・アプリ設定・AI設定） ----
+      auditLogs: function (limit) {
+        return j("/api/admin/audit-logs" + (limit ? "?limit=" + limit : ""));
+      },
+      appSettings: function () { return j("/api/admin/settings"); },
+      saveAppSettings: function (updates) {
+        // saveRules と同様、エラー詳細表示のため status も返す（bodyはフラットなwhitelistキー）
+        return _fetch(url("/api/admin/settings"), {
+          method: "PUT",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+          body: JSON.stringify(updates)
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
+      aiTest: function (apiKey) {
+        // api_key 省略時はサーバ保存済みキーで接続テスト（HTTP 200 で {ok:bool} が返る契約）
+        return _fetch(url("/api/admin/settings/ai/test"), {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+          body: JSON.stringify(apiKey ? { api_key: apiKey } : {})
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
+      aiDisconnect: function () {
+        return _fetch(url("/api/admin/settings/ai"), {
+          method: "DELETE", headers: authHeaders()
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
+      // 認証ヘッダ付き素の fetch（CSVダウンロード等、JSON以外の応答向け）
+      authedFetch: function (p, o) {
+        o = o || {};
+        o.headers = Object.assign({}, authHeaders(), o.headers || {});
+        return _fetch(url(p), o);
+      },
       mapDashToSites: mapDashToSites, mapSources: mapSources, _state: CW
     };
   }
@@ -304,29 +342,84 @@
         if (show && was !== "block") cwLoadSettings(); // 表示のたびに最新値を取得
       }
     }
+    // ---- メニュー体系（#79: 5グループ+ダッシュボード。単一の真実） ----
+    // native: dc標準タブ（narrow幅のdcナビに既存） / go: 遷移先screen / preset: 作業種別プリセット
+    // roles: 表示を許可するロール（未指定は全ロール）
+    var CW_MENU = [
+      { items: [{ key: "dashboard", label: "ダッシュボード", native: true }] },
+      { title: "現場管理", items: [
+        { key: "sites-list", label: "現場一覧" },
+        { key: "register", label: "＋現場登録" }] },
+      { title: "気象・海象データ", items: [
+        { key: "wx-national", label: "気象データ：全国版" },
+        { key: "marine-national", label: "海象データ：全国版" }] },
+      { title: "施工判定", items: [
+        { key: "decision", label: "作業判断", native: true },
+        { key: "concrete-cast", label: "コンクリート打設", go: "decision", preset: "concrete" },
+        { key: "marine-work", label: "海上作業" },
+        { key: "wbgt", label: "熱中症・WBGT", native: true }] },
+      { title: "分析", items: [
+        { key: "history", label: "判断履歴", native: true },
+        { key: "analytics", label: "過去データ分析" },
+        { key: "wave50", label: "50年確率波" }] },
+      { title: "管理", items: [
+        { key: "settings", label: "閾値管理", roles: ["admin", "tech_manager"] },
+        { key: "source", label: "データ取得状況", native: true },
+        { key: "reports", label: "レポート出力" },
+        { key: "audit", label: "監査ログ", roles: ["admin", "tech_manager"] },
+        { key: "app-settings", label: "設定", roles: ["admin"] }] },
+    ];
+    function cwFindItem(key) {
+      for (var gi = 0; gi < CW_MENU.length; gi++) {
+        var items = CW_MENU[gi].items;
+        for (var ii = 0; ii < items.length; ii++) if (items[ii].key === key) return items[ii];
+      }
+      return null;
+    }
+    var cwActiveKey = null; // プリセット項目(コンクリート打設等)の選択網掛け維持用
+    function cwMenuGo(key) {
+      var it = cwFindItem(key);
+      if (!it || !regInst) return;
+      cwActiveKey = key;
+      try {
+        regInst.go(it.go || it.key);
+        if (it.preset) { // 作業判断画面を対象種別で開く（例: コンクリート打設）
+          regInst.setState({ dform: Object.assign({}, regInst.state.dform, { workType: it.preset }) });
+        }
+      } catch (e) {}
+    }
     function cwNavItem(inst, key, label) {
       var active = inst.state.screen === key;
       return {
         label: label, weight: active ? 800 : 600,
         color: active ? "#13344f" : "#697A88", bar: active ? "#13344f" : "transparent",
-        onClick: function () { inst.go(key); },
+        onClick: function () { cwMenuGo(key); },
         badge: 0, badgeShow: "none", badgeBg: "#c62828", badgeColor: "#fff"
       };
     }
     function cwInjectNav(inst, vals) {
+      // narrow幅フォールバック（dc上部タブ）: カスタム画面をロール別に追加（#34/#79）
       if (!vals.nav || !vals.nav.concat) return;
-      var extra = [cwNavItem(inst, "register", "現場登録")];
-      // システム設定は閲覧権限のあるロール（admin/tech_manager）のみ表示（#34）
-      if (cwUser && (cwUser.role === "admin" || cwUser.role === "tech_manager")) {
-        extra.push(cwNavItem(inst, "settings", "システム設定"));
-      }
+      var role = cwUser ? cwUser.role : "";
+      var extra = [];
+      CW_MENU.forEach(function (g) {
+        g.items.forEach(function (it) {
+          if (it.native || it.preset) return; // dc標準タブ/プリセット項目は追加しない
+          if (it.roles && (!role || it.roles.indexOf(role) < 0)) return;
+          extra.push(cwNavItem(inst, it.key, it.label));
+        });
+      });
       vals.nav = vals.nav.concat(extra);
     }
     var adapter = createAdapter({
       base: apiBase,
       fetch: window.fetch.bind(window),
-      open: window.open.bind(window),
-      onUnauthorized: function () { showLogin(); }, // 401 で自動ログアウト→ログイン画面
+      // CSV等のエクスポートURLは window.open だと Authorization ヘッダが付かず401になるため、
+      // 認証付き fetch→Blob ダウンロードへ差し替える（#79。createAdapter/契約テストは無改修）
+      open: function (u) { cwAuthedDownload(u); },
+      // 401: トークン破棄＋機微画面(監査ログ/設定)の残留データを消してからログイン画面へ
+      // （前ユーザーの表示が次ユーザーへ漏れない。#83 対抗レビュー[high]）
+      onUnauthorized: function () { adapter.logout(); cwResetSensitiveUi(); showLogin(); },
       hideNav: ["現場詳細"], // 現場詳細はナビタブを廃し、現場クリックのドリルダウン専用にする
       bump: function () {
         try {
@@ -336,7 +429,8 @@
       },
       afterRender: function (inst, vals) {
         regInst = inst;            // 登録成功後の画面遷移に使用
-        cwInjectNav(inst, vals);   // ナビに「現場登録」項目を追加
+        cwInjectNav(inst, vals);   // narrow幅: dc上部タブへカスタム画面を追加
+        cwRenderSidebar(inst);     // PC幅: グループ化サイドメニュー（#79）
         cwToggleRegScreen(inst.state.screen === "register"); // 該当画面のみパネル表示
         // データ更新でダッシュボード地図を作り直す（dc キャッシュは token='all' で再生成されないため）
         if (inst._dashMap && inst.__cwDashVer !== adapter._state.ver) {
@@ -344,8 +438,9 @@
           inst._dashMap = null; inst.__cwDashVer = adapter._state.ver;
         }
         cwToggleSourceNote(inst.state.screen === "source"); // データソース画面の更新間隔注記
-        cwToggleSettingsScreen(inst.state.screen === "settings"); // システム設定画面（#34）
+        cwToggleSettingsScreen(inst.state.screen === "settings"); // 閾値管理画面（#34）
         cwSyncWbgtScreen(inst);                              // WBGT画面の地図
+        cwSyncScreens(inst);                                 // #79 新画面群の表示同期
       }
     });
 
@@ -529,7 +624,7 @@
       screen.id = "cw-settings-screen";
       screen.innerHTML =
         '<div class="cw-set-card">'
-        + "<h2>システム設定 — 判定閾値（会社基準）</h2>"
+        + "<h2>閾値管理 — 判定閾値（会社基準）</h2>"
         + '<p class="sub">注意・中止検討の判定に使う閾値です。変更は全現場の判定に即時反映されます（監査ログに記録）。</p>'
         + '<div id="cw-set-list"></div>'
         + '<p id="cw-set-note"></p>'
@@ -663,6 +758,641 @@
       });
     }
 
+    // ================= #79: グループ化サイドバー ＋ 新画面群 =================
+
+    function installSidebar() {
+      if (document.getElementById("cw-sidebar")) return;
+      var el = document.createElement("div");
+      el.id = "cw-sidebar";
+      document.body.appendChild(el);
+      el.addEventListener("click", function (e) {
+        var t = e.target;
+        while (t && t !== el && !(t.classList && t.classList.contains("cw-sb-i"))) t = t.parentNode;
+        if (t && t !== el && t.getAttribute("data-key")) cwMenuGo(t.getAttribute("data-key"));
+      });
+    }
+    var cwSbSig = "";
+    function cwRenderSidebar(inst) {
+      var el = document.getElementById("cw-sidebar");
+      if (!el) return;
+      var screen = inst.state.screen;
+      var act = screen; // 通常は screen キーがそのまま選択項目
+      if (cwActiveKey) { // プリセット項目（例: コンクリート打設→decision）は明示クリックを優先表示
+        var ai = cwFindItem(cwActiveKey);
+        if (ai && (ai.go || ai.key) === screen) act = cwActiveKey;
+      }
+      var role = cwUser ? cwUser.role : "";
+      var sig = screen + "|" + act + "|" + role;
+      if (sig === cwSbSig) return; // 変化がなければ再構築しない（afterRender毎の負荷回避）
+      cwSbSig = sig;
+      el.innerHTML = CW_MENU.map(function (g) {
+        var items = g.items.filter(function (it) {
+          return !it.roles || (role && it.roles.indexOf(role) >= 0);
+        });
+        if (!items.length) return "";
+        return (g.title ? '<div class="cw-sb-h">' + esc(g.title) + "</div>" : "")
+          + items.map(function (it) {
+            return '<button type="button" class="cw-sb-i' + (act === it.key ? " on" : "")
+              + '" data-key="' + esc(it.key) + '">' + esc(it.label) + "</button>";
+          }).join("");
+      }).join("");
+    }
+
+    // ---- 画面フレームワーク（#79 新画面の器と表示同期） ----
+    function cwMakeScreen(id, inner) {
+      if (document.getElementById(id)) return null;
+      var d = document.createElement("div");
+      d.id = id;
+      d.className = "cw-screen";
+      d.innerHTML = inner;
+      document.body.appendChild(d);
+      return d;
+    }
+    var CW_SCREENS = {}; // key -> {id, show(inst), live}
+    var cwScreenVer = {};
+    function cwSyncScreens(inst) {
+      for (var k in CW_SCREENS) {
+        var sc = CW_SCREENS[k];
+        var el = document.getElementById(sc.id);
+        if (!el) continue;
+        var on = inst.state.screen === k;
+        var was = el.style.display === "block";
+        el.style.display = on ? "block" : "none";
+        // 表示された時、または（live画面は）データ版数が進んだ時に再描画
+        if (on && sc.show && (!was || (sc.live && cwScreenVer[k] !== adapter._state.ver))) {
+          cwScreenVer[k] = adapter._state.ver;
+          try { sc.show(inst); } catch (e) {}
+        }
+      }
+    }
+
+    // ---- 認証付きダウンロード（CSV等。window.open ではトークンが付かないため） ----
+    function cwAuthedDownload(fullUrl, filename) {
+      var t = adapter.getToken();
+      fetch(fullUrl, { headers: t ? { Authorization: "Bearer " + t } : {} }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.blob();
+      }).then(function (b) {
+        var name = filename;
+        if (!name) {
+          var pathPart = String(fullUrl).split("?")[0];
+          name = pathPart.substring(pathPart.lastIndexOf("/") + 1) || "export.csv";
+        }
+        cwSaveBlob(b, name);
+      }).catch(function () { alert("ダウンロードに失敗しました（権限またはAPIエラー）"); });
+    }
+    function cwSaveBlob(blob, filename) {
+      var u = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = u; a.download = filename;
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(u); }, 250);
+    }
+    function cwCsvText(rows) { // Excel(JP)向けBOM付きCSV
+      function cell(v) {
+        var s = String(v == null ? "" : v);
+        // 表計算ソフトの式注入(=,+,-,@等で始まる値)を無害化（#83 対抗レビュー[medium]）
+        if (/^\s*[=+\-@\t\r]/.test(s)) s = "'" + s;
+        return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }
+      return "﻿" + rows.map(function (r) { return r.map(cell).join(","); }).join("\r\n");
+    }
+
+    // 機微画面（監査ログ・設定）の表示データと画面状態を破棄する（401時。#83 対抗レビュー[high]）
+    function cwResetSensitiveUi() {
+      cwAuditRows = null;
+      cwUser = null;
+      cwSbSig = "";       // サイドバーをロールなし状態で再構築させる
+      cwScreenVer = {};   // 次回表示時に必ず再読込させる
+      var audit = document.getElementById("cw-audit-body");
+      if (audit) audit.innerHTML = "";
+      var q = document.getElementById("cw-audit-q");
+      if (q) q.value = "";
+      var key = document.getElementById("cw-as-ai-key");
+      if (key) key.value = "";
+      var st = document.getElementById("cw-as-ai-status");
+      if (st) st.textContent = "—";
+      var u = document.getElementById("cw-as-user");
+      if (u) u.textContent = "";
+      ["cw-as-msg", "cw-as-ai-msg"].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = "";
+      });
+    }
+
+    // ---- 現場一覧（現場管理） ----
+    var cwWorkNames = null;
+    function cwEnsureWorkNames(cb) {
+      if (cwWorkNames) { cb(cwWorkNames); return; }
+      adapter.workTypes().then(function (w) {
+        cwWorkNames = {};
+        (w || []).forEach(function (x) { cwWorkNames[x.id] = x.name; });
+        cb(cwWorkNames);
+      }).catch(function () { cb({}); });
+    }
+    var CW_LV = ["通常", "注意", "中止検討", "確認不能"];
+    var CW_LVC = ["#2e7d32", "#c2920a", "#c62828", "#5a6b7b"];
+    function installSitesScreen() {
+      var el = cwMakeScreen("cw-sites-screen",
+        '<div class="cw-pg"><h2>現場一覧</h2>'
+        + '<p class="sub">登録済みの全現場。行クリックで現場詳細（気象・河川・判定）へ移動します。</p>'
+        + '<div class="cw-pg-bar"><button type="button" class="cw-btn" id="cw-sites-reload">再読込</button>'
+        + '<button type="button" class="cw-btn cw-btn-pri" id="cw-sites-new">＋現場登録</button>'
+        + '<span class="cw-msg" id="cw-sites-msg"></span></div>'
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(100vh - 220px)" id="cw-sites-body"></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-sites-new").addEventListener("click", function () { cwMenuGo("register"); });
+      el.querySelector("#cw-sites-reload").addEventListener("click", function () {
+        var m = document.getElementById("cw-sites-msg");
+        if (m) m.textContent = "更新中…";
+        adapter.loadDashboard().then(function () {
+          if (m) m.textContent = "";
+          cwRenderSites();
+        }).catch(function () { if (m) m.textContent = "更新に失敗しました"; });
+      });
+      el.querySelector("#cw-sites-body").addEventListener("click", function (e) {
+        var t = e.target;
+        while (t && !t.getAttribute) t = t.parentNode;
+        while (t && t.tagName !== "TR") t = t.parentNode;
+        var id = t && t.getAttribute("data-id");
+        if (id && regInst) { cwActiveKey = null; try { regInst.openSite(id); } catch (e2) {} }
+      });
+    }
+    function cwRenderSites() {
+      var box = document.getElementById("cw-sites-body");
+      if (!box) return;
+      var meta = adapter._state.meta;
+      if (!meta || !meta.length) {
+        box.innerHTML = '<div class="cw-empty">現場データを読込中です（数秒後に再読込してください）</div>';
+        return;
+      }
+      var dash = {};
+      (adapter._state.sites || []).forEach(function (s) { dash[s.id] = s; });
+      cwEnsureWorkNames(function (wn) {
+        box.innerHTML = '<table class="cw-tbl"><thead><tr><th>ID</th><th>現場名</th><th>所在地</th>'
+          + "<th>種別</th><th>区分</th><th>担当</th><th>状態</th><th>現在判定</th></tr></thead><tbody>"
+          + meta.map(function (s) {
+            var d = dash[s.id];
+            // API由来 level は 0-3 のみ配列参照（想定外値は「—」へフォールバック）
+            var lvOk = d && CW_LV[d.level] != null && CW_LVC[d.level] != null;
+            var lvHtml = lvOk
+              ? '<span class="cw-badge" style="background:' + CW_LVC[d.level] + '18;color:' + CW_LVC[d.level] + '">' + CW_LV[d.level] + "</span>"
+              : "—";
+            return '<tr class="click" data-id="' + esc(s.id) + '"><td>' + esc(s.id) + "</td><td><b>"
+              + esc(s.name) + "</b></td><td>" + esc(s.loc || "") + "</td><td>" + esc(wn[s.work] || s.work || "")
+              + "</td><td>" + esc(s.project || "") + "</td><td>" + esc(s.manager || "") + "</td><td>"
+              + (s.status === "active" ? "稼働中" : "休止") + "</td><td>" + lvHtml + "</td></tr>";
+          }).join("") + "</tbody></table>";
+      });
+    }
+
+    // ---- 気象データ：全国版（気象・海象データ） ----
+    var CW_WX_COLS = [
+      { k: "name", label: "現場", num: false },
+      { k: "tempHi", label: "最高気温", num: true, unit: "℃" },
+      { k: "tempLo", label: "最低気温", num: true, unit: "℃" },
+      { k: "rainNow", label: "現在雨量", num: true, unit: "mm/h" },
+      { k: "rainPeak", label: "ピーク雨量", num: true, unit: "mm/h" },
+      { k: "windMax", label: "最大風速", num: true, unit: "m/s" },
+      { k: "gust", label: "突風", num: true, unit: "m/s" },
+      { k: "wbgt", label: "WBGT", num: true, unit: "" },
+      { k: "updated", label: "更新", num: false },
+    ];
+    var cwWxSort = { k: "wbgt", desc: true };
+    function installWxScreen() {
+      var el = cwMakeScreen("cw-wx-screen",
+        '<div class="cw-pg"><h2>気象データ：全国版</h2>'
+        + '<p class="sub">全登録現場の気象概況（Open-Meteo 1時間毎予報＋気象庁警報を判定に使用）。列見出しクリックで並べ替え。</p>'
+        + '<div class="cw-pg-bar"><button type="button" class="cw-btn" id="cw-wx-reload">再読込</button>'
+        + '<span class="cw-msg" id="cw-wx-msg"></span></div>'
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(100vh - 220px)" id="cw-wx-body"></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-wx-reload").addEventListener("click", function () {
+        var m = document.getElementById("cw-wx-msg");
+        if (m) m.textContent = "更新中…";
+        adapter.loadDashboard().then(function () {
+          if (m) m.textContent = "";
+          cwRenderWx();
+        }).catch(function () { if (m) m.textContent = "更新に失敗しました"; });
+      });
+      el.querySelector("#cw-wx-body").addEventListener("click", function (e) {
+        var t = e.target;
+        while (t && t.tagName !== "TH" && t.tagName !== "BODY") t = t.parentNode;
+        var k = t && t.getAttribute && t.getAttribute("data-k");
+        if (!k) return;
+        cwWxSort = { k: k, desc: cwWxSort.k === k ? !cwWxSort.desc : true };
+        cwRenderWx();
+      });
+    }
+    function cwRenderWx() {
+      var box = document.getElementById("cw-wx-body");
+      if (!box) return;
+      var sites = adapter._state.sites;
+      if (!sites || !sites.length) {
+        box.innerHTML = '<div class="cw-empty">気象データを読込中です（数秒後に再読込してください）</div>';
+        return;
+      }
+      var k = cwWxSort.k, desc = cwWxSort.desc;
+      var rows = sites.slice().sort(function (a, b) {
+        var x = a[k], y = b[k];
+        if (x == null && y == null) return 0; // 両方欠測は同順（比較の対称性を保つ）
+        if (x == null) return 1;
+        if (y == null) return -1;
+        if (x < y) return desc ? 1 : -1;
+        if (x > y) return desc ? -1 : 1;
+        return 0;
+      });
+      box.innerHTML = '<table class="cw-tbl"><thead><tr>' + CW_WX_COLS.map(function (c) {
+        var arrow = cwWxSort.k === c.k ? (cwWxSort.desc ? " ▼" : " ▲") : "";
+        return '<th class="sort" data-k="' + c.k + '">' + c.label + arrow + "</th>";
+      }).join("") + "</tr></thead><tbody>"
+        + rows.map(function (s) {
+          return "<tr>" + CW_WX_COLS.map(function (c) {
+            if (c.k === "name") {
+              return "<td><b>" + esc(s.name) + '</b><div style="font-size:10.5px;color:#7e8c99">' + esc(s.loc || "") + "</div></td>";
+            }
+            var v = s[c.k];
+            var txt = v == null ? "—" : (c.num ? esc(v) + (c.unit ? " " + c.unit : "") : esc(v));
+            if (c.k === "wbgt" && v != null) {
+              var m = wbgtMeta(v);
+              txt = '<b style="color:' + m.color + '">' + esc(v) + "</b> " + m.label;
+            }
+            return '<td class="' + (c.num ? "cw-num" : "") + '">' + txt + "</td>";
+          }).join("") + "</tr>";
+        }).join("") + "</tbody></table>";
+    }
+
+    // ---- 過去データ分析（分析） ----
+    function installAnalyticsScreen() {
+      cwMakeScreen("cw-analytics-screen",
+        '<div class="cw-pg"><h2>過去データ分析</h2>'
+        + '<p class="sub">判断履歴の集計（現時点はブラウザ内集計）。Neon 蓄積時系列を用いた統計・傾向分析は #72 段6 で拡充予定。</p>'
+        + '<div id="cw-an-body"></div></div>');
+    }
+    function cwBarRows(counts, colorFn) {
+      var keys = Object.keys(counts);
+      var max = 1;
+      keys.forEach(function (kk) { if (counts[kk] > max) max = counts[kk]; });
+      return keys.sort(function (a, b) { return counts[b] - counts[a]; }).map(function (kk) {
+        var c = counts[kk];
+        var col = colorFn ? colorFn(kk) : "#16527d";
+        return '<div style="display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12px">'
+          + '<span style="min-width:110px;font-weight:700;color:#3a4854">' + esc(kk) + "</span>"
+          + '<div style="flex:1;background:#f0f3f6;border-radius:5px;height:14px;overflow:hidden">'
+          + '<div style="width:' + Math.round(c / max * 100) + "%;height:100%;background:" + col + '"></div></div>'
+          + '<b style="min-width:34px;text-align:right">' + c + "</b></div>";
+      }).join("");
+    }
+    function cwRenderAnalytics() {
+      var box = document.getElementById("cw-an-body");
+      if (!box) return;
+      var h = adapter._state.history;
+      if (!h || !h.length) {
+        box.innerHTML = '<div class="cw-pg-card"><div class="cw-empty">判断履歴がまだありません。作業判断画面から判断を記録すると集計されます。</div></div>';
+        return;
+      }
+      var byAction = {}, byLevel = {}, bySite = {}, byMonth = {};
+      h.forEach(function (r) {
+        byAction[r.action || "不明"] = (byAction[r.action || "不明"] || 0) + 1;
+        var lv = CW_LV[r.level] || String(r.level);
+        byLevel[lv] = (byLevel[lv] || 0) + 1;
+        bySite[r.site || r.siteId] = (bySite[r.site || r.siteId] || 0) + 1;
+        var m = String(r.datetime || "").split("/")[0];
+        if (m) byMonth[m + "月"] = (byMonth[m + "月"] || 0) + 1;
+      });
+      var lvColor = { "通常": CW_LVC[0], "注意": CW_LVC[1], "中止検討": CW_LVC[2], "確認不能": CW_LVC[3] };
+      box.innerHTML =
+        '<div class="cw-pg-card"><h3 style="margin:0 0 4px;font-size:13.5px;color:#13344f">総判断数: '
+        + h.length + " 件</h3></div>"
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 10px;font-size:13.5px;color:#13344f">判断アクション別</h3>'
+        + cwBarRows(byAction) + "</div>"
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 10px;font-size:13.5px;color:#13344f">判定レベル別</h3>'
+        + cwBarRows(byLevel, function (kk) { return lvColor[kk] || "#16527d"; }) + "</div>"
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 10px;font-size:13.5px;color:#13344f">現場別（判断回数）</h3>'
+        + cwBarRows(bySite) + "</div>"
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 10px;font-size:13.5px;color:#13344f">月別件数</h3>'
+        + cwBarRows(byMonth) + "</div>";
+    }
+
+    // ---- レポート出力（管理） ----
+    function installReportsScreen() {
+      var el = cwMakeScreen("cw-reports-screen",
+        '<div class="cw-pg"><h2>レポート出力</h2>'
+        + '<p class="sub">CSV（Excel対応・BOM付き）でダウンロードします。</p>'
+        + '<div id="cw-rep-body"></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-rep-body").addEventListener("click", function (e) {
+        var t = e.target;
+        var act = t && t.getAttribute && t.getAttribute("data-act");
+        if (!act) return;
+        var msg = document.getElementById("cw-rep-msg");
+        if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "生成中…"; }
+        function done(err) {
+          if (!msg) return;
+          if (err) { msg.style.color = "#c62828"; msg.textContent = err; }
+          else { msg.style.color = "#2e7d32"; msg.textContent = "ダウンロードを開始しました"; }
+        }
+        if (act === "decision-csv") {
+          adapter.authedFetch("/api/decision-logs/export.csv").then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.blob();
+          }).then(function (b) { cwSaveBlob(b, "decision_logs.csv"); done(); })
+            .catch(function () { done("判断履歴CSVの取得に失敗しました"); });
+        } else if (act === "sites-csv") {
+          var meta = adapter._state.meta || [];
+          if (!meta.length) { done("現場データが未読込です"); return; }
+          var rows = [["site_id", "code", "name", "loc", "work_type", "project", "manager", "status", "lat", "lon"]];
+          meta.forEach(function (s) {
+            rows.push([s.id, s.code, s.name, s.loc, s.work, s.project, s.manager, s.status, s.lat, s.lon]);
+          });
+          cwSaveBlob(new Blob([cwCsvText(rows)], { type: "text/csv" }), "sites.csv");
+          done();
+        } else if (act === "audit-csv") {
+          adapter.auditLogs(1000).then(function (rows) {
+            if (!rows || !rows.map) { done("監査ログの取得に失敗しました（権限を確認）"); return; }
+            var out = [["id", "timestamp", "user", "action", "message", "site_id"]];
+            rows.forEach(function (r) { out.push([r.id, r.timestamp, r.user, r.action, r.message, r.siteId]); });
+            cwSaveBlob(new Blob([cwCsvText(out)], { type: "text/csv" }), "audit_logs.csv");
+            done();
+          }).catch(function () { done("監査ログの取得に失敗しました"); });
+        }
+      });
+    }
+    function cwRenderReports() {
+      var box = document.getElementById("cw-rep-body");
+      if (!box) return;
+      var role = cwUser ? cwUser.role : "";
+      var isAdminish = role === "admin" || role === "tech_manager";
+      function card(title, desc, act, disabled) {
+        return '<div class="cw-pg-card" style="display:flex;align-items:center;gap:14px">'
+          + '<div style="flex:1"><div style="font-size:13.5px;font-weight:800;color:#13344f">' + title + "</div>"
+          + '<div style="font-size:11.5px;color:#7e8c99;margin-top:3px">' + desc + "</div></div>"
+          + (disabled
+            ? '<span style="font-size:11px;color:#8a99a5">権限なし（admin/技術管理者）</span>'
+            : '<button type="button" class="cw-btn cw-btn-pri" data-act="' + act + '">CSVダウンロード</button>')
+          + "</div>";
+      }
+      box.innerHTML =
+        card("判断履歴レポート", "全判断履歴（判断ID・現場・種別・レベル・アクション・記録者・日時）", "decision-csv", false)
+        + card("現場一覧レポート", "登録現場のマスタ情報（ID・名称・所在地・種別・担当・状態・座標）", "sites-csv", false)
+        + card("監査ログレポート", "操作監査の証跡（時刻・ユーザー・操作・内容・現場）最新1000件", "audit-csv", !isAdminish)
+        + '<div class="cw-msg" id="cw-rep-msg"></div>';
+    }
+
+    // ---- 監査ログ（管理） ----
+    var cwAuditRows = null;
+    function installAuditScreen() {
+      var el = cwMakeScreen("cw-audit-screen",
+        '<div class="cw-pg"><h2>監査ログ</h2>'
+        + '<p class="sub">ログイン・設定変更・判定・判断記録・CSV出力などの操作証跡（最新200件）。</p>'
+        + '<div class="cw-pg-bar"><input type="text" id="cw-audit-q" placeholder="絞り込み（ユーザー/操作/内容）"'
+        + ' style="flex:1;min-width:200px;padding:9px 10px;border:1px solid #d4dce2;border-radius:7px;'
+        + "font:400 13px 'Noto Sans JP',sans-serif\">"
+        + '<button type="button" class="cw-btn" id="cw-audit-reload">再読込</button></div>'
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(100vh - 230px)" id="cw-audit-body"></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-audit-reload").addEventListener("click", cwLoadAudit);
+      el.querySelector("#cw-audit-q").addEventListener("input", cwRenderAuditRows);
+    }
+    function cwLoadAudit() {
+      var box = document.getElementById("cw-audit-body");
+      if (!box) return;
+      box.innerHTML = '<div class="cw-empty">読込中…</div>';
+      adapter.auditLogs(200).then(function (rows) {
+        if (!rows || !rows.map) {
+          box.innerHTML = '<div class="cw-empty">取得できませんでした（権限またはAPIエラー）</div>';
+          return;
+        }
+        cwAuditRows = rows;
+        cwRenderAuditRows();
+      }).catch(function () {
+        box.innerHTML = '<div class="cw-empty">取得に失敗しました（通信エラー）</div>';
+      });
+    }
+    function cwRenderAuditRows() {
+      var box = document.getElementById("cw-audit-body");
+      if (!box || !cwAuditRows) return;
+      var qEl = document.getElementById("cw-audit-q");
+      var q = (qEl && qEl.value || "").toLowerCase();
+      var rows = !q ? cwAuditRows : cwAuditRows.filter(function (r) {
+        return ((r.user || "") + " " + (r.action || "") + " " + (r.message || "") + " " + (r.siteId || ""))
+          .toLowerCase().indexOf(q) >= 0;
+      });
+      if (!rows.length) {
+        box.innerHTML = '<div class="cw-empty">該当する監査ログがありません</div>';
+        return;
+      }
+      box.innerHTML = '<table class="cw-tbl"><thead><tr><th>時刻</th><th>ユーザー</th><th>操作</th>'
+        + "<th>内容</th><th>現場</th></tr></thead><tbody>"
+        + rows.map(function (r) {
+          return "<tr><td style=\"white-space:nowrap\">" + esc(r.timestamp) + "</td><td>" + esc(r.user || "—")
+            + '</td><td><span class="cw-badge" style="background:#eef2f6;color:#3a4854">' + esc(r.action) + "</span></td><td>"
+            + esc(r.message || "") + "</td><td>" + esc(r.siteId || "") + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+
+    // ---- 設定（管理: ユーザー設定/通知設定/データ保存期間/AI設定 #80連動） ----
+    function installAppSettingsScreen() {
+      var el = cwMakeScreen("cw-appset-screen",
+        '<div class="cw-pg"><h2>設定</h2>'
+        + '<p class="sub">アプリ全体の設定（Neon PostgreSQL に保存・変更は監査ログに記録）。</p>'
+
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">👤 ユーザー設定</h3>'
+        + '<div id="cw-as-user" style="font-size:12.5px;color:#3a4854"></div>'
+        + '<div style="font-size:11px;color:#7e8c99;margin-top:6px">ユーザーの追加・ロール変更は今後のリリースで対応予定です。</div></div>'
+
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">🔔 通知設定</h3>'
+        + '<div class="cw-as-row"><label>Slack 通知</label><input type="checkbox" id="cw-as-slack"></div>'
+        + '<div class="cw-as-row"><label>Teams 通知</label><input type="checkbox" id="cw-as-teams"></div>'
+        + '<div style="font-size:11px;color:#7e8c99">Webhook URL はサーバ側環境変数（SLACK_WEBHOOK_URL / TEAMS_WEBHOOK_URL）で設定します。</div></div>'
+
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">🗄️ データ保存期間</h3>'
+        + '<div class="cw-as-row"><label>保存期間（日）</label>'
+        + '<input type="number" id="cw-as-days" min="30" max="3650" step="1" style="width:110px"> '
+        + '<span style="font-size:11px;color:#7e8c99">30〜3650日。判定結果・監査ログ等の保持期間（クリーンアップジョブは今後実装）。</span></div></div>'
+
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">🤖 AI設定（Claude API）</h3>'
+        + '<div class="cw-as-row"><label>状態</label><span id="cw-as-ai-status" style="font-weight:700">—</span></div>'
+        + '<div class="cw-as-row"><label>APIキー</label>'
+        + '<input type="password" id="cw-as-ai-key" class="cw-as-key" placeholder="sk-ant-..." autocomplete="off"></div>'
+        + '<div class="cw-as-row" style="justify-content:flex-end;gap:8px">'
+        + '<button type="button" class="cw-btn" id="cw-as-ai-test">API接続テスト</button>'
+        + '<button type="button" class="cw-btn cw-btn-pri" id="cw-as-ai-save">API設定保存</button>'
+        + '<button type="button" class="cw-btn cw-btn-danger" id="cw-as-ai-del">API接続解除</button></div>'
+        + '<div class="cw-msg" id="cw-as-ai-msg"></div>'
+        + '<div style="font-size:11px;color:#7e8c99">キーは暗号化してDBに保存され、画面には末尾4桁のみ表示されます。判定結果の現場向け文章生成（#68）で使用予定。</div></div>'
+
+        + '<div class="cw-pg-bar" style="justify-content:flex-end">'
+        + '<span class="cw-msg" id="cw-as-msg" style="flex:1"></span>'
+        + '<button type="button" class="cw-btn" id="cw-as-reload">再読込</button>'
+        + '<button type="button" class="cw-btn cw-btn-pri" id="cw-as-save">設定を保存</button></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-as-reload").addEventListener("click", cwLoadAppSettings);
+      el.querySelector("#cw-as-save").addEventListener("click", cwSaveAppSettingsGeneral);
+      el.querySelector("#cw-as-ai-test").addEventListener("click", cwAiTest);
+      el.querySelector("#cw-as-ai-save").addEventListener("click", cwAiSave);
+      el.querySelector("#cw-as-ai-del").addEventListener("click", cwAiDisconnect);
+    }
+    function cwSetAiStatus(ai) {
+      var st = document.getElementById("cw-as-ai-status");
+      if (!st) return;
+      if (ai && ai.configured) {
+        st.textContent = "接続設定済み（" + (ai.masked || "****") + "）";
+        st.style.color = "#2e7d32";
+      } else {
+        st.textContent = "未設定";
+        st.style.color = "#8a99a5";
+      }
+    }
+    function cwLoadAppSettings() {
+      var u = document.getElementById("cw-as-user");
+      if (u && cwUser) {
+        u.textContent = (cwUser.displayName || cwUser.username || "") + "（" + roleLabel(cwUser.role) + "）"
+          + (cwUser.department ? " ・ " + cwUser.department : "");
+      }
+      var msg = document.getElementById("cw-as-msg");
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "読込中…"; }
+      adapter.appSettings().then(function (d) {
+        if (!d || d.detail) {
+          if (msg) {
+            msg.style.color = "#c62828";
+            msg.textContent = "設定APIを利用できません（" + ((d && d.detail) || "権限/デプロイ状況を確認") + "）";
+          }
+          return;
+        }
+        var slack = document.getElementById("cw-as-slack");
+        var teams = document.getElementById("cw-as-teams");
+        var days = document.getElementById("cw-as-days");
+        if (slack) slack.checked = !!(d.notify && d.notify.slack_enabled);
+        if (teams) teams.checked = !!(d.notify && d.notify.teams_enabled);
+        if (days) days.value = d.data_retention_days != null ? d.data_retention_days : 365;
+        cwSetAiStatus(d.ai);
+        if (msg) msg.textContent = "";
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "設定の取得に失敗しました（通信エラー）"; }
+      });
+    }
+    function cwSaveAppSettingsGeneral() {
+      var msg = document.getElementById("cw-as-msg");
+      var days = parseInt(document.getElementById("cw-as-days").value, 10);
+      // PUT /api/admin/settings は nested 形式（PR #82 の SettingsUpdate: extra=forbid）
+      var updates = {
+        notify: {
+          slack_enabled: !!document.getElementById("cw-as-slack").checked,
+          teams_enabled: !!document.getElementById("cw-as-teams").checked,
+        },
+      };
+      if (!isNaN(days)) updates.data_retention_days = days;
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "保存中…"; }
+      adapter.saveAppSettings(updates).then(function (res) {
+        if (res.ok) {
+          if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "保存しました（監査ログに記録）"; }
+          if (res.body && res.body.ai) cwSetAiStatus(res.body.ai);
+        } else {
+          var detail = (res.body && res.body.detail) || ("HTTP " + res.status);
+          if (msg) {
+            msg.style.color = "#c62828";
+            msg.textContent = "保存できません: " + (Array.isArray(detail)
+              ? detail.map(function (x) { return x.msg; }).join(" / ") : detail);
+          }
+        }
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラーで保存できませんでした"; }
+      });
+    }
+    function cwAiTest() {
+      var msg = document.getElementById("cw-as-ai-msg");
+      var key = document.getElementById("cw-as-ai-key").value.trim();
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "接続テスト中…"; }
+      adapter.aiTest(key || undefined).then(function (res) {
+        var b = res.body || {};
+        if (res.ok && b.ok) {
+          if (msg) {
+            msg.style.color = "#2e7d32";
+            msg.textContent = "接続OK" + (b.models && b.models.length ? "（利用可能: " + b.models.join(", ") + "）" : "");
+          }
+        } else if (msg) {
+          msg.style.color = "#c62828";
+          msg.textContent = "接続NG: " + (b.error || (b.detail || ("HTTP " + res.status)));
+        }
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "接続テストに失敗しました（通信エラー）"; }
+      });
+    }
+    function cwAiSave() {
+      var msg = document.getElementById("cw-as-ai-msg");
+      var input = document.getElementById("cw-as-ai-key");
+      var key = input.value.trim();
+      if (!key) {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "APIキーを入力してください"; }
+        return;
+      }
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "保存中…"; }
+      adapter.saveAppSettings({ ai_api_key: key }).then(function (res) {
+        if (res.ok) {
+          input.value = "";
+          if (res.body && res.body.ai) cwSetAiStatus(res.body.ai);
+          if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "APIキーを保存しました（暗号化・監査記録）"; }
+        } else {
+          var detail = (res.body && res.body.detail) || ("HTTP " + res.status);
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "保存できません: " + detail; }
+        }
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラーで保存できませんでした"; }
+      });
+    }
+    function cwAiDisconnect() {
+      if (!window.confirm("AI APIキーを削除（接続解除）しますか？")) return;
+      var msg = document.getElementById("cw-as-ai-msg");
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "解除中…"; }
+      adapter.aiDisconnect().then(function (res) {
+        if (res.ok) {
+          cwSetAiStatus(res.body && res.body.ai);
+          if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "接続を解除しました"; }
+        } else if (msg) {
+          msg.style.color = "#c62828";
+          msg.textContent = "解除できません: " + ((res.body && res.body.detail) || ("HTTP " + res.status));
+        }
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラーで解除できませんでした"; }
+      });
+    }
+
+    // ---- 準備中画面（海象全国版・海上作業・50年確率波） ----
+    function cwInstallSoon(id, emoji, title, desc, plans, issueNote) {
+      cwMakeScreen(id,
+        '<div class="cw-pg"><h2>' + esc(title) + "</h2>"
+        + '<div class="cw-pg-card"><div class="cw-soon"><div class="big">' + emoji + "</div>"
+        + "<h3>準備中の機能です</h3><p>" + desc + "</p>"
+        + '<div class="plan">' + plans.map(function (p) { return "・" + p; }).join("<br>") + "</div>"
+        + '<p style="margin-top:12px;font-size:11px">' + esc(issueNote) + "</p></div></div></div>");
+    }
+    function installSoonScreens() {
+      cwInstallSoon("cw-marine-screen", "🌊", "海象データ：全国版",
+        "全国の波高・周期・潮位の概況を提供予定です。",
+        ["国交省 NOWPHAS（全国港湾海洋波浪情報網）", "気象庁 潮位表・潮位観測情報", "Open-Meteo Marine API（補完・検証中）"],
+        "対応計画: Issue #72 段5（データソース調査→取り込み→画面）");
+      cwInstallSoon("cw-mwork-screen", "⚓", "海上作業判定",
+        "判定エンジンへ海上作業種別（波高・風速・視程の閾値判定）を追加予定です。",
+        ["有義波高・うねりの閾値判定", "海上風・突風の閾値判定", "海象データ：全国版のデータソース確定が前提"],
+        "対応計画: Issue #72 段5 連動（スコープ変更は要件書追補で管理）");
+      cwInstallSoon("cw-wave50-screen", "📈", "50年確率波",
+        "極値統計（Gumbel / Weibull 等）による再現期間波高の解析機能を提供予定です。",
+        ["NOWPHAS 長期観測データの蓄積（Neon PostgreSQL）", "年最大値法・POT法による極値解析", "地点別の50年確率波高・設計波条件の参照"],
+        "対応計画: Issue #72 段7（段5・段6のデータ蓄積が前提）");
+    }
+
+    // 画面レジストリ登録（cwSyncScreens が参照）
+    CW_SCREENS["sites-list"] = { id: "cw-sites-screen", show: cwRenderSites, live: true };
+    CW_SCREENS["wx-national"] = { id: "cw-wx-screen", show: cwRenderWx, live: true };
+    CW_SCREENS["marine-national"] = { id: "cw-marine-screen" };
+    CW_SCREENS["marine-work"] = { id: "cw-mwork-screen" };
+    CW_SCREENS["analytics"] = { id: "cw-analytics-screen", show: cwRenderAnalytics, live: true };
+    CW_SCREENS["wave50"] = { id: "cw-wave50-screen" };
+    CW_SCREENS["reports"] = { id: "cw-reports-screen", show: cwRenderReports };
+    CW_SCREENS["audit"] = { id: "cw-audit-screen", show: cwLoadAudit };
+    CW_SCREENS["app-settings"] = { id: "cw-appset-screen", show: cwLoadAppSettings };
+
     // ---- ログイン画面（注入。.dc.html 無改修） ----
     function roleLabel(r) {
       return ({ admin: "管理者", tech_manager: "技術管理者", site_manager: "現場管理者",
@@ -718,19 +1448,56 @@
         // モックのユーザー表示（山田 太郎）は非表示化（実ログインユーザーのピルに置き換わる）
         + "header>div:nth-child(2)>div:nth-child(4){display:none !important}"
         + "@media(max-width:700px){#cw-user-name{display:none}}"
-        // 左サイドメニュー（PC幅のみ。狭幅は従来の上部タブへフォールバック）
+        // 左サイドメニュー（#79: グループ化カスタムサイドバー。PC幅のみ。狭幅は従来の上部タブ）
         + "@media(min-width:960px){"
-        + "nav{position:fixed !important;top:56px !important;left:0;bottom:0;width:210px;"
-        + "flex-direction:column !important;align-items:stretch;gap:2px !important;padding:12px 8px !important;"
-        + "border-bottom:none !important;border-right:1px solid #dce3ea;overflow:hidden auto !important;"
-        + "box-shadow:1px 0 3px rgba(20,40,60,.05) !important}"
-        + "nav>button{justify-content:flex-start;border-radius:8px;padding:11px 12px !important}"
-        // 選択中メニューは薄い網掛け（非選択はインラインの 'transparent' 下線を持つことで判別）
-        + "nav>button:not([style*=\"transparent\"]){background:rgba(19,52,79,.08) !important}"
-        + "nav>button:hover{background:rgba(19,52,79,.05)}"
-        + "main{margin-left:226px !important;margin-right:18px !important}"
-        + "#cw-reg-screen,#cw-wbgt-screen,#cw-settings-screen{left:210px !important}"
-        + "}";
+        + "nav{display:none !important}"          // dc上部タブは非表示（サイドバーに置換）
+        + "#cw-sidebar{display:flex}"
+        + "main{margin-left:240px !important;margin-right:18px !important}"
+        + "#cw-reg-screen,#cw-wbgt-screen,#cw-settings-screen,.cw-screen{left:224px !important}"
+        + "}"
+        // サイドバー本体（選択中・クリック時は薄い網掛け）
+        + "#cw-sidebar{display:none;position:fixed;top:56px;left:0;bottom:0;width:224px;z-index:31;"
+        + "flex-direction:column;gap:1px;padding:10px 8px 20px;background:#fff;border-right:1px solid #dce3ea;"
+        + "overflow:hidden auto;box-shadow:1px 0 3px rgba(20,40,60,.05);"
+        + "font-family:'Noto Sans JP',system-ui,sans-serif;box-sizing:border-box}"
+        + ".cw-sb-h{margin:12px 6px 4px;font-size:10.5px;font-weight:800;color:#8a99a5;letter-spacing:.06em;flex:none}"
+        + ".cw-sb-i{display:block;width:100%;text-align:left;background:transparent;border:none;border-radius:8px;"
+        + "padding:10px 12px;font:600 13px 'Noto Sans JP',sans-serif;color:#697A88;cursor:pointer;flex:none}"
+        + ".cw-sb-i:hover{background:rgba(19,52,79,.05)}"
+        + ".cw-sb-i:active{background:rgba(19,52,79,.12)}"   // クリック時: 薄い網掛け
+        + ".cw-sb-i.on{background:rgba(19,52,79,.08);color:#13344f;font-weight:800}" // 選択中: 薄い網掛け
+        // #79 新画面の共通スタイル（既存 #cw-reg-screen 等と同じ配色体系）
+        + ".cw-screen{display:none;position:fixed;left:0;right:0;top:56px;bottom:0;z-index:30;overflow:auto;"
+        + "background:#eef1f4;font-family:'Noto Sans JP',system-ui,sans-serif;color:#16212c}"
+        + ".cw-pg{max-width:1100px;margin:0 auto;padding:18px 16px}"
+        + ".cw-pg h2{margin:2px 0 4px;font-size:17px;color:#13344f}"
+        + ".cw-pg p.sub{margin:0 0 14px;font-size:11.5px;color:#7e8c99}"
+        + ".cw-pg-card{background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px}"
+        + ".cw-pg-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}"
+        + ".cw-tbl{width:100%;border-collapse:collapse;font-size:12.5px}"
+        + ".cw-tbl th{position:sticky;top:0;background:#f6f8fa;text-align:left;padding:9px 10px;color:#3a4854;"
+        + "font-size:11.5px;border-bottom:2px solid #e2e8ee;white-space:nowrap}"
+        + ".cw-tbl th.sort{cursor:pointer}.cw-tbl th.sort:hover{background:#eef2f6}"
+        + ".cw-tbl td{padding:9px 10px;border-bottom:1px solid #f0f3f6}"
+        + ".cw-tbl tr.click{cursor:pointer}.cw-tbl tr.click:hover td{background:#f6f9fc}"
+        + ".cw-num{text-align:right;font-variant-numeric:tabular-nums}"
+        + ".cw-empty{padding:26px;color:#7e8c99;font-size:12px;text-align:center}"
+        + ".cw-btn{padding:9px 16px;border-radius:7px;border:none;cursor:pointer;"
+        + "font:700 12.5px 'Noto Sans JP',sans-serif;background:#eef1f4;color:#5a6b7b}"
+        + ".cw-btn-pri{background:#16527d;color:#fff}.cw-btn-danger{background:#fbe8e8;color:#c62828}"
+        + ".cw-msg{font-size:12px;min-height:16px}"
+        + ".cw-badge{display:inline-block;padding:1px 8px;border-radius:8px;font-size:10.5px;font-weight:700}"
+        + ".cw-soon{padding:34px 22px;text-align:center}"
+        + ".cw-soon .big{font-size:34px;margin-bottom:8px}"
+        + ".cw-soon h3{margin:0 0 6px;font-size:15px;color:#13344f}"
+        + ".cw-soon p{margin:0;color:#7e8c99;font-size:12.5px;line-height:1.9}"
+        + ".cw-soon .plan{display:inline-block;margin-top:14px;text-align:left;background:#f6f8fa;"
+        + "border:1px solid #e2e8ee;border-radius:10px;padding:12px 18px;font-size:12px;color:#3a4854;line-height:2}"
+        + ".cw-as-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:13px;flex-wrap:wrap}"
+        + ".cw-as-row label{font-weight:700;color:#3a4854;min-width:130px;font-size:12px}"
+        + ".cw-as-row input[type=number],.cw-as-row input[type=password],.cw-as-row input[type=text]{"
+        + "padding:9px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px 'Noto Sans JP',sans-serif;box-sizing:border-box}"
+        + ".cw-as-key{flex:1;min-width:220px}";
       document.head.appendChild(css);
       mountHeaderTools();
       // ヘッダ再レンダーでツールが外れたら自動復元（コールバックは no-op 主体で軽量）
@@ -777,8 +1544,12 @@
         var f = e.target, msg = ov.querySelector("#cw-login-msg");
         msg.textContent = "認証中…";
         adapter.login(f.username.value, f.password.value).then(function (res) {
-          if (res.ok) { msg.textContent = ""; setUserPill(res.body.user); hideLogin(); f.reset(); startApp(); }
-          else { msg.textContent = (res.body && res.body.detail) || "ログインに失敗しました"; }
+          if (res.ok) {
+            // フルリロードで前ユーザーの画面状態・キャッシュを完全に破棄してから開始する
+            // （管理画面DOM/変数の残留を根絶。#83 対抗レビュー[high]）
+            msg.textContent = "";
+            location.reload();
+          } else { msg.textContent = (res.body && res.body.detail) || "ログインに失敗しました"; }
         }).catch(function () { msg.textContent = "通信エラー（バックエンド未起動の可能性）"; });
       });
       pill.querySelector("#cw-logout").addEventListener("click", function () { adapter.logout(); location.reload(); });
@@ -847,10 +1618,19 @@
           clearInterval(t);
           adapter.patch(e.Logic.prototype);
           installLayout();  // 先にツールコンテナを用意（ログイン画面・ベルが append する）
+          installSidebar(); // #79 グループ化サイドメニュー
           installRegisterScreen(adapter);
           installSettingsScreen();
           installSourceNote();
           installWbgtScreen();
+          // #79 新画面群（現場一覧/気象全国版/分析/レポート/監査ログ/設定/準備中）
+          installSitesScreen();
+          installWxScreen();
+          installAnalyticsScreen();
+          installReportsScreen();
+          installAuditScreen();
+          installAppSettingsScreen();
+          installSoonScreens();
           installLoginScreen();
           installNotifyBell();
           // 認証ゲート: トークンがあればデータ取得、無ければログイン画面

@@ -46,7 +46,9 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - [x] `deploy/cloudflared-config.yml.example`（tunnel設定テンプレ）作成
 - [x] Cloudflare Tunnel 作成・DNS ルーティング（`cloudflared tunnel route dns` ― 人間実行、2026-07-12）
 - [x] state.json への `deploy_plan.public_url` 反映
-- [ ] backend/frontend の systemd 常駐化（`*.service` unit適用。現状はフォアグラウンド一時起動のみ）
+- [x] backend/frontend/tunnel の systemd 常駐化（2026-07-12 適用済み・Issue #77。
+      `cwwd-backend` 0.0.0.0:55019 / `cwwd-frontend` 0.0.0.0:34979 / `cwwd-tunnel`。
+      OS起動時に3点セット自動起動。unit 実体の正本は `deploy/systemd/`）
 - [ ] `CORS_ORIGINS` を `https://cwwd.mirai-dx-platform.com` に更新
 - [x] エッジ側アクセス制御: Cloudflare Access アプリ `cwwd` / ポリシー `CWWD`
       （allow: `mirai-const.co.jp` ドメイン or 管理者メール、2026-07-12 人間作成・302リダイレクト実測確認済み）
@@ -59,6 +61,10 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 
 - [ ] `APP_ENV=production`
 - [ ] `JWT_SECRET` を 32バイト以上のランダム値で設定（未設定/既定値は起動失敗）
+- [ ] `SETTINGS_ENCRYPTION_KEY`（AI APIキー等の設定値暗号化専用鍵、32バイト以上）を推奨設定。
+      未設定でも `JWT_SECRET`（32バイト以上）から鍵導出するが、専用鍵の方が鍵ローテーションを
+      認証トークンと分離できる。**専用鍵も `JWT_SECRET` も実用強度に満たない場合、設定画面からの
+      AI APIキー保存は 422 で拒否される**（`crypto.encryption_is_strong` / #80 high-2）
 - [ ] `ENABLE_AUTH=true`（false は起動失敗）
 - [ ] `ADMIN_PASSWORD` を設定（本番は初期管理者のみ作成。デモユーザーは local 限定）
 - [ ] `DATABASE_URL` を PostgreSQL に（`alembic upgrade head` は起動時自動）

@@ -10,6 +10,7 @@ pydantic-settings>=2.0
 apscheduler>=3.10
 pyjwt>=2.8
 bcrypt>=4.1
+cryptography>=43.0.1
 defusedxml>=0.7
 
 # dev

@@ -30,6 +30,13 @@ def audit_add(db: Session, user, action: str, message: str = "",
 def audit(db: Session, user, action: str, message: str = "",
           component: str = "api", site_id: str | None = None,
           source_id: str | None = None) -> None:
+    """単独の監査イベント（他のドメイン書き込みを伴わない）専用。監査行を追加して即commitする。
+
+    ドメイン変更と同時に記録する場合は audit_add で同一commitに含めること（#63）。
+    ドメインを別途commitしてから本関数で第2のcommitを行うと、監査側の失敗時に
+    「ドメインは永続・監査は欠落」で原子性が崩れ、500応答を受けたクライアントの
+    再試行が業務データを二重登録し得る（#63の根治対象）。
+    """
     audit_add(db, user, action, message, component=component,
               site_id=site_id, source_id=source_id)
     db.commit()
