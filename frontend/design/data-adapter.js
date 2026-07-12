@@ -417,7 +417,9 @@
       // CSV等のエクスポートURLは window.open だと Authorization ヘッダが付かず401になるため、
       // 認証付き fetch→Blob ダウンロードへ差し替える（#79。createAdapter/契約テストは無改修）
       open: function (u) { cwAuthedDownload(u); },
-      onUnauthorized: function () { showLogin(); }, // 401 で自動ログアウト→ログイン画面
+      // 401: トークン破棄＋機微画面(監査ログ/設定)の残留データを消してからログイン画面へ
+      // （前ユーザーの表示が次ユーザーへ漏れない。#83 対抗レビュー[high]）
+      onUnauthorized: function () { adapter.logout(); cwResetSensitiveUi(); showLogin(); },
       hideNav: ["現場詳細"], // 現場詳細はナビタブを廃し、現場クリックのドリルダウン専用にする
       bump: function () {
         try {
@@ -849,9 +851,33 @@
     function cwCsvText(rows) { // Excel(JP)向けBOM付きCSV
       function cell(v) {
         var s = String(v == null ? "" : v);
+        // 表計算ソフトの式注入(=,+,-,@等で始まる値)を無害化（#83 対抗レビュー[medium]）
+        if (/^\s*[=+\-@\t\r]/.test(s)) s = "'" + s;
         return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
       }
       return "﻿" + rows.map(function (r) { return r.map(cell).join(","); }).join("\r\n");
+    }
+
+    // 機微画面（監査ログ・設定）の表示データと画面状態を破棄する（401時。#83 対抗レビュー[high]）
+    function cwResetSensitiveUi() {
+      cwAuditRows = null;
+      cwUser = null;
+      cwSbSig = "";       // サイドバーをロールなし状態で再構築させる
+      cwScreenVer = {};   // 次回表示時に必ず再読込させる
+      var audit = document.getElementById("cw-audit-body");
+      if (audit) audit.innerHTML = "";
+      var q = document.getElementById("cw-audit-q");
+      if (q) q.value = "";
+      var key = document.getElementById("cw-as-ai-key");
+      if (key) key.value = "";
+      var st = document.getElementById("cw-as-ai-status");
+      if (st) st.textContent = "—";
+      var u = document.getElementById("cw-as-user");
+      if (u) u.textContent = "";
+      ["cw-as-msg", "cw-as-ai-msg"].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = "";
+      });
     }
 
     // ---- 現場一覧（現場管理） ----
@@ -907,7 +933,9 @@
           + "<th>種別</th><th>区分</th><th>担当</th><th>状態</th><th>現在判定</th></tr></thead><tbody>"
           + meta.map(function (s) {
             var d = dash[s.id];
-            var lvHtml = d && d.level != null
+            // API由来 level は 0-3 のみ配列参照（想定外値は「—」へフォールバック）
+            var lvOk = d && CW_LV[d.level] != null && CW_LVC[d.level] != null;
+            var lvHtml = lvOk
               ? '<span class="cw-badge" style="background:' + CW_LVC[d.level] + '18;color:' + CW_LVC[d.level] + '">' + CW_LV[d.level] + "</span>"
               : "—";
             return '<tr class="click" data-id="' + esc(s.id) + '"><td>' + esc(s.id) + "</td><td><b>"
@@ -967,6 +995,7 @@
       var k = cwWxSort.k, desc = cwWxSort.desc;
       var rows = sites.slice().sort(function (a, b) {
         var x = a[k], y = b[k];
+        if (x == null && y == null) return 0; // 両方欠測は同順（比較の対称性を保つ）
         if (x == null) return 1;
         if (y == null) return -1;
         if (x < y) return desc ? 1 : -1;
@@ -1515,8 +1544,12 @@
         var f = e.target, msg = ov.querySelector("#cw-login-msg");
         msg.textContent = "認証中…";
         adapter.login(f.username.value, f.password.value).then(function (res) {
-          if (res.ok) { msg.textContent = ""; setUserPill(res.body.user); hideLogin(); f.reset(); startApp(); }
-          else { msg.textContent = (res.body && res.body.detail) || "ログインに失敗しました"; }
+          if (res.ok) {
+            // フルリロードで前ユーザーの画面状態・キャッシュを完全に破棄してから開始する
+            // （管理画面DOM/変数の残留を根絶。#83 対抗レビュー[high]）
+            msg.textContent = "";
+            location.reload();
+          } else { msg.textContent = (res.body && res.body.detail) || "ログインに失敗しました"; }
         }).catch(function () { msg.textContent = "通信エラー（バックエンド未起動の可能性）"; });
       });
       pill.querySelector("#cw-logout").addEventListener("click", function () { adapter.logout(); location.reload(); });
