@@ -27,6 +27,23 @@ jobs:
         # スケジューラ/外部XMLはテストで無効（conftest）。ネット非依存。
         run: python -m pytest -q
 
+  security:
+    name: security (dependency scan)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit backend dependencies (requirements.txt)
+        run: python -m pip_audit -r requirements.txt
+
   frontend:
     name: frontend (logic + adapter tests)
     runs-on: ubuntu-latest
