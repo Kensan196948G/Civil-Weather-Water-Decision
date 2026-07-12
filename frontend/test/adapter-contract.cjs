@@ -60,6 +60,13 @@ function fetchMock(u, opts) {
     lastPost = JSON.parse(opts.body); data = { id: "S07", code: "CW-S07", name: lastPost.name, status: "created" }; status = 201;
   } else if (u.indexOf("/api/work-types") >= 0) {
     data = [{ id: "river", name: "河川内作業", color: "#0e7d8f" }, { id: "crane", name: "クレーン作業", color: "#c0682c" }];
+  } else if (u.indexOf("/api/admin/rules") >= 0 && method === "PUT") {
+    lastPost = JSON.parse(opts.body);
+    data = { status: "updated", rules: [{ key: "rain_heavy", value: 20.0, default: 5.0, overridden: true }] };
+  } else if (u.indexOf("/api/admin/rules") >= 0) {
+    data = { rules: [
+      { key: "rain_heavy", label: "降雨 中止検討", unit: "mm/h", desc: "", min: 0, max: 300,
+        default: 5.0, value: 5.0, overridden: false, updated_at: null, updated_by: null }] };
   } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/stations") >= 0) {
     data = [{ id: "ST1", name: "北川 護岸地点 水位観測所", type: "river", rel: "最寄り", lat: 35.766, lon: 139.776 }];
   } else if (u.indexOf("/api/sites/") >= 0) {
@@ -145,6 +152,15 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   const cres = await adapter.createSite({ name: "新設テスト", latitude: 35.5, longitude: 139.5, work_type: "crane" });
   ok(cres.ok && cres.body.id === "S07", "createSite が POST /api/sites で作成（id=" + (cres.body && cres.body.id) + "）");
   ok(lastPost && lastPost.name === "新設テスト", "createSite が payload を送信");
+
+  // システム設定: 閾値の取得と保存（#34/#35 配線）
+  const rr = await adapter.rules();
+  ok(rr && rr.rules && rr.rules[0].key === "rain_heavy" && rr.rules[0].default === 5.0,
+    "rules が GET /api/admin/rules から閾値一覧を取得");
+  const sres = await adapter.saveRules({ rain_heavy: 20.0, rain_light: null });
+  ok(sres.ok && lastPost && lastPost.updates && lastPost.updates.rain_heavy === 20.0
+    && lastPost.updates.rain_light === null,
+    "saveRules が PUT /api/admin/rules へ updates(null=リセット含む) を送信");
 
   console.log("\nRESULT: " + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
