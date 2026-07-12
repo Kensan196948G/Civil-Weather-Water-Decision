@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, field_validator, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -356,6 +356,7 @@ def deactivate_site(site_id: str, db: Session = Depends(get_db),
 
 # ---------- 現場別 公式リンク（#30 T2-02 / FR-035: 川の防災情報リンク管理） ----------
 SITE_LINK_KINDS = {"river", "weather", "wbgt", "disaster", "other"}
+_SITE_LINKS_MAX = 20  # 1現場あたりの上限（応答肥大化・DoS防止。対抗レビュー[medium]）
 
 
 def _validate_https_url(v: str) -> str:
@@ -369,14 +370,20 @@ def _validate_https_url(v: str) -> str:
         raise ValueError("URL は必須です")
     if len(u) > 500:
         raise ValueError("URL は 500 文字以内で指定してください")
-    # 空白・制御文字の埋め込みはスキーム偽装/ヘッダインジェクションの温床のため拒否
-    if any(c.isspace() or ord(c) < 0x20 for c in u):
+    # 空白・制御文字（C0/DEL/C1 含む）の埋め込みはスキーム偽装/ヘッダインジェクションの温床のため拒否
+    if any(c.isspace() or ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f for c in u):
         raise ValueError("URL に空白・制御文字は使用できません")
+    # バックスラッシュはブラウザ/パーサ差で "/" と解釈されホスト偽装に使われるため拒否（対抗レビュー[high]）
+    if "\\" in u:
+        raise ValueError("URL にバックスラッシュは使用できません")
     parsed = urlparse(u)
     # scheme を小文字化して比較（"HTTPS" も許容しつつ http/javascript/data は拒否）
     if parsed.scheme.lower() != "https":
         raise ValueError("URL は https:// で始まる必要があります")
-    if not parsed.netloc:
+    # userinfo（https://river.go.jp@evil.example）は公式ドメインなりすましに使われるため拒否
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL にユーザー情報（@）は使用できません")
+    if not parsed.hostname:
         raise ValueError("URL のホストが指定されていません")
     return u
 
@@ -461,6 +468,15 @@ def create_site_link(site_id: str, req: SiteLinkCreate, db: Session = Depends(ge
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    # 上限・重複チェック（対抗レビュー[medium]: 無制限登録による肥大化と同一URLの多重登録を防ぐ）
+    count = db.scalar(select(func.count()).select_from(SiteLink)
+                      .where(SiteLink.site_id == site_id))
+    if count >= _SITE_LINKS_MAX:
+        raise HTTPException(422, f"リンクは1現場あたり最大 {_SITE_LINKS_MAX} 件までです")
+    dup = db.scalar(select(SiteLink).where(SiteLink.site_id == site_id,
+                                           SiteLink.url == req.url))
+    if dup:
+        raise HTTPException(409, "同じURLのリンクが既に登録されています")
 
     def _build():
         link = SiteLink(id=_allocate_id(db, SiteLink, "SL", 3), site_id=site_id,
@@ -483,6 +499,12 @@ def update_site_link(link_id: str, req: SiteLinkUpdate, db: Session = Depends(ge
     data = req.model_dump(exclude_none=True)
     if not data:
         raise HTTPException(422, "更新内容がありません")
+    if "url" in data:  # URL変更時も同一現場内の重複を防ぐ（対抗レビュー[medium]）
+        dup = db.scalar(select(SiteLink).where(SiteLink.site_id == link.site_id,
+                                               SiteLink.url == data["url"],
+                                               SiteLink.id != link_id))
+        if dup:
+            raise HTTPException(409, "同じURLのリンクが既に登録されています")
     for k, v in data.items():
         setattr(link, k, v)
     # 監査行を更新と同一commitへ（#63 と同方式）

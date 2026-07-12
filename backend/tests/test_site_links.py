@@ -103,8 +103,9 @@ def test_site_link_rbac_boundary(client):
                         headers=_auth_headers(client, "tanaka"))
         assert r.status_code == 201, r.text
         created.append(r.json()["id"])
-        # admin(既定)も可
-        r = client.post("/api/sites/S01/links", json=payload)
+        # admin(既定)も可（同一URLは重複409になるため別URLで検証）
+        r = client.post("/api/sites/S01/links",
+                        json={**payload, "url": "https://example.com/rbac-admin"})
         assert r.status_code == 201, r.text
         created.append(r.json()["id"])
 
@@ -212,3 +213,80 @@ def test_site_link_create_atomic_on_audit_failure(client, monkeypatch):
         assert _count_links("S01") == before + 1
     finally:
         _cleanup([lid], baseline)
+
+
+# ---------------------------------------------------------------------------
+# 対抗レビュー対応（#30）: URL偽装バイパス[high]・件数上限/重複[medium]・FK整合[medium]
+# ---------------------------------------------------------------------------
+
+def test_site_link_url_spoofing_rejected(client):
+    """[high] userinfo/バックスラッシュ/DEL・C1制御文字/超長URLによるホスト偽装・注入を拒否する。"""
+    bads = [
+        "https://river.go.jp@evil.example/path",     # userinfo によるドメイン偽装
+        "https://river.go.jp\\@evil.example/path",   # バックスラッシュのパーサ差悪用
+        "https://example.com/\x7f",                   # DEL(0x7f) 制御文字
+        "https://example.com/\x9f",                   # C1(0x9f) 制御文字
+        "https://" + "a" * 500 + ".example.com/",    # 500文字超
+        "https://@example.com/",                      # 空 userinfo も拒否
+    ]
+    for bad in bads:
+        r = client.post("/api/sites/S01/links",
+                        json={"label": "偽装テスト", "url": bad, "kind": "river"})
+        assert r.status_code == 422, f"{bad!r} は拒否されるべき（実際: {r.status_code}）"
+
+
+def test_site_link_duplicate_url_rejected(client):
+    """[medium] 同一現場への同一URLは作成・更新とも 409。"""
+    r1 = client.post("/api/sites/S03/links",
+                     json={"label": "重複元", "url": "https://example.com/dup", "kind": "other"})
+    assert r1.status_code == 201, r1.text
+    id1 = r1.json()["id"]
+    r2 = client.post("/api/sites/S03/links",
+                     json={"label": "重複その2", "url": "https://example.com/dup", "kind": "other"})
+    assert r2.status_code == 409
+    r3 = client.post("/api/sites/S03/links",
+                     json={"label": "別URL", "url": "https://example.com/dup2", "kind": "other"})
+    assert r3.status_code == 201
+    id3 = r3.json()["id"]
+    # 更新で既存URLへ変更するのも 409（自分自身への更新は許可）
+    ru = client.put(f"/api/site-links/{id3}", json={"url": "https://example.com/dup"})
+    assert ru.status_code == 409
+    ru_self = client.put(f"/api/site-links/{id1}", json={"url": "https://example.com/dup"})
+    assert ru_self.status_code == 200
+    for lid in (id1, id3):
+        assert client.delete(f"/api/site-links/{lid}").status_code == 200
+
+
+def test_site_link_max_per_site(client):
+    """[medium] 1現場あたり最大20件。21件目は 422。"""
+    existing = client.get("/api/sites/S04/links").json()
+    created = []
+    try:
+        for i in range(20 - len(existing)):
+            r = client.post("/api/sites/S04/links",
+                            json={"label": f"上限テスト{i}", "url": f"https://example.com/cap/{i}",
+                                  "kind": "other"})
+            assert r.status_code == 201, r.text
+            created.append(r.json()["id"])
+        over = client.post("/api/sites/S04/links",
+                           json={"label": "21件目", "url": "https://example.com/cap/over",
+                                 "kind": "other"})
+        assert over.status_code == 422
+        assert "最大" in over.json()["detail"]
+    finally:
+        for lid in created:
+            client.delete(f"/api/site-links/{lid}")
+
+
+def test_site_link_fk_orphan_rejected():
+    """[medium] PRAGMA foreign_keys=ON により存在しない site_id の直接INSERTが失敗する（孤児防止）。"""
+    from sqlalchemy.exc import IntegrityError
+    db = SessionLocal()
+    try:
+        db.add(SiteLink(id="SL999", site_id="NOPE_SITE", label="孤児テスト",
+                        url="https://example.com/orphan", kind="other", sort_order=0))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+    finally:
+        db.close()
