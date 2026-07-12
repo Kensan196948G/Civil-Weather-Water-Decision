@@ -159,3 +159,16 @@ class IdCounter(Base):
     __tablename__ = "id_counters"
     name: Mapped[str] = mapped_column(String(30), primary_key=True)
     value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class DecisionRule(Base):
+    """判定閾値の上書き設定（#34/#35, FR-054）。
+
+    行が存在するキーのみ既定値（decision_engine.DEFAULT_TH）を上書きする。
+    初回スコープは会社基準（グローバル）のみ。現場・工種別の階層は将来拡張。
+    """
+    __tablename__ = "decision_rules"
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_by: Mapped[str] = mapped_column(String(100), default="")

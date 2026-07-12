@@ -20,7 +20,7 @@ from ..models import (
     AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
     IdCounter, Site, User, WorkPlan, WorkType,
 )
-from ..services import assessment, notifications
+from ..services import assessment, notifications, rules as rules_service
 from ..services.audit import audit
 from ..services.data_collectors import open_meteo, source_probe
 
@@ -158,6 +158,34 @@ def site_stations(site_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "site not found")
     return [{"id": st.id, "name": st.name, "type": st.type, "rel": st.rel,
              "lat": st.latitude, "lon": st.longitude} for st in site.stations]
+
+
+# ---------- 判定ルール（閾値）管理 (#34/#35, FR-054) ----------
+class RulesUpdate(BaseModel):
+    # {key: 数値 or null(=既定値へリセット)} の部分更新
+    updates: dict[str, float | None]
+
+
+@router.get("/admin/rules")
+def get_rules(db: Session = Depends(get_db),
+              user: User = Depends(require_role("admin", "tech_manager"))):
+    return {"rules": rules_service.list_rules(db)}
+
+
+@router.put("/admin/rules")
+def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
+              user: User = Depends(require_role("admin"))):
+    if not req.updates:
+        raise HTTPException(422, "updates が空です")
+    errors = rules_service.validate_updates(req.updates)
+    if errors:
+        raise HTTPException(422, "; ".join(errors))
+    rules_service.update_rules(db, req.updates, user.username)
+    db.commit()
+    rules_service.apply_overrides(db)  # 判定エンジンへ即時反映
+    audit(db, user, "rules_update",
+          ", ".join(f"{k}={'default' if v is None else v}" for k, v in req.updates.items()))
+    return {"status": "updated", "rules": rules_service.list_rules(db)}
 
 
 # ---------- 作業種別マスタ ----------

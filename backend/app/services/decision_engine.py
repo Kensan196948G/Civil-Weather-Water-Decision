@@ -28,6 +28,9 @@ TH = {
     "upstream_rain": 4.0, # mm/h 上流雨量
 }
 
+# 出荷時の既定閾値（#34/#35: TH は DB設定で上書きされ得るため、リセット用に不変コピーを保持）
+DEFAULT_TH = dict(TH)
+
 
 @dataclass
 class Reading:

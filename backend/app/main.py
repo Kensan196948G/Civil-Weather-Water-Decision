@@ -19,6 +19,14 @@ logger = logging.getLogger("cwwd")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()  # テーブル作成＋サンプル投入（冪等）
+    # 判定閾値のDB上書きを起動時に反映（#34/#35）
+    from .core.db import SessionLocal
+    from .services import rules as rules_service
+    _db = SessionLocal()
+    try:
+        rules_service.apply_overrides(_db)
+    finally:
+        _db.close()
     if settings.enable_scheduler:
         from .scheduler import start
         start()  # 定期プローブ＋予報リフレッシュ
