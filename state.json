@@ -20,9 +20,13 @@
     "deploy_plan": {
       "subdomain": "cwwd.mirai-dx-platform.com",
       "decided_at": "2026-07-12",
-      "provisioned": false,
+      "provisioned": true,
+      "provisioned_at": "2026-07-12",
+      "public_url": "https://cwwd.mirai-dx-platform.com",
+      "tunnel_name": "cwwd-civil-weather-water",
+      "tunnel_id": "07c9bda3-b4ad-46ae-8401-4b677de3c8a4",
       "templates_prepared_at": "2026-07-12",
-      "note": "deploy/ に cloudflared-config.yml.example・systemd unit(backend/frontend)テンプレート・セットアップ手順書(cloudflared-setup-steps.md)を整備済み。Cloudflare API読み取り調査(2026-07-12)でZone ID確定・cwwd系の名前衝突なし・兄弟プロジェクト全件が個別Tunnel運用と確認済みのため、手順書はcwwd専用の新規Tunnel作成を前提に記載(既存Tunnel相乗りへの読み替え手順も併記)。実Tunnel作成・DNSルーティング(cloudflared tunnel route dns)・CORS本番切替は人間実行待ち。"
+      "note": "2026-07-12 人間実行によりTunnel作成・DNSルーティング完了、フォアグラウンド起動で全ルート疎通確認済み(/=front 200, /health=backend, /api/*=401認証ガード動作)。config-cwwd.ymlは/api/*・/healthをbackend(55019)、他をfrontend(34979)へパス分割(動的ポート実値・要追従)。注意: route dns/runは必ず--configでconfig-cwwd.ymlを明示(デフォルトconfig.ymlのonegate指定が優先される罠あり・実害確認済み)。残: systemd常駐化、本番チェックリスト適用(APP_ENV=production/JWT_SECRET/ADMIN_PASSWORD/CORS絞り込み — 現在env:localのままデモ資格情報が公開URLで有効な点に注意)。"
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",
