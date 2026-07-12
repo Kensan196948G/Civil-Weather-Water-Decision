@@ -60,7 +60,9 @@ function fetchMock(u, opts) {
     lastPost = JSON.parse(opts.body); data = { id: "S07", code: "CW-S07", name: lastPost.name, status: "created" }; status = 201;
   } else if (u.indexOf("/api/work-types") >= 0) {
     data = [{ id: "river", name: "河川内作業", color: "#0e7d8f" }, { id: "crane", name: "クレーン作業", color: "#c0682c" }];
-  } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("stations") < 0) {
+  } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/stations") >= 0) {
+    data = [{ id: "ST1", name: "北川 護岸地点 水位観測所", type: "river", rel: "最寄り", lat: 35.766, lon: 139.776 }];
+  } else if (u.indexOf("/api/sites/") >= 0) {
     data = { plans: [{ title: "護岸ブロック据付", time: "08:00–12:00", contractor: "○○建設", level: 2, reason: "中止検討" }] };
   } else if (u.indexOf("/api/sites") >= 0) data = SITES_LIST;
   else if (u.indexOf("/api/dashboard/site-risk") >= 0) data = DASH;
@@ -115,6 +117,15 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   // 気象グラフ: API時系列（precip ピーク 6 が反映される genHourly）
   const hr = c.genHourly({ id: "S01", rainy: true, windMax: 6 });
   ok(Math.max.apply(null, hr.rain) === 6, "genHourly が API 時系列を反映（雨ピーク=" + Math.max.apply(null, hr.rain) + "）");
+
+  // 観測所ピン: openSite → ensureSiteDetail が GET /api/sites/{id}/stations を取得し STATIONS に反映（Issue #55）
+  await adapter.ensureSiteDetail("S01");
+  v = c.renderVals();
+  ok(Array.isArray(c.STATIONS.S01) && c.STATIONS.S01.length === 1,
+    "STATIONS が API から取得した観測所で更新される（件数=" + (c.STATIONS.S01 && c.STATIONS.S01.length) + "）");
+  ok(c.STATIONS.S01[0].name === "北川 護岸地点 水位観測所" && Array.isArray(c.STATIONS.S01[0].d) && c.STATIONS.S01[0].d[0] === 35.766,
+    "観測所の lat/lon が d:[lat,lon] 形式にマッピングされる");
+  ok(Array.isArray(c.STATIONS.S06), "未取得の現場は既存(モック)の STATIONS を保持（S06="+ (c.STATIONS.S06 && c.STATIONS.S06.length) +"件）");
 
   // 判定結果: API result を resultVM が返す
   adapter._state.result = { key: "river|S01", level: 2, summary: "中止・退避を検討してください。",
