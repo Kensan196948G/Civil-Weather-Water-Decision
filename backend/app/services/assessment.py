@@ -9,6 +9,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 
+from . import rules as rules_service
 from .data_collectors import jma_warnings, open_meteo, wbgt_env
 from .decision_engine import LEVEL_LABELS, Reading, evaluate
 from ..core.config import settings
@@ -86,7 +87,7 @@ def build_reading(work_type: str, wr: dict, site: Site,
 
 async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
                       start: str | None = None, end: str | None = None,
-                      warnmap: dict | None = None) -> dict:
+                      warnmap: dict | None = None, th: dict | None = None) -> dict:
     """1現場を評価してダッシュボード/詳細用 dict を返す。"""
     wt = work_type or site.work_type
     if fetch is None:
@@ -119,7 +120,9 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
     reading = build_reading(wt, wr, site, pref_warnings)
     if status == "STALE":
         reading.stale_weather = True  # 前回取得値での参考表示を判定理由に明示（§5.3）
-    decision = evaluate(wt, reading)
+    # #35: 実効閾値はDBが単一の真実。永続化を伴う評価は呼び出し側が fresh 解決した
+    # th を注入する(表示用は th=None → 短TTLキャッシュ解決で足りる)
+    decision = evaluate(wt, reading, th=th or rules_service.effective_th())
 
     return {
         "id": site.id, "name": site.name, "code": site.site_code, "loc": site.loc,
@@ -148,9 +151,13 @@ async def assess_all(sites: list[Site], *, fetch=None) -> list[dict]:
 
 
 async def assess_decision(site: Site, work_type: str, start: str | None, end: str | None,
-                          *, fetch=None) -> dict:
-    """作業判断画面の評価。判定エンジン出力（設計 §8.2）＋参照情報を返す。"""
-    card = await assess_site(site, fetch=fetch, work_type=work_type, start=start, end=end)
+                          *, fetch=None, th: dict | None = None) -> dict:
+    """作業判断画面の評価。判定エンジン出力（設計 §8.2）＋参照情報を返す。
+
+    閾値dict(th)は応答へ含めない: 閾値の閲覧は /api/admin/rules の権限境界に限定し、
+    一般ユーザー向け応答からの漏えいを防ぐ（#35 対抗レビュー4巡目）。
+    """
+    card = await assess_site(site, fetch=fetch, work_type=work_type, start=start, end=end, th=th)
     return {
         "siteId": site.id, "siteName": site.name, "workType": work_type,
         "overall_level": card["level"], "overall_label": card["levelLabel"],

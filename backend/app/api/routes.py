@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import random
 import re
 import time
@@ -20,8 +21,8 @@ from ..models import (
     AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
     IdCounter, Site, User, WorkPlan, WorkType,
 )
-from ..services import assessment, notifications
-from ..services.audit import audit
+from ..services import assessment, notifications, rules as rules_service
+from ..services.audit import audit, audit_add
 from ..services.data_collectors import open_meteo, source_probe
 
 # ルータ全体に認証を必須化（/auth と /health は別ルータ/main で公開）
@@ -158,6 +159,64 @@ def site_stations(site_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "site not found")
     return [{"id": st.id, "name": st.name, "type": st.type, "rel": st.rel,
              "lat": st.latitude, "lon": st.longitude} for st in site.stations]
+
+
+# ---------- 判定ルール（閾値）管理 (#34/#35, FR-054) ----------
+class RulesUpdate(BaseModel):
+    # {key: 数値 or null(=既定値へリセット)} の部分更新
+    updates: dict[str, float | None]
+
+    @field_validator("updates", mode="before")
+    @classmethod
+    def _reject_bool(cls, v):
+        # Pydanticのfloat型はJSON真偽値を1.0/0.0へ暗黙変換するため、境界で明示拒否
+        # (対抗レビュー[medium]: 誤入力が安全閾値として永続化されるのを防ぐ)
+        if isinstance(v, dict):
+            for key, val in v.items():
+                if isinstance(val, bool):
+                    raise ValueError(f"{key}: 数値を指定してください（真偽値は不可）")
+        return v
+
+
+@router.get("/admin/rules")
+def get_rules(db: Session = Depends(get_db),
+              user: User = Depends(require_role("admin", "tech_manager"))):
+    return {"rules": rules_service.list_rules(db)}
+
+
+@router.put("/admin/rules")
+def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
+              user: User = Depends(require_role("admin"))):
+    if not req.updates:
+        raise HTTPException(422, "updates が空です")
+    # 書き込みは直列化して実施(プロセス内=WRITE_LOCK、PostgreSQL間=advisory lock)。
+    # ロック待ちは有限化(プロセス内5秒/PG lock_timeout 3秒)し、詰まりはワーカー占有でなく503で返す
+    if not rules_service.WRITE_LOCK.acquire(timeout=5):
+        raise HTTPException(503, "設定更新が混み合っています。しばらくして再試行してください。")
+    try:
+        try:
+            errors = rules_service.apply_updates(db, req.updates, user.username)
+        except OperationalError:
+            # PG advisory lock の lock_timeout 超過等
+            db.rollback()
+            raise HTTPException(503, "設定更新が混み合っています。しばらくして再試行してください。") from None
+        if errors:
+            db.rollback()
+            raise HTTPException(422, "; ".join(errors))
+        # 監査行を同一トランザクションに含める: 監査記録なしの設定変更を残さない
+        # (commit後のaudit失敗で「変更は永続・監査は欠落」となるのを防ぐ。対抗レビュー4巡目)
+        audit_add(db, user, "rules_update",
+                  ", ".join(f"{k}={'default' if v is None else v}" for k, v in req.updates.items()))
+        try:
+            db.commit()
+        except IntegrityError:
+            # 直列化により通常到達しない保険(万一の同時INSERT衝突を500にしない)
+            db.rollback()
+            raise HTTPException(409, "設定が競合しました。再試行してください。") from None
+    finally:
+        rules_service.WRITE_LOCK.release()
+    rules_service.clear_cache()  # 自プロセスの実効閾値キャッシュを即時無効化
+    return {"status": "updated", "rules": rules_service.list_rules(db)}
 
 
 # ---------- 作業種別マスタ ----------
@@ -331,7 +390,8 @@ class EvaluateReq(BaseModel):
     end: str | None = None
 
 
-def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dict) -> str:
+def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dict,
+                             thresholds: dict | None = None) -> str:
     """判定結果と理由を永続化し、結果IDを返す（監査・実績分析の正本。設計§6.2.11/§6.2.12）。
     #49: 採番〜INSERTを _commit_with_retry() でラップし、同時リクエストによるID重複を防ぐ。"""
     def _build():
@@ -341,7 +401,8 @@ def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dic
             evaluated_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"),
             overall_level=res["overall_level"], overall_label=res["overall_label"],
             summary=res["summary"], data_quality_summary=res["data_quality_summary"],
-            weather_status=res.get("weatherStatus", ""))
+            weather_status=res.get("weatherStatus", ""),
+            thresholds_json=json.dumps(thresholds or {}, ensure_ascii=False))
         db.add(result)
         for i, r in enumerate(res.get("reasonsRaw", []), 1):
             db.add(DecisionReason(
@@ -360,8 +421,11 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    res = await assessment.assess_decision(site, req.work_type, req.start, req.end)
-    rid = _persist_decision_result(db, site.id, req.work_type, res)
+    # 永続化する判定は閾値キャッシュをバイパスした fresh 値で評価し、同じ値をスナップショット
+    # 保存する(古い閾値での保存を防ぐ)。応答には閾値を含めない(admin読み取り境界の維持)
+    th = rules_service.effective_th(fresh=True)
+    res = await assessment.assess_decision(site, req.work_type, req.start, req.end, th=th)
+    rid = _persist_decision_result(db, site.id, req.work_type, res, thresholds=th)
     audit(db, user, "evaluate", f"{rid} {req.work_type} L{res['overall_level']}", site_id=site.id)
     res["resultId"] = rid
     return res
@@ -549,8 +613,11 @@ async def evaluate_work_plan(plan_id: str, db: Session = Depends(get_db),
     site = db.get(Site, plan.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    res = await assessment.assess_decision(site, plan.work_type, plan.planned_start, plan.planned_end)
-    rid = _persist_decision_result(db, site.id, plan.work_type, res)
+    # /api/decisions/evaluate と同じ fresh 閾値・スナップショット経路(第2の永続化パス)
+    th = rules_service.effective_th(fresh=True)
+    res = await assessment.assess_decision(site, plan.work_type, plan.planned_start,
+                                           plan.planned_end, th=th)
+    rid = _persist_decision_result(db, site.id, plan.work_type, res, thresholds=th)
     audit(db, user, "evaluate", f"{rid} {plan_id} L{res['overall_level']}", site_id=site.id)
     res["resultId"] = rid
     res["workPlanId"] = plan_id

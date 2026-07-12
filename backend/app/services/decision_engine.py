@@ -28,6 +28,10 @@ TH = {
     "upstream_rain": 4.0, # mm/h 上流雨量
 }
 
+# 出荷時の既定閾値のエイリアス（#35: TH自体は変異させず、DB上書きは rules.effective_th() が
+# 実効dictを都度構成して evaluate(th=...) へ渡す。マルチワーカーでも DB が単一の真実）
+DEFAULT_TH = TH
+
 
 @dataclass
 class Reading:
@@ -58,7 +62,7 @@ class Rule:
     code: str
     work_types: tuple[str, ...]
     severity: int
-    predicate: Callable[[Reading], bool]
+    predicate: Callable[[Reading, dict], bool]  # (reading, 実効閾値dict) — #35: 閾値はDB上書き可
     message: str
     source: Callable[[Reading], str]
     value: Callable[[Reading], str]
@@ -72,63 +76,63 @@ def _has(r: Reading, attr: str) -> bool:
 RULES: list[Rule] = [
     # コンクリート打設
     Rule("rain_forecast", ("concrete", "earthwork", "pavement"), 1,
-         lambda r: _has(r, "precip_mm_h") and TH["rain_light"] <= r.precip_mm_h < TH["rain_heavy"],
+         lambda r, th: _has(r, "precip_mm_h") and th["rain_light"] <= r.precip_mm_h < th["rain_heavy"],
          "作業時間帯に降雨予報があります。施工・養生計画を確認してください。",
          lambda r: r.source_weather, lambda r: f"降雨 {r.precip_mm_h}mm/h"),
     Rule("heavy_rain_forecast", ("concrete", "earthwork", "pavement"), 2,
-         lambda r: _has(r, "precip_mm_h") and r.precip_mm_h >= TH["rain_heavy"],
+         lambda r, th: _has(r, "precip_mm_h") and r.precip_mm_h >= th["rain_heavy"],
          "降雨量が閾値を超える見込みです。延期または養生強化を検討してください。",
          lambda r: r.source_weather, lambda r: f"降雨 {r.precip_mm_h}mm/h"),
     Rule("high_temperature", ("concrete", "earthwork"), 1,
-         lambda r: _has(r, "temp_c") and r.temp_c >= TH["temp_high"],
+         lambda r, th: _has(r, "temp_c") and r.temp_c >= th["temp_high"],
          "気温が高くなる見込みです。暑中対策・養生計画を確認してください。",
          lambda r: r.source_weather, lambda r: f"最高気温 {r.temp_c}℃"),
     Rule("low_temperature", ("concrete", "pavement"), 1,
-         lambda r: _has(r, "temp_c") and r.temp_c <= TH["temp_low"],
+         lambda r, th: _has(r, "temp_c") and r.temp_c <= th["temp_low"],
          "気温が低くなる見込みです。低温時の施工条件を確認してください。",
          lambda r: r.source_weather, lambda r: f"気温 {r.temp_c}℃"),
     Rule("concrete_wind", ("concrete",), 1,
-         lambda r: _has(r, "wind_ms") and r.wind_ms >= TH["wind_strong"],
+         lambda r, th: _has(r, "wind_ms") and r.wind_ms >= th["wind_strong"],
          "風速がやや高めです。養生・ポンプ作業条件を確認してください。",
          lambda r: r.source_weather, lambda r: f"最大風速 {r.wind_ms}m/s"),
     # クレーン作業
     Rule("strong_wind", ("crane",), 1,
-         lambda r: _has(r, "wind_ms") and r.wind_ms >= TH["wind_strong"],
+         lambda r, th: _has(r, "wind_ms") and r.wind_ms >= th["wind_strong"],
          "風速が高くなる見込みです。クレーン仕様・吊荷条件を確認してください。",
          lambda r: r.source_weather, lambda r: f"平均風速 {r.wind_ms}m/s"),
     Rule("gust_risk", ("crane",), 2,
-         lambda r: _has(r, "gust_ms") and r.gust_ms >= TH["gust_stop"],
+         lambda r, th: _has(r, "gust_ms") and r.gust_ms >= th["gust_stop"],
          "突風リスクがあります。作業中止・待機を検討してください。",
          lambda r: r.source_weather, lambda r: f"最大瞬間 {r.gust_ms}m/s"),
     Rule("thunderstorm", ("crane",), 2,
-         lambda r: r.thunderstorm,
+         lambda r, th: r.thunderstorm,
          "雷リスクがあります。屋外作業員の退避を含めて検討してください。",
          lambda r: r.source_official, lambda r: "雷注意報"),
     # 河川内作業
     Rule("upstream_rain", ("river",), 1,
-         lambda r: _has(r, "upstream_rain_mm_h") and r.upstream_rain_mm_h >= TH["upstream_rain"],
+         lambda r, th: _has(r, "upstream_rain_mm_h") and r.upstream_rain_mm_h >= th["upstream_rain"],
          "上流域で雨量が増加しています。水位上昇に注意してください（到達時間差）。",
          lambda r: r.source_weather, lambda r: f"上流雨量 {r.upstream_rain_mm_h}mm/h"),
     Rule("water_level_rising", ("river",), 1,
-         lambda r: r.water_level_trend == "rising",
+         lambda r, th: r.water_level_trend == "rising",
          "水位が上昇傾向です。退避基準と作業継続条件を確認してください。",
          lambda r: r.source_river, lambda r: "水位 上昇傾向"),
     Rule("flood_warning", ("river",), 2,
-         lambda r: r.flood_warning,
+         lambda r, th: r.flood_warning,
          "洪水関連情報が発表されています。河川内作業の中止・退避を検討してください。",
          lambda r: r.source_official, lambda r: "洪水注意情報"),
     # 公式警報（気象庁）優先（§8.3-6）: 大雨警報で河川・土工・打設・舗装を引き上げ
     Rule("heavy_rain_warning", ("river", "earthwork", "concrete", "pavement"), 2,
-         lambda r: r.heavy_rain_warning,
+         lambda r, th: r.heavy_rain_warning,
          "気象庁が大雨警報を発表しています。作業中止・延期を含めて検討してください。",
          lambda r: r.source_official, lambda r: "大雨警報"),
     # 熱中症対策
     Rule("wbgt_caution", ("heat",), 1,
-         lambda r: _has(r, "wbgt") and TH["wbgt_caution"] <= r.wbgt < TH["wbgt_danger"],
+         lambda r, th: _has(r, "wbgt") and th["wbgt_caution"] <= r.wbgt < th["wbgt_danger"],
          "暑さ指数が上昇しています。水分・塩分補給と休憩を徹底してください。",
          lambda r: r.source_wbgt, lambda r: f"WBGT {r.wbgt}"),
     Rule("wbgt_danger", ("heat",), 2,
-         lambda r: _has(r, "wbgt") and r.wbgt >= TH["wbgt_danger"],
+         lambda r, th: _has(r, "wbgt") and r.wbgt >= th["wbgt_danger"],
          "暑さ指数が高く危険域です。作業時間の変更・中止を検討してください。",
          lambda r: r.source_wbgt, lambda r: f"WBGT {r.wbgt}"),
 ]
@@ -175,14 +179,19 @@ SUMMARY = {
 }
 
 
-def evaluate(work_type: str, reading: Reading) -> dict:
-    """判定を実行し、設計 §8.2 形式の結果 dict を返す。"""
+def evaluate(work_type: str, reading: Reading, th: dict | None = None) -> dict:
+    """判定を実行し、設計 §8.2 形式の結果 dict を返す。
+
+    th: 実効閾値（未指定なら出荷時既定 TH）。#35: DB上書き値は呼び出し側が
+    rules.effective_th() で解決して渡す（プロセスローカル変異を持たない）。
+    """
+    th = th or TH
     reasons = []
     for rule in RULES:
         if work_type not in rule.work_types:
             continue
         try:
-            if rule.predicate(reading):
+            if rule.predicate(reading, th):
                 reasons.append({
                     "severity": rule.severity,
                     "reason_code": rule.code,
@@ -238,6 +247,7 @@ def evaluate(work_type: str, reading: Reading) -> dict:
     return {
         "work_type": work_type,
         "overall_level": overall,
+        "thresholds_used": dict(th),  # 使用した実効閾値(監査再現用。persist側でJSON保存)
         "overall_label": LEVEL_LABELS[overall],
         "summary": summary,
         "reasons": reasons,
