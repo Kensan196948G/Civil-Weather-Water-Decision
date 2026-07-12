@@ -1451,7 +1451,9 @@
         // 左サイドメニュー（#79: グループ化カスタムサイドバー。PC幅のみ。狭幅は従来の上部タブ）
         + "@media(min-width:960px){"
         + "nav{display:none !important}"          // dc上部タブは非表示（サイドバーに置換）
-        + "#cw-sidebar{display:flex}"
+        // !important 必須: 後続のベース規則 #cw-sidebar{display:none} と同詳細度のため、
+        // 付けないとソース順で display:none が勝ちPC幅でもサイドバーが消える（実ブラウザ検証で判明）
+        + "#cw-sidebar{display:flex !important}"
         + "main{margin-left:240px !important;margin-right:18px !important}"
         + "#cw-reg-screen,#cw-wbgt-screen,#cw-settings-screen,.cw-screen{left:224px !important}"
         + "}"
