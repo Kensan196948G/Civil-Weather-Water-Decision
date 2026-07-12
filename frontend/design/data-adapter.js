@@ -553,18 +553,34 @@
       adapter.me().then(function (u) { if (u && u.role) { hideLogin(); setUserPill(u); } }).catch(function () {});
     }
     // ---- レイアウト調整（#66: 左サイドメニュー化＋右上ヘッダ被り修正。.dc.html無改修） ----
+    function mountHeaderTools() {
+      // ベル・ユーザー表示をヘッダ右側の実DOMフローへ挿入（fixed座標の重なりを根治）。
+      // dc-runtime がヘッダを再レンダーして外れた場合は MutationObserver 経由で再マウントする。
+      var tools = document.getElementById("cw-hdr-tools");
+      if (!tools) {
+        tools = document.createElement("div");
+        tools.id = "cw-hdr-tools";
+      }
+      var hdr = document.querySelector("header > div:nth-child(2)"); // 右側flexコンテナ
+      if (hdr) {
+        if (tools.parentNode !== hdr) hdr.appendChild(tools);
+      } else if (!tools.parentNode) {
+        document.body.appendChild(tools); // ヘッダ未描画時のフォールバック（fixedで右上へ）
+      }
+      return tools;
+    }
     function installLayout() {
       if (document.getElementById("cw-layout-css")) return;
       var css = document.createElement("style");
       css.id = "cw-layout-css";
       css.textContent =
-        // 右上ツール統合コンテナ: ベルとユーザー表示を1箇所に整列し、固定座標同士の重なりを排除
-        "#cw-hdr-tools{position:fixed;top:8px;right:14px;z-index:50;display:flex;align-items:center;gap:8px;"
+        // 右上ツール: ヘッダ内フローで整列（座標ハードコードなし）。body直下に落ちた時のみfixed
+        "#cw-hdr-tools{display:flex;align-items:center;gap:8px;flex:none;"
         + "font-family:'Noto Sans JP',system-ui,sans-serif}"
-        // ヘッダ側にツール分の余白を確保し、モックのユーザー表示（山田 太郎）は非表示化
-        + "header{padding-right:290px !important}"
+        + "body>#cw-hdr-tools{position:fixed;top:8px;right:14px;z-index:50}"
+        // モックのユーザー表示（山田 太郎）は非表示化（実ログインユーザーのピルに置き換わる）
         + "header>div:nth-child(2)>div:nth-child(4){display:none !important}"
-        + "@media(max-width:700px){header{padding-right:170px !important}#cw-user-name{display:none}}"
+        + "@media(max-width:700px){#cw-user-name{display:none}}"
         // 左サイドメニュー（PC幅のみ。狭幅は従来の上部タブへフォールバック）
         + "@media(min-width:960px){"
         + "nav{position:fixed !important;top:56px !important;left:0;bottom:0;width:210px;"
@@ -572,13 +588,17 @@
         + "border-bottom:none !important;border-right:1px solid #dce3ea;overflow:hidden auto !important;"
         + "box-shadow:1px 0 3px rgba(20,40,60,.05) !important}"
         + "nav>button{justify-content:flex-start;border-radius:8px;padding:11px 12px !important}"
+        // 選択中メニューは薄い網掛け（非選択はインラインの 'transparent' 下線を持つことで判別）
+        + "nav>button:not([style*=\"transparent\"]){background:rgba(19,52,79,.08) !important}"
+        + "nav>button:hover{background:rgba(19,52,79,.05)}"
         + "main{margin-left:226px !important;margin-right:18px !important}"
         + "#cw-reg-screen,#cw-wbgt-screen{left:210px !important}"
         + "}";
       document.head.appendChild(css);
-      var tools = document.createElement("div");
-      tools.id = "cw-hdr-tools";
-      document.body.appendChild(tools);
+      mountHeaderTools();
+      // ヘッダ再レンダーでツールが外れたら自動復元（コールバックは no-op 主体で軽量）
+      new MutationObserver(function () { mountHeaderTools(); })
+        .observe(document.body, { childList: true, subtree: true });
     }
 
     function installLoginScreen() {
