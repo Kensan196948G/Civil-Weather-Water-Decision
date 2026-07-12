@@ -30,11 +30,18 @@
       "access_applied_at": "2026-07-12",
       "access_app": "cwwd (Cloudflare Access self_hosted, session 24h)",
       "access_policy": "CWWD: allow email_domain=mirai-const.co.jp OR email=kensan1969@gmail.com",
-      "note": "2026-07-12 人間実行によりTunnel作成・DNSルーティング完了、フォアグラウンド起動で3ルート疎通確認済み(/=front 200, /health=backend, /api/sites=401認証ガード。401は/api/sitesの実測で全API個別確認ではない)。config-cwwd.ymlは/api/*・/healthをbackend(55019)、他をfrontend(34979)へパス分割(動的ポート実値・要追従)。注意: route dns/runは必ず--configでconfig-cwwd.ymlを明示(デフォルトconfig.ymlのonegate指定が優先される罠あり・実害確認済み)。同日追記: Cloudflare Accessアプリ(cwwd)/ポリシー(CWWD)を人間作成、未認証アクセスの302リダイレクト(Accessログイン)を実測確認。許可はmirai-const.co.jpドメインと管理者メールのみで第三者はアプリ本体へ到達不可(env:local一時公開のデモ資格情報リスクはエッジ側で遮断)。残: systemd常駐化、本番チェックリスト適用(APP_ENV=production/JWT_SECRET/ADMIN_PASSWORD/CORS絞り込み — 多層防御の完成形として引き続き推奨)。"
+      "note": "2026-07-12 Tunnel開通(人間実行)→同日夜にsystemd常駐化完了(Issue #77/PR #78・CTO実行・OS起動時自動起動・unit正本はdeploy/systemd/)。ポートは55019/34979で固定化済み(config-cwwd.ymlと一致)。Cloudflare Accessアプリ(cwwd)/ポリシー(CWWD)でエッジ防御(未認証302実測済)。残: 本番チェックリスト適用(APP_ENV=production/JWT_SECRET/SETTINGS_ENCRYPTION_KEY(#80新設)/ADMIN_PASSWORD/CORS絞り込み — 秘密登録のため人間実行)。注意: route dns/runは必ず--configでconfig-cwwd.ymlを明示(デフォルトconfig.ymlのonegate指定が優先される罠・実害確認済み)。",
+      "systemd_persistent": true,
+      "systemd_units": [
+        "cwwd-backend(0.0.0.0:55019)",
+        "cwwd-frontend(0.0.0.0:34979)",
+        "cwwd-tunnel"
+      ],
+      "systemd_applied_at": "2026-07-12"
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",
-  "phase": "Monitor",
+  "phase": "Verify",
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
@@ -138,5 +145,27 @@
     ],
     "merge_status": "merged (2026-07-12 人間承認済み)",
     "note": "履歴記録。deferred分は#49で対応完了(PR#52)。CLAUDE.md/safe-auto-merge.mdへの4指摘は引き続き人間判断待ち(自己改変しない方針)。"
+  },
+  "session_2026_07_12_night": {
+    "summary": "ユーザー要望(サービス起動+systemd常駐化+メニュー体系拡張)対応と積み残しIssue消化。5並列(CTO+4サブエージェント)。",
+    "systemd": "cwwd-backend/frontend/tunnel を常駐化・OS起動時自動起動(Issue #77/PR #78)。LAN・公開URL疎通実測済。",
+    "open_prs_review_gated": {
+      "76": "state.json同期(KPI 117/40)",
+      "78": "systemd常駐化unit記録(#77)",
+      "81": "監査同一tx化(#63・Codex対抗PASS・125 pass・commit時DB障害注入テスト追加)",
+      "82": "設定API+AI設定(#80・Codex対抗High2→修正済PASS・149 pass・SETTINGS_ENCRYPTION_KEY新設)",
+      "83": "メニュー5グループ化+管理系画面(#79・Codexレビュー対応済・26/21/16 test)",
+      "84": "川の防災情報リンク管理(#30・Codex対抗High1→修正済PASS・127 pass)",
+      "86": "README更新(systemd/メニュー/Neon)"
+    },
+    "all_ci_green": true,
+    "human_gate": "全PRがmain宛のためマージは人間承認待ち。推奨マージ順: #81→#82→#84→#83(設定画面はAPI依存)→#76/#78/#86。#82マージ時はNeon mainへapp_settings DDL適用+本番はSETTINGS_ENCRYPTION_KEY設定要。",
+    "new_issues": [
+      77,
+      79,
+      80,
+      85
+    ],
+    "prod_hardening_pending": "#2相当(APP_ENV/JWT_SECRET/SETTINGS_ENCRYPTION_KEY/ADMIN_PASSWORD/CORS)は秘密登録を伴うため人間ゲート。"
   }
 }
