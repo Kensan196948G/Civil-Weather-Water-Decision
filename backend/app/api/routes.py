@@ -604,8 +604,11 @@ async def evaluate_work_plan(plan_id: str, db: Session = Depends(get_db),
     site = db.get(Site, plan.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    res = await assessment.assess_decision(site, plan.work_type, plan.planned_start, plan.planned_end)
-    rid = _persist_decision_result(db, site.id, plan.work_type, res)
+    # /api/decisions/evaluate と同じ fresh 閾値・スナップショット経路(第2の永続化パス)
+    th = rules_service.effective_th(fresh=True)
+    res = await assessment.assess_decision(site, plan.work_type, plan.planned_start,
+                                           plan.planned_end, th=th)
+    rid = _persist_decision_result(db, site.id, plan.work_type, res, thresholds=th)
     audit(db, user, "evaluate", f"{rid} {plan_id} L{res['overall_level']}", site_id=site.id)
     res["resultId"] = rid
     res["workPlanId"] = plan_id

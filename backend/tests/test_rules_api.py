@@ -231,3 +231,22 @@ def test_rule_change_rolls_back_when_audit_fails(client, monkeypatch):
 
     rules = {x["key"]: x for x in client.get("/api/admin/rules").json()["rules"]}
     assert rules["gust_stop"]["overridden"] is False, "監査失敗時は変更が残らない"
+
+
+def test_work_plan_evaluation_records_threshold_snapshot(client):
+    """第2の永続化パス(work-plans evaluate)も閾値変更後の新値でスナップショットを残す。"""
+    import json as _json
+
+    from app.core.db import SessionLocal
+    from app.models import DecisionResult
+
+    client.put("/api/admin/rules", json={"updates": {"rain_heavy": 28.0}})
+    r = client.post("/api/work-plans/WP04/evaluate")  # S02 earthwork のシード予定
+    rid = r.json()["resultId"]
+    db = SessionLocal()
+    try:
+        th = _json.loads(db.get(DecisionResult, rid).thresholds_json)
+    finally:
+        db.close()
+    assert th["rain_heavy"] == 28.0
+    client.put("/api/admin/rules", json={"updates": {"rain_heavy": None}})
