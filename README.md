@@ -51,10 +51,32 @@ Construction Weather & Water Decision Support
 - [詳細仕様設計書](./Civil-Weather-Water-Decision_Detailed_Design.md)
 - [実装計画書（ロードマップ・WBS・リスク）](./docs/implementation-plan.md)
 
-## WebUI
+## 🖥️ WebUI
 
-WebUI は ClaudeDesign で作成し `frontend/` に取り込み済み（モックデータで動作する6画面 SPA）。
-起動方法・ClaudeDesign 再取り込み手順・モック→実API のデータ接続計画は [frontend/README.md](./frontend/README.md) を参照。
+WebUI は ClaudeDesign 生成 UI（`frontend/design/`）＋ `data-adapter.js` による実 API 接続で動作します。
+詳細は [frontend/README.md](./frontend/README.md) を参照。
+
+### 🌐 アクセス
+
+| 経路 | URL | 備考 |
+|---|---|---|
+| 公開（Cloudflare Tunnel + Access） | `https://cwwd.mirai-dx-platform.com/` | 許可メンバーのみ（Access ログイン） |
+| LAN | `http://<LAN-IP>:34979/?api=http://<LAN-IP>:55019` | 例: 192.168.0.185 |
+
+backend(55019)・frontend(34979)・cloudflared は **systemd 常駐**（OS 起動時に自動起動、`deploy/systemd/` 参照）。
+
+### 🗺️ メニュー体系（#72/#79）
+
+```
+📊 ダッシュボード
+🏗️ 現場管理        現場一覧 / ＋現場登録
+🌤️ 気象・海象データ  気象データ：全国版 / 海象データ：全国版※
+⚖️ 施工判定        作業判断 / コンクリート打設 / 海上作業※ / 熱中症・WBGT
+📈 分析           判断履歴 / 過去データ分析 / 50年確率波※
+⚙️ 管理           閾値管理 / データ取得状況 / レポート出力 / 監査ログ / 設定（通知・保存期間・AI設定）
+```
+※印は準備中（データソース調査・蓄積が前提。エピック #72 段5-7）。
+管理系はロール制御（閾値管理・監査ログ=admin/技術管理者、設定=admin）。
 
 ## 開発ステータス / Status
 
@@ -72,10 +94,10 @@ WebUI は ClaudeDesign で作成し `frontend/` に取り込み済み（モッ�
 
 - フロントエンド: ClaudeDesign 生成の静的 UI（dc-runtime、React 18 を CDN 経由でロード）＋ `data-adapter.js` による実 API 接続（`.dc.html` 無改修）
 - バックエンド: FastAPI (Python 3.12) + SQLAlchemy + Alembic + APScheduler
-- 認証/認可: JWT + RBAC（管理者・現場管理者・閲覧者）＋ 監査ログ
-- DB: SQLite（開発）/ PostgreSQL 16（本番候補）※同一 Alembic マイグレーションが両対応
-- コンテナ: Docker Compose（postgres + backend + frontend）
-- CI/CD: GitHub Actions（lint・test・docker build）
+- 認証/認可: JWT + RBAC（管理者・技術管理者・現場管理者・安全担当・閲覧）＋ 監査ログ（ドメイン変更と同一トランザクション記録）
+- DB: **Neon PostgreSQL**（本番・2026-07-12 切替済み）/ SQLite（テスト）※同一 Alembic マイグレーションが両対応
+- 公開基盤: systemd 常駐（backend/frontend/cloudflared）＋ Cloudflare Tunnel ＋ Cloudflare Access（エッジ認可）
+- CI/CD: GitHub Actions（lint・test・依存脆弱性スキャン・docker build）＋ Codex 対抗レビュー/CodeRabbit
 
 > フロントエンドは PoC 当初計画（React+Vite+TypeScript+Tailwind の自前実装）から、ClaudeDesign 生成 UI ＋ 外部データアダプタ方式へ変更されています。詳細は [frontend/README.md](./frontend/README.md) を参照してください。
 
