@@ -46,7 +46,9 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - [x] `deploy/cloudflared-config.yml.example`（tunnel設定テンプレ）作成
 - [x] Cloudflare Tunnel 作成・DNS ルーティング（`cloudflared tunnel route dns` ― 人間実行、2026-07-12）
 - [x] state.json への `deploy_plan.public_url` 反映
-- [ ] backend/frontend の systemd 常駐化（`*.service` unit適用。現状はフォアグラウンド一時起動のみ）
+- [x] backend/frontend/tunnel の systemd 常駐化（2026-07-12 適用済み・Issue #77。
+      `cwwd-backend` 0.0.0.0:55019 / `cwwd-frontend` 0.0.0.0:34979 / `cwwd-tunnel`。
+      OS起動時に3点セット自動起動。unit 実体の正本は `deploy/systemd/`）
 - [ ] `CORS_ORIGINS` を `https://cwwd.mirai-dx-platform.com` に更新
 - [x] エッジ側アクセス制御: Cloudflare Access アプリ `cwwd` / ポリシー `CWWD`
       （allow: `mirai-const.co.jp` ドメイン or 管理者メール、2026-07-12 人間作成・302リダイレクト実測確認済み）
