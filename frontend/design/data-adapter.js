@@ -18,7 +18,7 @@
     var _fetch = opts.fetch || (typeof fetch !== "undefined" ? fetch : null);
     var bump = opts.bump || function () {};
     var _open = opts.open || function () {};
-    var CW = { sites: null, meta: null, sources: null, history: null, series: {}, result: null, ver: 0 };
+    var CW = { sites: null, meta: null, sources: null, history: null, series: {}, stations: {}, result: null, ver: 0 };
 
     function url(p) { return base + p; }
 
@@ -80,6 +80,11 @@
       sites.forEach(function (s) { if (s.lat != null && s.lon != null) c[s.id] = [s.lat, s.lon]; });
       return c;
     }
+    function buildStations(stations, base) {
+      var s = {}; if (base) { for (var k in base) s[k] = base[k]; }
+      for (var id in stations) { if (stations[id]) s[id] = stations[id]; }
+      return s;
+    }
     function mapSources(src) {
       return (src || []).map(function (d) {
         var m = d.status === "OK" ? { color: "#2e7d32", bg: "#e7f3e9", border: "#bcdcc0", dot: "#2e7d32" }
@@ -120,15 +125,20 @@
       })).then(bump);
     }
     function ensureSiteDetail(id) {
-      return j("/api/sites/" + id).then(function (d) {
+      var detail = j("/api/sites/" + id).then(function (d) {
         var s = CW.sites && CW.sites.filter(function (x) { return x.id === id; })[0];
         if (s) {
           s.plans = (d.plans || []).map(function (p) {
             return { title: p.title, time: p.time, contractor: p.contractor, level: p.level, reason: p.reason };
           });
         }
-        bump();
       }).catch(function () {});
+      var stations = j("/api/sites/" + id + "/stations").then(function (list) {
+        CW.stations[id] = (list || []).map(function (st) {
+          return { name: st.name, type: st.type, rel: st.rel, d: [st.lat, st.lon] };
+        });
+      }).catch(function () {}); // 観測所ピンは補助表示のため、取得失敗時も現場詳細自体は表示を継続
+      return Promise.all([detail, stations]).then(bump);
     }
     function loadAll() {
       return loadDashboard().then(function () {
@@ -160,6 +170,7 @@
         if (CW.sites) {
           this.SITES = CW.sites;                          // ダッシュボード/現場詳細/グラフが API データを参照
           this.COORDS = buildCoords(CW.sites, this.COORDS); // 地図ピン用に全現場の緯度経度を供給（全国対応）
+          this.STATIONS = buildStations(CW.stations, this.STATIONS); // 現場詳細の観測所ピン（openSite時に遅延取得）
         }
         if (CW.history) this.state.history = CW.history; // 判断履歴
         var vals = origRender.call(this);
