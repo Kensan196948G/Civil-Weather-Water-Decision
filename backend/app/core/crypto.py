@@ -1,11 +1,16 @@
 """秘密値（AI APIキー等）の対称鍵暗号化（#80）。
 
-鍵は JWT_SECRET から決定的に導出する（SHA-256 → base64url 32バイト → Fernet）。
-そのため **暗号強度は JWT_SECRET の秘匿に完全に依存する**。本番チェックリスト
-（JWT_SECRET を 32バイト以上のランダム値で必ず上書き。config._guard_production が
-起動時に強制）が適用されて初めて実用強度になる。
+鍵素材の優先順位（#80 対抗レビュー high-2）:
+1. SETTINGS_ENCRYPTION_KEY（暗号化専用鍵。設定されていれば最優先）
+2. JWT_SECRET（未設定時のフォールバック）
 
-JWT_SECRET を変更すると既存の暗号値は復号できなくなり、decrypt() は None を返す。
+素材を SHA-256 → base64url 32バイト → Fernet 鍵へ決定的に導出する。専用鍵が無く
+JWT_SECRET が既定値/32バイト未満のときは **実用強度に満たない**ため、ai_api_key の
+新規保存は routes 側の保存ガードで 422 拒否する（encryption_is_strong を参照）。
+本番チェックリスト（SETTINGS_ENCRYPTION_KEY または JWT_SECRET を 32バイト以上で設定）
+が適用されて初めて保存が有効化される。
+
+鍵素材を変更すると既存の暗号値は復号できなくなり、decrypt() は None を返す。
 呼び出し側はこれを「未設定(configured=false)」として安全に縮退させ、500 を出さない。
 """
 from __future__ import annotations
@@ -15,12 +20,36 @@ import hashlib
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from .config import settings
+from .config import _DEFAULT_JWT_SECRET, settings
+
+# 実用強度とみなす最小バイト長（Fernet鍵導出前の素材長。JWT_SECRET本番要件と同じ）
+_MIN_KEY_BYTES = 32
+
+
+def _key_source() -> str:
+    """Fernet 鍵導出の素材。専用鍵があれば優先、なければ JWT_SECRET。"""
+    dedicated = (settings.settings_encryption_key or "").strip()
+    return dedicated if dedicated else settings.jwt_secret
+
+
+def encryption_is_strong() -> bool:
+    """ai_api_key を実用強度で暗号化できるか。
+
+    専用鍵(SETTINGS_ENCRYPTION_KEY, 32バイト以上)があれば True。無ければ JWT_SECRET が
+    既定値でなく 32バイト以上のときのみ True。False の間は新規保存を拒否する。
+    """
+    dedicated = (settings.settings_encryption_key or "").strip()
+    if len(dedicated.encode()) >= _MIN_KEY_BYTES:
+        return True
+    secret = settings.jwt_secret or ""
+    if secret == _DEFAULT_JWT_SECRET:
+        return False
+    return len(secret.encode()) >= _MIN_KEY_BYTES
 
 
 def _fernet() -> Fernet:
-    """JWT_SECRET から Fernet 鍵（32バイトの base64url）を決定的に導出する。"""
-    key = base64.urlsafe_b64encode(hashlib.sha256(settings.jwt_secret.encode()).digest())
+    """鍵素材（専用鍵優先）から Fernet 鍵（32バイトの base64url）を決定的に導出する。"""
+    key = base64.urlsafe_b64encode(hashlib.sha256(_key_source().encode()).digest())
     return Fernet(key)
 
 

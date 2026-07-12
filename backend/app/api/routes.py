@@ -8,11 +8,10 @@ import random
 import re
 import time
 from datetime import datetime
-from typing import Any
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -234,13 +233,52 @@ _RETENTION_KEY = "data_retention_days"
 _USER_PREFS_KEY = "user_prefs"
 _RETENTION_DEFAULT = 365
 _RETENTION_MIN, _RETENTION_MAX = 30, 3650
-# 通知設定は固定2フラグ（API契約）。GET は常にこの2キーを bool で返す。
-_NOTIFY_SUBKEYS = ("slack_enabled", "teams_enabled")
-_NOTIFY_DEFAULT = {"slack_enabled": False, "teams_enabled": False}
-# 通知/ユーザー設定JSONの肥大化・悪用の保険（キー名はwhitelist前提のため緩めの上限）
+# 通知/ユーザー設定JSONの肥大化・悪用の保険（厳格スキーマ済みだが直列化サイズの保険）
 _SETTINGS_JSON_MAX = 8192
 # Anthropic 疎通確認先。キー値は x-api-key ヘッダのみで送り、応答・ログ・監査には出さない
 _ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
+_ANTHROPIC_TIMEOUT_SECONDS = 6  # 外部呼び出しの上限（#80 medium-2: 6秒）
+
+# ai/test のプロセス内レート制限（#80 medium-2）。ユーザー単位 5回/60秒。本番はRedis等へ。
+_AI_TEST_MAX = 5
+_AI_TEST_WINDOW_SECONDS = 60
+_ai_test_calls: dict[str, list[float]] = {}
+
+
+class NotifySettings(BaseModel):
+    """通知設定（固定2フラグ・厳格スキーマ）。任意ネスト dict の保存を禁じ、
+    保存型XSSの入口を作らない（#80 medium-1）。"""
+    model_config = ConfigDict(extra="forbid")
+    slack_enabled: bool = False
+    teams_enabled: bool = False
+
+
+class UserPrefs(BaseModel):
+    """ユーザー設定。現時点で許可キーなし（{} のみ受理）。将来キーを追加する際は、
+    ここにフィールドを定義し個別に型・値域を検証すること（生 dict は保存しない。#80 medium-1）。"""
+    model_config = ConfigDict(extra="forbid")
+
+
+class SettingsUpdate(BaseModel):
+    """設定の部分更新リクエスト（nested・厳格）。未知トップレベルキーは422。"""
+    model_config = ConfigDict(extra="forbid")
+    ai_api_key: str | None = None
+    notify: NotifySettings | None = None
+    data_retention_days: int | None = None
+    user_prefs: UserPrefs | None = None
+
+    @field_validator("data_retention_days", mode="before")
+    @classmethod
+    def _reject_non_int(cls, v):
+        if v is None:
+            return v
+        # int型そのもの以外（bool / 文字列"100" / 浮動小数100.0）を拒否（#80 low-2）。
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("data_retention_days: 整数（30〜3650）で指定してください")
+        if not (_RETENTION_MIN <= v <= _RETENTION_MAX):
+            raise ValueError(
+                f"data_retention_days: {_RETENTION_MIN}〜{_RETENTION_MAX} の整数で指定してください")
+        return v
 
 
 def _setting_ts() -> str:
@@ -296,9 +334,22 @@ def _current_retention(db: Session) -> int:
 
 
 def _current_notify(db: Session) -> dict:
-    """通知設定を既定値の上にマージして返す（常に slack_enabled/teams_enabled を bool で含む）。"""
+    """通知設定を厳格スキーマに通して返す（過去の不正値・未知キーは落ちる。#80 medium-1）。"""
     stored = _load_json_setting(db, _NOTIFY_KEY, {})
-    return {k: bool(stored.get(k, _NOTIFY_DEFAULT[k])) for k in _NOTIFY_SUBKEYS}
+    known = {k: stored[k] for k in NotifySettings.model_fields if k in stored}
+    try:
+        return NotifySettings.model_validate(known).model_dump()
+    except ValidationError:
+        return NotifySettings().model_dump()  # 不正値は既定 false/false へ縮退
+
+
+def _current_user_prefs(db: Session) -> dict:
+    """ユーザー設定を厳格スキーマに通して返す（許可キー外は落ちる。#80 medium-1）。"""
+    stored = _load_json_setting(db, _USER_PREFS_KEY, {})
+    try:
+        return UserPrefs.model_validate(stored).model_dump()
+    except ValidationError:
+        return UserPrefs().model_dump()
 
 
 def _settings_payload(db: Session) -> dict:
@@ -307,7 +358,7 @@ def _settings_payload(db: Session) -> dict:
         "ai": _ai_status(db),
         "notify": _current_notify(db),
         "data_retention_days": _current_retention(db),
-        "user_prefs": _load_json_setting(db, _USER_PREFS_KEY, {}),
+        "user_prefs": _current_user_prefs(db),
     }
 
 
@@ -315,23 +366,6 @@ def _settings_payload(db: Session) -> dict:
 def get_settings(db: Session = Depends(get_db),
                  user: User = Depends(require_role("admin"))):
     return _settings_payload(db)
-
-
-def _validate_retention(value: object) -> int:
-    """data_retention_days を検証して int を返す（非整数・真偽値・範囲外は 422）。"""
-    # JSONの true/false は Python では bool（int のサブクラス）。閾値管理#35と同様に明示拒否。
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise HTTPException(422, "data_retention_days: 整数を指定してください（真偽値は不可）")
-    if not (_RETENTION_MIN <= value <= _RETENTION_MAX):
-        raise HTTPException(
-            422, f"data_retention_days: {_RETENTION_MIN}〜{_RETENTION_MAX} の整数で指定してください")
-    return value
-
-
-def _validate_notify_flag(key: str, value: object) -> bool:
-    if not isinstance(value, bool):
-        raise HTTPException(422, f"{key}: 真偽値（true/false）で指定してください")
-    return value
 
 
 def _store_json_setting(db: Session, key: str, obj: dict, username: str) -> None:
@@ -343,70 +377,38 @@ def _store_json_setting(db: Session, key: str, obj: dict, username: str) -> None
 
 
 @router.put("/admin/settings")
-def put_settings(body: dict[str, Any] = Body(...), db: Session = Depends(get_db),
+def put_settings(req: SettingsUpdate, db: Session = Depends(get_db),
                  user: User = Depends(require_role("admin"))):
-    """設定の部分更新。API契約はフラットな dotted key（notify.slack_enabled 等）だが、
-    フロント現行実装との整合のため nested（notify:{...}）も等価に受理する。whitelist 外は 422。
-    変更は監査行と同一トランザクションで commit する（#35/#63: 監査なき設定変更を残さない）。
+    """設定の部分更新（nested・厳格スキーマ）。明示されたフィールドのみ更新する。
+    変更は監査行と同一トランザクションで commit（#35/#63: 監査なき設定変更を残さない）。
     """
-    if not body:
+    # 明示指定（None は未指定扱い）されたフィールドのみ更新
+    provided = {k for k in req.model_fields_set if getattr(req, k) is not None}
+    if not provided:
         raise HTTPException(422, "更新するフィールドがありません")
 
-    # ---- フェーズ1: 全キーを検証・正規化（1つでも不正なら 422。部分適用しない） ----
-    ai_secret: str | None = None
-    retention: int | None = None
-    notify_changes: dict[str, bool] = {}
-    prefs_changes: dict[str, Any] = {}
-    audit_keys: list[str] = []  # 監査にはキー名のみ（秘密値は載せない。AIは末尾4桁マスク可）
-
-    for key, value in body.items():
-        if key == _AI_KEY:  # ai_api_key（平文は監査・応答に出さない）
-            if not isinstance(value, str) or not value.strip():
-                # 空値での上書きは不可。解除は DELETE /admin/settings/ai を使う
-                raise HTTPException(422, "ai_api_key: 空にできません（解除は DELETE を使用してください）")
-            ai_secret = value.strip()
-            audit_keys.append(f"{_AI_KEY}({_mask_tail(ai_secret)})")
-        elif key == _RETENTION_KEY:  # data_retention_days
-            retention = _validate_retention(value)
-            audit_keys.append(f"{_RETENTION_KEY}={retention}")
-        elif key == _NOTIFY_KEY:  # nested: {"notify": {...}}（フロント現行形・互換）
-            if not isinstance(value, dict):
-                raise HTTPException(422, "notify: オブジェクトで指定してください")
-            for sub, sub_val in value.items():
-                if sub not in _NOTIFY_SUBKEYS:
-                    raise HTTPException(422, f"未知の設定キー: notify.{sub}")
-                notify_changes[sub] = _validate_notify_flag(f"notify.{sub}", sub_val)
-                audit_keys.append(f"notify.{sub}")
-        elif key.startswith("notify."):  # dotted: {"notify.slack_enabled": true}（API契約）
-            sub = key.split(".", 1)[1]
-            if sub not in _NOTIFY_SUBKEYS:
-                raise HTTPException(422, f"未知の設定キー: {key}")
-            notify_changes[sub] = _validate_notify_flag(key, value)
-            audit_keys.append(key)
-        elif key == _USER_PREFS_KEY:  # nested: {"user_prefs": {...}}
-            if not isinstance(value, dict):
-                raise HTTPException(422, "user_prefs: オブジェクトで指定してください")
-            prefs_changes.update(value)
-            audit_keys.append(_USER_PREFS_KEY)
-        elif key.startswith("user_prefs.") and len(key) > len("user_prefs."):
-            prefs_changes[key.split(".", 1)[1]] = value
-            audit_keys.append(key)
-        else:
-            raise HTTPException(422, f"未知の設定キー: {key}")
-
-    # ---- フェーズ2: 適用（全検証通過後にのみ書き込む） ----
-    if ai_secret is not None:
-        _upsert_setting(db, _AI_KEY, crypto.encrypt(ai_secret), user.username)
-    if retention is not None:
-        _upsert_setting(db, _RETENTION_KEY, str(retention), user.username)
-    if notify_changes:
-        merged = _current_notify(db)  # 既定+既存の上に差分を重ねる（両フラグを常に保持）
-        merged.update(notify_changes)
-        _store_json_setting(db, _NOTIFY_KEY, merged, user.username)
-    if prefs_changes:
-        merged = _load_json_setting(db, _USER_PREFS_KEY, {})
-        merged.update(prefs_changes)
-        _store_json_setting(db, _USER_PREFS_KEY, merged, user.username)
+    audit_keys: list[str] = []  # 監査にはキー名のみ（秘密値・マスクも載せない。#80 low-1）
+    if "ai_api_key" in provided:
+        secret = req.ai_api_key.strip()
+        if not secret:
+            # 空値での上書きは不可。解除は DELETE /admin/settings/ai を使う
+            raise HTTPException(422, "ai_api_key: 空にできません（解除は DELETE を使用してください）")
+        if not crypto.encryption_is_strong():
+            # 弱鍵のまま平文同然で保存しない（#80 high-2）。メッセージに秘密値は含めない。
+            raise HTTPException(
+                422, "暗号鍵が未設定のため保存できません。"
+                     "JWT_SECRET(32バイト以上) または SETTINGS_ENCRYPTION_KEY を設定してください")
+        _upsert_setting(db, _AI_KEY, crypto.encrypt(secret), user.username)
+        audit_keys.append(f"{_AI_KEY}(updated)")  # マスク値も載せない（tech_manager露出防止）
+    if "data_retention_days" in provided:
+        _upsert_setting(db, _RETENTION_KEY, str(req.data_retention_days), user.username)
+        audit_keys.append(f"{_RETENTION_KEY}={req.data_retention_days}")
+    if "notify" in provided:  # 厳格スキーマ済み（両フラグを完全置換）
+        _store_json_setting(db, _NOTIFY_KEY, req.notify.model_dump(), user.username)
+        audit_keys.append(_NOTIFY_KEY)
+    if "user_prefs" in provided:
+        _store_json_setting(db, _USER_PREFS_KEY, req.user_prefs.model_dump(), user.username)
+        audit_keys.append(_USER_PREFS_KEY)
 
     # 監査行を同一トランザクションに含める（commit後のaudit失敗で監査欠落を防ぐ。#35/#63）
     audit_add(db, user, "settings_update", ", ".join(audit_keys))
@@ -428,7 +430,7 @@ async def _anthropic_check(api_key: str) -> dict:
     """
     headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=_ANTHROPIC_TIMEOUT_SECONDS) as client:
             resp = await client.get(_ANTHROPIC_MODELS_URL, headers=headers)
     except Exception:  # noqa: BLE001 - 疎通不能は隠さず ok:false で返す（キー値は出さない）
         return {"ok": False, "error": "接続に失敗しました。ネットワークを確認してください。"}
@@ -448,9 +450,28 @@ class AiKeyTest(BaseModel):
     api_key: str | None = None
 
 
+def _ai_test_rate_limited(username: str) -> bool:
+    """ai/test のユーザー単位スライディングウィンドウ制限（#80 medium-2）。超過なら True。
+
+    外部（Anthropic）への無制限・無監査な疎通確認オラクル化を防ぐ。プロセス内メモリのため
+    PoC 相当（本番は Redis 等の共有ストアへ）。auth.py のログイン試行制限と同方針。
+    """
+    now = time.monotonic()
+    recent = [t for t in _ai_test_calls.get(username, []) if now - t < _AI_TEST_WINDOW_SECONDS]
+    if len(recent) >= _AI_TEST_MAX:
+        _ai_test_calls[username] = recent  # 期限切れを掃除しつつ据え置き（新規は数えない）
+        return True
+    recent.append(now)
+    _ai_test_calls[username] = recent
+    return False
+
+
 @router.post("/admin/settings/ai/test")
 async def test_ai_key(req: AiKeyTest | None = None, db: Session = Depends(get_db),
                       user: User = Depends(require_role("admin"))):
+    # 外部呼び出しオラクル化を防ぐレート制限（#80 medium-2）。HTTPは常に200で ok:false を返す。
+    if _ai_test_rate_limited(user.username):
+        return {"ok": False, "error": "試行回数が多すぎます。しばらく待って再試行してください。"}
     # body指定があればその値、なければ保存済みキーを復号して使用
     api_key = (req.api_key.strip() if req and req.api_key else "") or None
     if api_key is None:
@@ -458,7 +479,10 @@ async def test_ai_key(req: AiKeyTest | None = None, db: Session = Depends(get_db
         api_key = crypto.decrypt(row.value) if row and row.value else None
     if not api_key:
         return {"ok": False, "error": "APIキーが未設定です"}
-    return await _anthropic_check(api_key)
+    result = await _anthropic_check(api_key)
+    # テスト実施を監査（キー値・マスクは載せない。単独書き込みのため自己コミットの audit() 可。#80 medium-2）
+    audit(db, user, "ai_key_test", "ok" if result.get("ok") else "ng")
+    return result
 
 
 @router.delete("/admin/settings/ai")

@@ -59,6 +59,10 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 
 - [ ] `APP_ENV=production`
 - [ ] `JWT_SECRET` を 32バイト以上のランダム値で設定（未設定/既定値は起動失敗）
+- [ ] `SETTINGS_ENCRYPTION_KEY`（AI APIキー等の設定値暗号化専用鍵、32バイト以上）を推奨設定。
+      未設定でも `JWT_SECRET`（32バイト以上）から鍵導出するが、専用鍵の方が鍵ローテーションを
+      認証トークンと分離できる。**専用鍵も `JWT_SECRET` も実用強度に満たない場合、設定画面からの
+      AI APIキー保存は 422 で拒否される**（`crypto.encryption_is_strong` / #80 high-2）
 - [ ] `ENABLE_AUTH=true`（false は起動失敗）
 - [ ] `ADMIN_PASSWORD` を設定（本番は初期管理者のみ作成。デモユーザーは local 限定）
 - [ ] `DATABASE_URL` を PostgreSQL に（`alembic upgrade head` は起動時自動）
