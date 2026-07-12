@@ -190,9 +190,16 @@ def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
     if not req.updates:
         raise HTTPException(422, "updates が空です")
     # 書き込みは直列化して実施(プロセス内=WRITE_LOCK、PostgreSQL間=advisory lock)。
-    # 検証はロック下のDB実効値に対して行う(同時部分更新の混成不整合防止)
-    with rules_service.WRITE_LOCK:
-        errors = rules_service.apply_updates(db, req.updates, user.username)
+    # ロック待ちは有限化(プロセス内5秒/PG lock_timeout 3秒)し、詰まりはワーカー占有でなく503で返す
+    if not rules_service.WRITE_LOCK.acquire(timeout=5):
+        raise HTTPException(503, "設定更新が混み合っています。しばらくして再試行してください。")
+    try:
+        try:
+            errors = rules_service.apply_updates(db, req.updates, user.username)
+        except OperationalError:
+            # PG advisory lock の lock_timeout 超過等
+            db.rollback()
+            raise HTTPException(503, "設定更新が混み合っています。しばらくして再試行してください。") from None
         if errors:
             db.rollback()
             raise HTTPException(422, "; ".join(errors))
@@ -206,6 +213,8 @@ def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
             # 直列化により通常到達しない保険(万一の同時INSERT衝突を500にしない)
             db.rollback()
             raise HTTPException(409, "設定が競合しました。再試行してください。") from None
+    finally:
+        rules_service.WRITE_LOCK.release()
     rules_service.clear_cache()  # 自プロセスの実効閾値キャッシュを即時無効化
     return {"status": "updated", "rules": rules_service.list_rules(db)}
 

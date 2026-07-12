@@ -47,7 +47,7 @@ def test_put_rules_overrides_and_affects_engine(client):
     rules_service.clear_cache()  # 評価側キャッシュを新値で引き直す
     assert _eval_earthwork_rain10()["overall_level"] == 1  # 20.0未満 → 注意止まり
 
-    # 既定値へリセット（value=null。制約ペアの相手 rain_light も両方リセット）
+    # 既定値へリセット（value=null）
     r = client.put("/api/admin/rules",
                    json={"updates": {"rain_heavy": None, "rain_light": None}})
     assert r.status_code == 200
@@ -76,7 +76,31 @@ def test_only_explicit_keys_are_persisted(client):
     rules = {x["key"]: x for x in r.json()["rules"]}
     assert rules["rain_light"]["overridden"] is True
     assert rules["rain_heavy"]["overridden"] is False  # 相手キーは既定のまま（合成書き込みなし）
-    client.put("/api/admin/rules", json={"updates": {"rain_light": None}})
+    assert client.put("/api/admin/rules",
+                      json={"updates": {"rain_light": None}}).status_code == 200
+
+
+def test_put_rules_returns_503_when_lock_busy(client):
+    """先行更新がロックを握っている間のPUTは、ワーカー占有でなく503で返す。"""
+    import threading
+
+    acquired = rules_service.WRITE_LOCK.acquire(timeout=1)
+    assert acquired
+    try:
+        done = {}
+
+        def put():
+            r = client.put("/api/admin/rules", json={"updates": {"gust_stop": 21.0}})
+            done["status"] = r.status_code
+
+        # acquire(timeout=5)を短縮せずに済むよう、別スレッドで実行し5秒強待つ
+        t = threading.Thread(target=put)
+        t.start()
+        t.join(timeout=8)
+        assert not t.is_alive(), "PUTはロック待ちのまま無期限に固まらない"
+        assert done.get("status") == 503
+    finally:
+        rules_service.WRITE_LOCK.release()
 
 
 def test_concurrent_puts_never_persist_inconsistent_pair(client):
@@ -89,9 +113,12 @@ def test_concurrent_puts_never_persist_inconsistent_pair(client):
 
     def put(payload):
         barrier.wait(timeout=10)
-        r = client.put("/api/admin/rules", json={"updates": payload})
+        try:
+            outcome = client.put("/api/admin/rules", json={"updates": payload}).status_code
+        except Exception as exc:  # noqa: BLE001 - 例外も欠陥として収集(握り潰し=検証空振りを防ぐ)
+            outcome = f"EXC:{exc!r}"
         with lock:
-            results.append(r.status_code)
+            results.append(outcome)
 
     threads = [threading.Thread(target=put, args=({"rain_light": 4.0},)),
                threading.Thread(target=put, args=({"rain_heavy": 2.0},))]
@@ -100,12 +127,14 @@ def test_concurrent_puts_never_persist_inconsistent_pair(client):
     for t in threads:
         t.join()
 
-    assert all(c in (200, 422) for c in results), f"500を出さない: {results}"
+    assert len(results) == 2 and all(c in (200, 422) for c in results), \
+        f"例外・500を出さない: {results}"
     rules = {x["key"]: x for x in client.get("/api/admin/rules").json()["rules"]}
     assert rules["rain_light"]["value"] < rules["rain_heavy"]["value"], \
         f"最終状態は必ず整合: light={rules['rain_light']['value']} heavy={rules['rain_heavy']['value']}"
-    client.put("/api/admin/rules",
-               json={"updates": {"rain_light": None, "rain_heavy": None}})
+    r = client.put("/api/admin/rules",
+                   json={"updates": {"rain_light": None, "rain_heavy": None}})
+    assert r.status_code == 200  # 後始末の失敗を後続テストへ持ち込まない
 
 
 def test_put_rules_requires_admin(client):

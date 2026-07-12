@@ -154,6 +154,8 @@ def apply_updates(db: Session, updates: dict, username: str) -> list[str]:
         return errors
 
     if db.get_bind().dialect.name == "postgresql":
+        # 無期限待機を避ける: ロック待ちは3秒で諦めさせ、呼び出し側が503を返す
+        db.execute(text("SET LOCAL lock_timeout = '3s'"))
         # トランザクションスコープの排他ロック（commit/rollbackで自動解放）
         db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _PG_ADVISORY_KEY})
     rows = {r.key: r for r in db.scalars(select(DecisionRule)).all() if r.key in DEFAULT_TH}
