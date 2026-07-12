@@ -69,14 +69,41 @@ def test_effective_th_follows_db_without_local_clear(client, monkeypatch):
                json={"updates": {"gust_stop": None, "wind_strong": None}})
 
 
-def test_pair_keys_are_written_atomically(client):
-    """制約ペアの片方だけ更新しても、相手キーが実効値で同時に書かれる（混成不整合の防止）。"""
+def test_only_explicit_keys_are_persisted(client):
+    """明示指定したキーだけが上書き行になる（合成行を作ると将来の既定値変更を凍結するため）。"""
     r = client.put("/api/admin/rules", json={"updates": {"rain_light": 2.0}})
     assert r.status_code == 200
     rules = {x["key"]: x for x in r.json()["rules"]}
     assert rules["rain_light"]["overridden"] is True
-    assert rules["rain_heavy"]["overridden"] is True   # ペア固定書き込み
-    assert rules["rain_heavy"]["value"] == 5.0          # 実効値（既定）で固定
+    assert rules["rain_heavy"]["overridden"] is False  # 相手キーは既定のまま（合成書き込みなし）
+    client.put("/api/admin/rules", json={"updates": {"rain_light": None}})
+
+
+def test_concurrent_puts_never_persist_inconsistent_pair(client):
+    """空テーブル状態からの並行PUTでも、直列化により制約違反の組が永続しない（500も出さない）。"""
+    import threading
+
+    results = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def put(payload):
+        barrier.wait(timeout=10)
+        r = client.put("/api/admin/rules", json={"updates": payload})
+        with lock:
+            results.append(r.status_code)
+
+    threads = [threading.Thread(target=put, args=({"rain_light": 4.0},)),
+               threading.Thread(target=put, args=({"rain_heavy": 2.0},))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert all(c in (200, 422) for c in results), f"500を出さない: {results}"
+    rules = {x["key"]: x for x in client.get("/api/admin/rules").json()["rules"]}
+    assert rules["rain_light"]["value"] < rules["rain_heavy"]["value"], \
+        f"最終状態は必ず整合: light={rules['rain_light']['value']} heavy={rules['rain_heavy']['value']}"
     client.put("/api/admin/rules",
                json={"updates": {"rain_light": None, "rain_heavy": None}})
 

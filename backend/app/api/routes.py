@@ -188,12 +188,19 @@ def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
               user: User = Depends(require_role("admin"))):
     if not req.updates:
         raise HTTPException(422, "updates が空です")
-    # 検証と書き込みは同一トランザクション(行ロック付き)。DB実効値に対して整合検証する
-    errors = rules_service.apply_updates(db, req.updates, user.username)
-    if errors:
-        db.rollback()
-        raise HTTPException(422, "; ".join(errors))
-    db.commit()
+    # 書き込みは直列化して実施(プロセス内=WRITE_LOCK、PostgreSQL間=advisory lock)。
+    # 検証はロック下のDB実効値に対して行う(同時部分更新の混成不整合防止)
+    with rules_service.WRITE_LOCK:
+        errors = rules_service.apply_updates(db, req.updates, user.username)
+        if errors:
+            db.rollback()
+            raise HTTPException(422, "; ".join(errors))
+        try:
+            db.commit()
+        except IntegrityError:
+            # 直列化により通常到達しない保険(万一の同時INSERT衝突を500にしない)
+            db.rollback()
+            raise HTTPException(409, "設定が競合しました。再試行してください。") from None
     rules_service.clear_cache()  # 自プロセスの実効閾値キャッシュを即時無効化
     audit(db, user, "rules_update",
           ", ".join(f"{k}={'default' if v is None else v}" for k, v in req.updates.items()))

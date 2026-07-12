@@ -1,20 +1,24 @@
 """判定閾値の管理サービス（#34/#35, FR-054）。
 
-設計原則（対抗レビュー反映）:
+設計原則（対抗レビュー2巡反映）:
 - **DBが単一の真実**。プロセスローカルな TH の変異は行わず、評価時に effective_th() が
   DB上書き値を短TTLキャッシュ付きで解決して evaluate(th=...) へ渡す。
   マルチワーカー/レプリカ構成でも不整合窓は最大 _CACHE_TTL 秒に収まる。
-- 検証は「DBの実効値」に対して行い（with_for_update で行ロック）、大小制約に関与する
-  ペアは**両方の値を同時に書き込む**ことで、同時部分更新による混成不整合を構造的に防ぐ。
+- **上書き行は管理者が明示指定したキーのみ**（合成書き込みはしない。既定値と同値の行を
+  勝手に作ると、将来の出荷時既定変更に追従できない「凍結された既定」が生まれるため）。
+- 同時部分更新の混成不整合は**書き込みの直列化**で防ぐ: PostgreSQL は
+  pg_advisory_xact_lock（トランザクション終了で自動解放）、プロセス内は WRITE_LOCK。
+  SQLite はPoC・単一プロセス運用前提のため WRITE_LOCK で足りる（マルチプロセスSQLiteは非サポート）。
 
 初回スコープは会社基準（グローバル）のみ。現場・工種別の階層は将来拡張。
 """
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from ..core.db import SessionLocal
@@ -52,6 +56,11 @@ _ORDER_CONSTRAINTS = [
     ("temp_low", "temp_high"),
     ("wbgt_caution", "wbgt_danger"),
 ]
+
+# 書き込み直列化: プロセス内ロック（PUTハンドラが apply〜commit を包む）
+WRITE_LOCK = threading.Lock()
+# PostgreSQL advisory lock のキー（本アプリ固有の任意定数）
+_PG_ADVISORY_KEY = 748_321
 
 # 実効閾値の短TTLキャッシュ（プロセスごと。DBが真実のため、他ワーカーの変更も
 # 最大 _CACHE_TTL 秒で追従する。PUT成功時は自プロセスのみ即時クリア）
@@ -128,17 +137,20 @@ def _validate_shape(updates: dict) -> list[str]:
 def apply_updates(db: Session, updates: dict, username: str) -> list[str]:
     """検証と書き込みを同一トランザクションで行う。エラー文リストを返す（空なら適用済み・要commit）。
 
-    - 全ルール行を with_for_update で読み（PostgreSQLは行ロックで並行PUTを直列化。
-      SQLiteは単一ライタで実質直列）、**DBの実効値**に updates を重ねて大小制約を検証する
-    - 大小制約に関与するキーが updates に含まれる場合、そのペアの相手キーも実効値で
-      同時に書き込む（後勝ちがペア丸ごと上書きするため、並行部分更新の混成不整合が残らない）
+    - PostgreSQL では pg_advisory_xact_lock で書き込みを直列化（空テーブルでも有効。
+      行ロック(with_for_update)は既存行が無いと何も守らないため使わない）。
+      呼び出し側は WRITE_LOCK（プロセス内）で apply〜commit を包むこと
+    - 直列化の下で **DBの実効値** に updates を重ねて大小制約を検証し、
+      **管理者が明示指定したキーだけ**を書き込む（合成上書き行は作らない）
     """
     errors = _validate_shape(updates)
     if errors:
         return errors
 
-    rows = {r.key: r for r in db.scalars(
-        select(DecisionRule).with_for_update()).all() if r.key in DEFAULT_TH}
+    if db.get_bind().dialect.name == "postgresql":
+        # トランザクションスコープの排他ロック（commit/rollbackで自動解放）
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _PG_ADVISORY_KEY})
+    rows = {r.key: r for r in db.scalars(select(DecisionRule)).all() if r.key in DEFAULT_TH}
     effective = dict(DEFAULT_TH)
     effective.update({k: r.value for k, r in rows.items()})
     for key, value in updates.items():
@@ -151,15 +163,8 @@ def apply_updates(db: Session, updates: dict, username: str) -> list[str]:
     if errors:
         return errors
 
-    # 制約ペアの片方が更新対象なら、相手キーも実効値で固定書き込み（原子的なペア更新）
-    to_write = dict(updates)
-    for low, high in _ORDER_CONSTRAINTS:
-        if low in to_write or high in to_write:
-            to_write.setdefault(low, effective[low])
-            to_write.setdefault(high, effective[high])
-
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    for key, value in to_write.items():
+    for key, value in updates.items():
         row = rows.get(key)
         if value is None:
             if row:
