@@ -59,6 +59,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def end_headers(self):
+        # data-adapter.js 等のスクリプトはデプロイのたびに更新されるため、ブラウザに
+        # 古い版をキャッシュさせない（no-store）。これが無いと更新後もブラウザが旧UIを
+        # 表示し続ける（メニュー変更が「反映されない」ように見える原因になる）。
+        if self.path.endswith(".js"):
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self):
         path = unquote(urlparse(self.path).path)
         if path == "/favicon.ico":  # 404ノイズ抑制（空アイコン）
