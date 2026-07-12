@@ -93,6 +93,10 @@ curl -o /dev/null -w "%{http_code}\n" https://cwwd.mirai-dx-platform.com/api/sit
 > （Tunnel ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`。401確認は `/api/sites` の実測であり、
 > 全APIエンドポイントの保護を個別確認したわけではない）。
 >
+> ✅ **2026-07-12: Cloudflare Access 適用済み** — アプリ `cwwd`（session 24h）/ ポリシー `CWWD`
+> （allow: `mirai-const.co.jp` ドメイン or 管理者メール）。未認証アクセスが 302 で Access ログインへ
+> リダイレクトされることを実測確認済み。第三者はアプリ本体へ到達できない。
+>
 > 🚨 **`APP_ENV=local` のままの公開状態を残さないこと（必須）**:
 > local ではデモ資格情報（admin/admin123 等）でログイン可能なため、この状態での外部公開は
 > 重大リスク。動作確認が済んだら**必ず Ctrl+C で Tunnel を停止**する。常時公開へ移行する場合は、
