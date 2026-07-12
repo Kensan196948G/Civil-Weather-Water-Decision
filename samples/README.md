@@ -16,6 +16,7 @@
 | `open-meteo-forecast-sample.json` | `api.open-meteo.com/v1/forecast`（緯度43.06/経度141.35＝札幌付近） | 200 | 1,446 bytes | `backend/app/services/data_collectors/open_meteo.py` |
 | `jma-warnings-feed-sample.xml` | `www.data.jma.go.jp/developer/xml/feed/extra.xml`（atomフィード全体） | 200 | 319,846 bytes | `backend/app/services/data_collectors/jma_warnings.py` |
 | `jma-warning-individual-sample.xml` | 上記フィード内 `<entry><id>` の個別警報XML（函館地方気象台発表分の1件） | 200 | 138,405 bytes | 同上 |
+| `wbgt-env-yohou-sample.csv` | `www.wbgt.env.go.jp/prev15WG/dl/yohou_44132.csv`（東京・予報、2026-07-12 14:25更新分） | 200 | 345 bytes | `backend/app/services/data_collectors/wbgt_env.py` |
 
 ## 1. Open-Meteo（`open-meteo-forecast-sample.json`）
 
@@ -79,15 +80,37 @@ Report
 
 `jma_warnings.py` はこの構造から `Kind/Name`（例: 「大雨注意報」「洪水警報」）と `Area/Code` を抽出し、現場の所在市区町村コードと突き合わせて severity を引き上げる（`services/jma_warnings.py`、公式優先 §8.3-6）。`defusedxml` でパースしXXE対策済み。
 
-## 3. 環境省 暑さ指数（WBGT）— 疎通確認のみ、データサンプルなし
+## 3. 環境省 暑さ指数（WBGT）— `wbgt-env-yohou-sample.csv`（予報CSV・実接続成功）
+
+**2026-07-12 追記**: 当初調査（下表の旧記録）では実況CSVのURLパターン特定に失敗していたが、
+**予報CSV**は `https://www.wbgt.env.go.jp/prev15WG/dl/yohou_{地点コード}.csv` の静的URLで
+取得できることを確認（HTTP 200、認証不要）。`yohou_44132.csv`（東京）の実取得結果を
+`wbgt-env-yohou-sample.csv` として保存し、`backend/app/services/data_collectors/wbgt_env.py`
+で実接続コレクタを実装済み。
 
 | 確認内容 | 結果 |
 |---|---|
 | トップページ `https://www.wbgt.env.go.jp/` | HTTP 200（疎通OK） |
-| 実測値CSVの直接URL（推測） `wbgt_01100_2026.csv` 等 | HTTP 404（このパターンでは取得不可） |
-| データダウンロードページ `wbgt_data_download.php` | HTTP 200 だが、地点コード・年月を JavaScript 経由のフォーム送信で指定する動的な仕組みで、静的HTMLから単純な1本のCSV URLを特定できなかった |
+| **予報CSV** `prev15WG/dl/yohou_44132.csv` | **HTTP 200（345 bytes、コレクタ実装済み）** |
+| 実況値CSVの直接URL（推測） `wbgt_01100_2026.csv` 等 | HTTP 404（このパターンでは取得不可・未実装のまま） |
+| データダウンロードページ `wbgt_data_download.php` | HTTP 200 だが動的フォーム形式（実況値の取得経路としては未解明のまま） |
 
-このため本プロジェクトでは環境省WBGTの実測値取得は行わず、`backend/app/services/data_collectors/open_meteo.py` の `estimate_wbgt()` による気温・湿度からの近似推定（`wbgtDerived=true` 明示）に留めている。将来的に実測値接続を行う場合は、地点コード一覧・フォームのPOSTパラメータ仕様を別途調査する必要がある（`#9` の残課題）。
+### レスポンス形状（予報CSV）
+
+2行のCSV。1行目が予測対象時刻列、2行目が地点・更新時刻・値列:
+
+```
+,,2026071215,2026071218,...,2026071424
+44132,2026/07/12 14:25, 280, 250,..., 250
+```
+
+- 予測対象時刻: `YYYYMMDDHH`（JST・3時間刻み）。**HH=01..24 で、24は翌日00時を意味する**（パーサで繰り上げ処理）
+- 値: WBGT×10 の整数（` 280` → 28.0℃）。先頭に半角スペースあり。欠測は空文字
+- サービス提供は夏期（概ね4月下旬〜10月）のみで、**期間外はCSV自体が404になる**想定
+  （コレクタは status=ERROR で返し、判定側は従来の推定値へフォールバックする）
+
+利用は `WBGT_STATION_CODE`（.env）に地点コードを設定した場合のみ有効。未設定なら従来どおり
+`estimate_wbgt()` による推定（`wbgtDerived=true`）。現場別の最寄り地点自動選定は `#29` のスコープ。
 
 ## 注意事項
 

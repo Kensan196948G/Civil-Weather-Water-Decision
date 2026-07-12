@@ -9,8 +9,9 @@ import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 
-from .data_collectors import jma_warnings, open_meteo
+from .data_collectors import jma_warnings, open_meteo, wbgt_env
 from .decision_engine import LEVEL_LABELS, Reading, evaluate
+from ..core.config import settings
 from ..models import Site
 
 JST = timezone(timedelta(hours=9))
@@ -24,6 +25,18 @@ async def _cached_fetch(lat: float, lon: float, key: str) -> dict:
     if hit and now - hit[0] < _TTL:
         return hit[1]
     data = await open_meteo.fetch_forecast(lat, lon)
+    _CACHE[key] = (now, data)
+    return data
+
+
+async def _cached_wbgt(station: str) -> dict:
+    """環境省WBGT予報のキャッシュ付き取得（地点は全現場共通のためTTL共有で十分）。"""
+    key = f"wbgt:{station}"
+    now = time.monotonic()
+    hit = _CACHE.get(key)
+    if hit and now - hit[0] < _TTL:
+        return hit[1]
+    data = await wbgt_env.fetch_forecast(station)
     _CACHE[key] = (now, data)
     return data
 
@@ -74,6 +87,18 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         "gust_ms": None, "humidity_pct": None, "wbgt": None,
         "missing": {"precip", "temp", "wind", "wbgt"},
     }
+
+    # 公式優先（§5.3）: 環境省WBGT予報が時間帯内で取得できた場合のみ推定値を公式値で上書き。
+    # 取得失敗・時間帯外・未設定なら従来の推定値のまま（フォールバックを隠さない）。
+    wbgt_official = None
+    if settings.wbgt_station_code:
+        wdata = await _cached_wbgt(settings.wbgt_station_code)
+        wbgt_official = wbgt_env.window_max(wdata.get("points", []), start, end)
+        if wbgt_official is not None:
+            wr = dict(wr)
+            wr["wbgt"] = wbgt_official
+            wr["missing"] = set(wr.get("missing") or set()) - {"wbgt"}
+
     reading = build_reading(wt, wr, site, pref_warnings)
     decision = evaluate(wt, reading)
 
@@ -84,7 +109,7 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         "rainNow": wr.get("precip_mm_h"), "rainPeak": wr.get("precip_mm_h"),
         "windMax": wr.get("wind_ms"), "gust": wr.get("gust_ms"),
         "tempHi": wr.get("temp_c"), "tempLo": wr.get("temp_lo"),
-        "wbgt": wr.get("wbgt"), "wbgtDerived": True,
+        "wbgt": wr.get("wbgt"), "wbgtDerived": wbgt_official is None,
         "river": site.river_note, "riverState": site.river_state,
         "reasons": [{"severity": x["severity"], "text": x["message"],
                      "source": x["source_id"], "value": x["observed_value"]}
@@ -114,6 +139,8 @@ async def assess_decision(site: Site, work_type: str, start: str | None, end: st
         "reasonsRaw": card["reasonsRaw"],
         "data_quality_summary": card["dataQuality"],
         "weatherStatus": card["weatherStatus"], "fetchedAt": card["fetchedAt"],
-        "refs": ["気象: Open-Meteo", "河川: 川の防災情報", "WBGT: 環境省(推定)", "警報: 気象庁"],
+        "refs": ["気象: Open-Meteo", "河川: 川の防災情報",
+                 "WBGT: 環境省(公式予報)" if not card["wbgtDerived"] else "WBGT: 環境省(推定)",
+                 "警報: 気象庁"],
         "levelLabels": LEVEL_LABELS,
     }
