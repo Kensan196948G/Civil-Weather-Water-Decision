@@ -15,14 +15,18 @@ GitHub Token を利用して open PR を安全に処理するコマンドです�
 2. `gh pr list --state open` で対象 PR を列挙する。
 3. 各 PR の `baseRefName`, `isDraft`, `mergeable`, `mergeStateStatus`, `reviewDecision`, `statusCheckRollup`, `files` を確認する。
 4. main/default branch 宛は要約を提示して人間確認を待つ。
-5. main 以外は次をすべて満たす場合のみ `gh pr merge <number> --squash --delete-branch` を実行する。
+5. main 以外は次の gate をすべて満たす場合のみ、gate 判定直前に取得した head SHA を
+   `--match-head-commit` に指定して `gh pr merge <number> --squash --delete-branch --match-head-commit <sha>` を実行する。
+   （gate 判定後に新しい commit が push されていれば SHA 不一致でコマンドが失敗し、
+   古いコミットを意図せずマージすることを防ぐ。TOCTOU 対策）
 
 自動マージ gate:
 
 - `isDraft=false`
 - `mergeable=MERGEABLE`
 - `mergeStateStatus=CLEAN`
-- `reviewDecision` が `REVIEW_REQUIRED` / `CHANGES_REQUESTED` ではない
+- `reviewDecision=APPROVED`（許可リスト方式。`REVIEW_REQUIRED`/`CHANGES_REQUESTED`ではないという除外方式は、
+  レビューが一件も付いていない場合に `reviewDecision` が空文字列になり誤って通過するため使わない）
 - status checks に失敗・未完了・取消がない
 - Critical / High 指摘が残っていない
 - 認証・認可、secrets、DB migration/schema、本番 deploy、`.github/workflows/`、branch protection 変更を含まない
