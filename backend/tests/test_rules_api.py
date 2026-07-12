@@ -1,19 +1,26 @@
-"""判定ルール（閾値）管理APIのテスト（#34/#35, FR-054）。
+"""判定ルール（閾値）管理APIのテスト（#34/#35, FR-054・対抗レビュー反映版）。
 
-TH は decision_engine のルール述語が直接参照するグローバル辞書のため、
-各テスト末尾で既定値へ戻し他テストへ影響を残さない。
+設計: DBが単一の真実。評価パスは rules.effective_th()（短TTLキャッシュ）で解決する。
+テスト間の影響を残さないよう、実効閾値キャッシュを前後でクリアする。
 """
 import pytest
 
-from app.services.decision_engine import DEFAULT_TH, TH, Reading, evaluate
+from app.services import rules as rules_service
+from app.services.decision_engine import DEFAULT_TH, Reading, evaluate
 from tests.conftest import login_token
 
 
 @pytest.fixture(autouse=True)
-def _restore_th():
+def _fresh_cache():
+    rules_service.clear_cache()
     yield
-    # テストが変更した閾値を出荷時既定へ戻す（DB行はテストごとのリセットPUTで消す）
-    TH.update(DEFAULT_TH)
+    rules_service.clear_cache()
+
+
+def _eval_earthwork_rain10():
+    """降雨10mm/hの土工判定を『現在のDB実効閾値』で実行する。"""
+    return evaluate("earthwork", Reading(precip_mm_h=10.0, temp_c=20.0, wind_ms=3.0),
+                    th=rules_service.effective_th())
 
 
 def test_get_rules_returns_defaults(client):
@@ -27,9 +34,8 @@ def test_get_rules_returns_defaults(client):
 
 
 def test_put_rules_overrides_and_affects_engine(client):
-    # 豪雨閾値を 5.0 → 20.0 へ緩和すると、降雨10mm/hの判定が「中止検討」から下がる
-    before = evaluate("earthwork", Reading(precip_mm_h=10.0, temp_c=20.0, wind_ms=3.0))
-    assert before["overall_level"] == 2
+    # 豪雨閾値 5.0 のとき降雨10mm/h は「中止検討」
+    assert _eval_earthwork_rain10()["overall_level"] == 2
 
     r = client.put("/api/admin/rules", json={"updates": {"rain_heavy": 20.0}})
     assert r.status_code == 200
@@ -38,16 +44,41 @@ def test_put_rules_overrides_and_affects_engine(client):
     assert rules["rain_heavy"]["overridden"] is True
     assert rules["rain_heavy"]["updated_by"] == "admin"
 
-    after = evaluate("earthwork", Reading(precip_mm_h=10.0, temp_c=20.0, wind_ms=3.0))
-    assert after["overall_level"] == 1  # rain_light(1.0)以上 rain_heavy(20.0)未満 → 注意
+    rules_service.clear_cache()  # 評価側キャッシュを新値で引き直す
+    assert _eval_earthwork_rain10()["overall_level"] == 1  # 20.0未満 → 注意止まり
 
-    # 既定値へリセット（value=null）→ エンジンも元へ
-    r = client.put("/api/admin/rules", json={"updates": {"rain_heavy": None}})
+    # 既定値へリセット（value=null。制約ペアの相手 rain_light も両方リセット）
+    r = client.put("/api/admin/rules",
+                   json={"updates": {"rain_heavy": None, "rain_light": None}})
     assert r.status_code == 200
     rules = {x["key"]: x for x in r.json()["rules"]}
     assert rules["rain_heavy"]["overridden"] is False
-    reset = evaluate("earthwork", Reading(precip_mm_h=10.0, temp_c=20.0, wind_ms=3.0))
-    assert reset["overall_level"] == 2
+    rules_service.clear_cache()
+    assert _eval_earthwork_rain10()["overall_level"] == 2
+
+
+def test_effective_th_follows_db_without_local_clear(client, monkeypatch):
+    """他ワーカーの変更もTTL経過後に追従する（プロセスローカル状態に依存しない）。"""
+    th0 = rules_service.effective_th()
+    assert th0["gust_stop"] == DEFAULT_TH["gust_stop"]
+    client.put("/api/admin/rules", json={"updates": {"gust_stop": 20.0}})
+    # 「別ワーカー」を模擬: clear_cache は呼ばず、TTL切れだけで新値に到達できること
+    monkeypatch.setattr(rules_service, "_CACHE_TTL", 0.0)
+    assert rules_service.effective_th()["gust_stop"] == 20.0
+    client.put("/api/admin/rules",
+               json={"updates": {"gust_stop": None, "wind_strong": None}})
+
+
+def test_pair_keys_are_written_atomically(client):
+    """制約ペアの片方だけ更新しても、相手キーが実効値で同時に書かれる（混成不整合の防止）。"""
+    r = client.put("/api/admin/rules", json={"updates": {"rain_light": 2.0}})
+    assert r.status_code == 200
+    rules = {x["key"]: x for x in r.json()["rules"]}
+    assert rules["rain_light"]["overridden"] is True
+    assert rules["rain_heavy"]["overridden"] is True   # ペア固定書き込み
+    assert rules["rain_heavy"]["value"] == 5.0          # 実効値（既定）で固定
+    client.put("/api/admin/rules",
+               json={"updates": {"rain_light": None, "rain_heavy": None}})
 
 
 def test_put_rules_requires_admin(client):
@@ -55,41 +86,35 @@ def test_put_rules_requires_admin(client):
     r = client.put("/api/admin/rules", json={"updates": {"rain_heavy": 10.0}},
                    headers={"Authorization": "Bearer " + token})
     assert r.status_code == 403
-    # 閲覧は tech_manager 以上（site_manager は不可）
     r = client.get("/api/admin/rules", headers={"Authorization": "Bearer " + token})
     assert r.status_code == 403
 
 
 def test_put_rules_validation(client):
     # 不明キー
-    r = client.put("/api/admin/rules", json={"updates": {"nope": 1.0}})
-    assert r.status_code == 422
+    assert client.put("/api/admin/rules", json={"updates": {"nope": 1.0}}).status_code == 422
     # 範囲外
-    r = client.put("/api/admin/rules", json={"updates": {"rain_heavy": 9999}})
-    assert r.status_code == 422
+    assert client.put("/api/admin/rules", json={"updates": {"rain_heavy": 9999}}).status_code == 422
     # 大小関係の矛盾（注意 >= 中止検討 は不可）
     r = client.put("/api/admin/rules", json={"updates": {"rain_light": 6.0}})
     assert r.status_code == 422
     assert "rain_light" in r.json()["detail"]
     # 空更新
-    r = client.put("/api/admin/rules", json={"updates": {}})
+    assert client.put("/api/admin/rules", json={"updates": {}}).status_code == 422
+
+
+def test_put_rules_rejects_boolean(client):
+    """JSON真偽値はPydanticのfloat型で1.0/0.0に化けるため、境界で明示拒否する。"""
+    r = client.put("/api/admin/rules", json={"updates": {"upstream_rain": False}})
+    assert r.status_code == 422
+    r = client.put("/api/admin/rules", json={"updates": {"rain_heavy": True}})
     assert r.status_code == 422
 
 
-def test_put_rules_pair_update_consistent(client):
-    # 両方同時に動かす整合更新は許可される（実効値で検証している）
-    r = client.put("/api/admin/rules",
-                   json={"updates": {"rain_light": 2.0, "rain_heavy": 8.0}})
-    assert r.status_code == 200
-    # 後始末: 既定値へ
-    r = client.put("/api/admin/rules",
-                   json={"updates": {"rain_light": None, "rain_heavy": None}})
-    assert r.status_code == 200
-
-
 def test_rules_update_is_audited(client):
-    client.put("/api/admin/rules", json={"updates": {"gust_stop": 15.0}})
+    client.put("/api/admin/rules", json={"updates": {"wbgt_danger": 33.0}})
     rows = client.get("/api/admin/audit-logs").json()
-    assert any(x["action"] == "rules_update" and "gust_stop=15.0" in (x.get("message") or "")
+    assert any(x["action"] == "rules_update" and "wbgt_danger=33.0" in (x.get("message") or "")
                for x in rows)
-    client.put("/api/admin/rules", json={"updates": {"gust_stop": None}})
+    client.put("/api/admin/rules",
+               json={"updates": {"wbgt_danger": None, "wbgt_caution": None}})

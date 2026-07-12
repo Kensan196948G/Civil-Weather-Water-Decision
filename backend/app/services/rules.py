@@ -1,18 +1,25 @@
 """判定閾値の管理サービス（#34/#35, FR-054）。
 
-decision_engine.TH（判定ルールが直接参照する閾値辞書）を DB（decision_rules）の
-上書き値と同期する。行が無いキーは出荷時既定（DEFAULT_TH）のまま。
+設計原則（対抗レビュー反映）:
+- **DBが単一の真実**。プロセスローカルな TH の変異は行わず、評価時に effective_th() が
+  DB上書き値を短TTLキャッシュ付きで解決して evaluate(th=...) へ渡す。
+  マルチワーカー/レプリカ構成でも不整合窓は最大 _CACHE_TTL 秒に収まる。
+- 検証は「DBの実効値」に対して行い（with_for_update で行ロック）、大小制約に関与する
+  ペアは**両方の値を同時に書き込む**ことで、同時部分更新による混成不整合を構造的に防ぐ。
+
 初回スコープは会社基準（グローバル）のみ。現場・工種別の階層は将来拡張。
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..core.db import SessionLocal
 from ..models import DecisionRule
-from .decision_engine import DEFAULT_TH, TH
+from .decision_engine import DEFAULT_TH
 
 JST = timezone(timedelta(hours=9))
 
@@ -46,16 +53,39 @@ _ORDER_CONSTRAINTS = [
     ("wbgt_caution", "wbgt_danger"),
 ]
 
+# 実効閾値の短TTLキャッシュ（プロセスごと。DBが真実のため、他ワーカーの変更も
+# 最大 _CACHE_TTL 秒で追従する。PUT成功時は自プロセスのみ即時クリア）
+_CACHE_TTL = 5.0
+_cache: dict = {"at": 0.0, "th": None}
 
-def apply_overrides(db: Session) -> None:
-    """DBの上書き値を decision_engine.TH に反映する（起動時・設定変更時に呼ぶ）。
 
-    行が無いキーは既定値へ戻す（リセットの取りこぼし防止のため毎回全キーを再構成）。
-    """
-    overrides = {r.key: r.value for r in db.scalars(select(DecisionRule)).all()
-                 if r.key in DEFAULT_TH}
-    for key, default in DEFAULT_TH.items():
-        TH[key] = overrides.get(key, default)
+def clear_cache() -> None:
+    _cache["at"] = 0.0
+    _cache["th"] = None
+
+
+def _load_overrides(db: Session) -> dict:
+    return {r.key: r.value for r in db.scalars(select(DecisionRule)).all()
+            if r.key in DEFAULT_TH}
+
+
+def effective_th(db: Session | None = None) -> dict:
+    """現在の実効閾値（既定値＋DB上書き）を返す。評価パスから毎回呼ばれる想定。"""
+    now = time.monotonic()
+    if _cache["th"] is not None and now - _cache["at"] < _CACHE_TTL:
+        return _cache["th"]
+    own = db is None
+    if own:
+        db = SessionLocal()
+    try:
+        th = dict(DEFAULT_TH)
+        th.update(_load_overrides(db))
+    finally:
+        if own:
+            db.close()
+    _cache["at"] = now
+    _cache["th"] = th
+    return th
 
 
 def list_rules(db: Session) -> list[dict]:
@@ -77,8 +107,8 @@ def list_rules(db: Session) -> list[dict]:
     return out
 
 
-def validate_updates(updates: dict) -> list[str]:
-    """更新内容を検証しエラー文のリストを返す（空なら妥当）。value=None はリセット指示。"""
+def _validate_shape(updates: dict) -> list[str]:
+    """キー・型・範囲の単項検証（DB非依存）。"""
     errors = []
     for key, value in updates.items():
         if key not in RULE_META:
@@ -86,31 +116,51 @@ def validate_updates(updates: dict) -> list[str]:
             continue
         if value is None:
             continue  # リセット
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             errors.append(f"{key}: 数値を指定してください")
             continue
         meta = RULE_META[key]
         if not (meta["min"] <= float(value) <= meta["max"]):
             errors.append(f"{key}: {meta['min']}〜{meta['max']} の範囲で指定してください")
+    return errors
+
+
+def apply_updates(db: Session, updates: dict, username: str) -> list[str]:
+    """検証と書き込みを同一トランザクションで行う。エラー文リストを返す（空なら適用済み・要commit）。
+
+    - 全ルール行を with_for_update で読み（PostgreSQLは行ロックで並行PUTを直列化。
+      SQLiteは単一ライタで実質直列）、**DBの実効値**に updates を重ねて大小制約を検証する
+    - 大小制約に関与するキーが updates に含まれる場合、そのペアの相手キーも実効値で
+      同時に書き込む（後勝ちがペア丸ごと上書きするため、並行部分更新の混成不整合が残らない）
+    """
+    errors = _validate_shape(updates)
     if errors:
         return errors
 
-    # 大小関係は「適用後の実効値」で検証（片側だけ変更しても矛盾を見逃さない）
-    effective = dict(TH)
+    rows = {r.key: r for r in db.scalars(
+        select(DecisionRule).with_for_update()).all() if r.key in DEFAULT_TH}
+    effective = dict(DEFAULT_TH)
+    effective.update({k: r.value for k, r in rows.items()})
     for key, value in updates.items():
         effective[key] = DEFAULT_TH[key] if value is None else float(value)
+
     for low, high in _ORDER_CONSTRAINTS:
         if effective[low] >= effective[high]:
             errors.append(
                 f"{low}({effective[low]}) は {high}({effective[high]}) より小さい値にしてください")
-    return errors
+    if errors:
+        return errors
 
+    # 制約ペアの片方が更新対象なら、相手キーも実効値で固定書き込み（原子的なペア更新）
+    to_write = dict(updates)
+    for low, high in _ORDER_CONSTRAINTS:
+        if low in to_write or high in to_write:
+            to_write.setdefault(low, effective[low])
+            to_write.setdefault(high, effective[high])
 
-def update_rules(db: Session, updates: dict, username: str) -> None:
-    """検証済みの更新を適用する（value=None は行削除＝既定値へリセット）。commit は呼び出し側。"""
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    for key, value in updates.items():
-        row = db.get(DecisionRule, key)
+    for key, value in to_write.items():
+        row = rows.get(key)
         if value is None:
             if row:
                 db.delete(row)
@@ -120,3 +170,4 @@ def update_rules(db: Session, updates: dict, username: str) -> None:
             row.updated_by = username
         else:
             db.add(DecisionRule(key=key, value=float(value), updated_at=now, updated_by=username))
+    return []

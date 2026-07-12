@@ -165,6 +165,17 @@ class RulesUpdate(BaseModel):
     # {key: 数値 or null(=既定値へリセット)} の部分更新
     updates: dict[str, float | None]
 
+    @field_validator("updates", mode="before")
+    @classmethod
+    def _reject_bool(cls, v):
+        # Pydanticのfloat型はJSON真偽値を1.0/0.0へ暗黙変換するため、境界で明示拒否
+        # (対抗レビュー[medium]: 誤入力が安全閾値として永続化されるのを防ぐ)
+        if isinstance(v, dict):
+            for key, val in v.items():
+                if isinstance(val, bool):
+                    raise ValueError(f"{key}: 数値を指定してください（真偽値は不可）")
+        return v
+
 
 @router.get("/admin/rules")
 def get_rules(db: Session = Depends(get_db),
@@ -177,12 +188,13 @@ def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
               user: User = Depends(require_role("admin"))):
     if not req.updates:
         raise HTTPException(422, "updates が空です")
-    errors = rules_service.validate_updates(req.updates)
+    # 検証と書き込みは同一トランザクション(行ロック付き)。DB実効値に対して整合検証する
+    errors = rules_service.apply_updates(db, req.updates, user.username)
     if errors:
+        db.rollback()
         raise HTTPException(422, "; ".join(errors))
-    rules_service.update_rules(db, req.updates, user.username)
     db.commit()
-    rules_service.apply_overrides(db)  # 判定エンジンへ即時反映
+    rules_service.clear_cache()  # 自プロセスの実効閾値キャッシュを即時無効化
     audit(db, user, "rules_update",
           ", ".join(f"{k}={'default' if v is None else v}" for k, v in req.updates.items()))
     return {"status": "updated", "rules": rules_service.list_rules(db)}

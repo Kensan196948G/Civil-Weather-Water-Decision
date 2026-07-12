@@ -9,6 +9,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 
+from . import rules as rules_service
 from .data_collectors import jma_warnings, open_meteo, wbgt_env
 from .decision_engine import LEVEL_LABELS, Reading, evaluate
 from ..core.config import settings
@@ -119,7 +120,8 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
     reading = build_reading(wt, wr, site, pref_warnings)
     if status == "STALE":
         reading.stale_weather = True  # 前回取得値での参考表示を判定理由に明示（§5.3）
-    decision = evaluate(wt, reading)
+    # #35: 実効閾値はDBが単一の真実(短TTLキャッシュ)。マルチワーカーでも設定変更が全員に届く
+    decision = evaluate(wt, reading, th=rules_service.effective_th())
 
     return {
         "id": site.id, "name": site.name, "code": site.site_code, "loc": site.loc,
