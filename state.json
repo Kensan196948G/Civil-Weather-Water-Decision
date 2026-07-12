@@ -26,7 +26,11 @@
       "tunnel_name": "cwwd-civil-weather-water",
       "tunnel_id": "07c9bda3-b4ad-46ae-8401-4b677de3c8a4",
       "templates_prepared_at": "2026-07-12",
-      "note": "2026-07-12 人間実行によりTunnel作成・DNSルーティング完了、フォアグラウンド起動で3ルート疎通確認済み(/=front 200, /health=backend, /api/sites=401認証ガード。401は/api/sitesの実測で全API個別確認ではない)。config-cwwd.ymlは/api/*・/healthをbackend(55019)、他をfrontend(34979)へパス分割(動的ポート実値・要追従)。注意: route dns/runは必ず--configでconfig-cwwd.ymlを明示(デフォルトconfig.ymlのonegate指定が優先される罠あり・実害確認済み)。残: systemd常駐化、本番チェックリスト適用(APP_ENV=production/JWT_SECRET/ADMIN_PASSWORD/CORS絞り込み)。env:localのまま公開を残さないこと(デモ資格情報が有効)。常時公開はCloudflare Access/IP制限等のエッジ側アクセス制御併用を必須とする。"
+      "note": "2026-07-12 人間実行によりTunnel作成・DNSルーティング完了、フォアグラウンド起動で3ルート疎通確認済み(/=front 200, /health=backend, /api/sites=401認証ガード。401は/api/sitesの実測で全API個別確認ではない)。config-cwwd.ymlは/api/*・/healthをbackend(55019)、他をfrontend(34979)へパス分割(動的ポート実値・要追従)。注意: route dns/runは必ず--configでconfig-cwwd.ymlを明示(デフォルトconfig.ymlのonegate指定が優先される罠あり・実害確認済み)。残: systemd常駐化、本番チェックリスト適用(APP_ENV=production/JWT_SECRET/ADMIN_PASSWORD/CORS絞り込み)。env:localのまま公開を残さないこと(デモ資格情報が有効)。常時公開はCloudflare Access/IP制限等のエッジ側アクセス制御併用を必須とする。 2026-07-12追記: Cloudflare Accessアプリ(cwwd)/ポリシー(CWWD)を人間作成、未認証アクセスは302でAccessログインへリダイレクトされることを実測確認。許可対象はmirai-const.co.jpドメインと管理者メールのみで、第三者はアプリ本体へ到達不可(env:local一時公開のデモ資格情報リスクはエッジ側で大幅軽減)。本番チェックリスト適用は引き続き推奨(多層防御の完成形)。",
+      "access_protected": true,
+      "access_applied_at": "2026-07-12",
+      "access_app": "cwwd (Cloudflare Access self_hosted, session 24h)",
+      "access_policy": "CWWD: allow email_domain=mirai-const.co.jp OR email=kensan1969@gmail.com"
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",
@@ -65,13 +69,50 @@
   "issue_audit_2026_07_12": {
     "audited_at": "2026-07-12",
     "note": "3並列エージェントによる独立検証で本セクションの旧内容が陳腐化していたと判明。done_not_closed 11件中9件(#1,#2,#5,#15,#24,#26,#40,#46,#47)は既に他プロセスがクローズ済み。うち#1/#2/#46/#47はクローズ根拠に一部漏れがあり各Issueへコメント記録済み。#46/#47の不足分は#31/#38が既にカバー、独立分は#55(STATIONS配線漏れ)/#56(branch protection未設定)として新規起票。open issue一覧はgh issue list --state openで都度確認すること(このリストは手動監査時点のスナップショット)。",
-    "epic_pending_milestone": [42],
-    "epic_incomplete": [41, 44],
-    "partial_in_progress": [29, 30, 33, 37, 38, 39, 43, 45],
-    "not_started": [31, 34, 35, 36, 56, 63],
-    "closed_since_audit": [9, 49, 53, 55],
-    "closed_verified": [5, 15, 24, 26, 40],
-    "closed_with_gaps_recorded": [1, 2, 46, 47]
+    "epic_pending_milestone": [
+      42
+    ],
+    "epic_incomplete": [
+      41,
+      44
+    ],
+    "partial_in_progress": [
+      29,
+      30,
+      33,
+      37,
+      38,
+      39,
+      43,
+      45
+    ],
+    "not_started": [
+      31,
+      34,
+      35,
+      36,
+      56,
+      63
+    ],
+    "closed_since_audit": [
+      9,
+      49,
+      53,
+      55
+    ],
+    "closed_verified": [
+      5,
+      15,
+      24,
+      26,
+      40
+    ],
+    "closed_with_gaps_recorded": [
+      1,
+      2,
+      46,
+      47
+    ]
   },
   "pr48_review_2026_07_12": {
     "pr": 48,
@@ -81,7 +122,9 @@
     "ci_status": "全5チェックpass(CodeRabbit/backend/docker-build/frontend/security)",
     "coderabbit_findings_total": 12,
     "coderabbit_findings_resolved": 6,
-    "coderabbit_findings_deferred_to_issue": ["#49 (ID採番のアトミック性)"],
+    "coderabbit_findings_deferred_to_issue": [
+      "#49 (ID採番のアトミック性)"
+    ],
     "coderabbit_findings_pending_human_judgment": [
       ".claude/CLAUDE.md:43 (無条件実行停止)",
       ".claude/CLAUDE.md:94 (deploy.ready/maintenance.phase_mode未定義キー)",

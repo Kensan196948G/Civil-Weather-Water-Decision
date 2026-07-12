@@ -48,8 +48,10 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - [x] state.json への `deploy_plan.public_url` 反映
 - [ ] backend/frontend の systemd 常駐化（`*.service` unit適用。現状はフォアグラウンド一時起動のみ）
 - [ ] `CORS_ORIGINS` を `https://cwwd.mirai-dx-platform.com` に更新
-- [ ] 本番チェックリスト適用（下記）。**現状は `APP_ENV=local` のままの一時公開**で、
-      デモ資格情報が有効なため常時公開前に必須
+- [x] エッジ側アクセス制御: Cloudflare Access アプリ `cwwd` / ポリシー `CWWD`
+      （allow: `mirai-const.co.jp` ドメイン or 管理者メール、2026-07-12 人間作成・302リダイレクト実測確認済み）
+- [ ] 本番チェックリスト適用（下記）。`APP_ENV=local` のままだがデモ資格情報への第三者到達は
+      Access で遮断済み。多層防御の完成にはチェックリスト適用が引き続き必要
 
 ## 本番デプロイ前チェックリスト（必須）
 
