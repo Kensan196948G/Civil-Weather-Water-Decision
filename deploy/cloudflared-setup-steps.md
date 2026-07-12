@@ -15,6 +15,24 @@ CLAUDE.md 8.6節の人間決裁境界により、Tunnel作成・DNSルーティ�
   既存の共有Tunnelに相乗りする方針に変える場合は、該当Tunnelの `credentials-file` と
   ingress設定を把握した上で手順1・4を読み替えること。
 
+### 0.1 Cloudflare API による再確認（読み取り専用、2026-07-12）
+
+Cloudflare API MCP（`cloudflare-api` プラグイン）でも上記をダブルチェック済み。以降の手順で
+参照する実値は以下の通り（Tunnel作成・DNS routing自体は引き続き人間実行）:
+
+| 項目 | 値 |
+|---|---|
+| Zone名 | `mirai-dx-platform.com` |
+| Zone ID | `e375e651e49a40801a305b89e297bff0` |
+| 既存Tunnel数 | 8件（名前衝突なし。`cwwd*` は0件） |
+| 既存DNSレコード数 | 10件、全て `<subdomain>.mirai-dx-platform.com` → `<tunnel-id>.cfargotunnel.com` のCNAME |
+| DNSレコードの `proxied` | 全件 `true`（オレンジクラウド）。新規作成分も揃えること（`cloudflared tunnel route dns` は既定でこの設定になる） |
+| `cwwd.mirai-dx-platform.com` の既存レコード | なし（名前衝突なし確認済み） |
+
+Zone IDはAPI経由で直接DNSレコードを確認・トラブルシュートする際に使う
+（例: `GET /zones/e375e651e49a40801a305b89e297bff0/dns_records`）。手順4のCLIコマンドは
+Zone IDを暗黙的に解決するため、通常は指定不要。
+
 ## 1. Tunnel作成
 
 ```bash
