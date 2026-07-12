@@ -123,7 +123,8 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   v = c.renderVals();
   ok(Array.isArray(c.STATIONS.S01) && c.STATIONS.S01.length === 1,
     "STATIONS が API から取得した観測所で更新される（件数=" + (c.STATIONS.S01 && c.STATIONS.S01.length) + "）");
-  ok(c.STATIONS.S01[0].name === "北川 護岸地点 水位観測所" && Array.isArray(c.STATIONS.S01[0].d) && c.STATIONS.S01[0].d[0] === 35.766,
+  ok(c.STATIONS.S01[0].name === "北川 護岸地点 水位観測所" && Array.isArray(c.STATIONS.S01[0].d)
+    && c.STATIONS.S01[0].d[0] === 35.766 && c.STATIONS.S01[0].d[1] === 139.776,
     "観測所の lat/lon が d:[lat,lon] 形式にマッピングされる");
   ok(Array.isArray(c.STATIONS.S06), "未取得の現場は既存(モック)の STATIONS を保持（S06="+ (c.STATIONS.S06 && c.STATIONS.S06.length) +"件）");
 
