@@ -22,7 +22,7 @@
       "decided_at": "2026-07-12",
       "provisioned": false,
       "templates_prepared_at": "2026-07-12",
-      "note": "deploy/ に cloudflared-config.yml.example・systemd unit(backend/frontend)テンプレートを整備済み。実Tunnel作成・DNSルーティング(cloudflared tunnel route dns)・CORS本番切替は人間実行待ち。docs/deploy.md記載の「Tunnel 1本+複数サブドメイン」設計と、実機`cloudflared tunnel list`で確認した兄弟プロジェクトの個別Tunnel運用(arcsphere-civil-twin等)に食い違いがあり、新規作成/既存集約の方針は人間確認待ち。"
+      "note": "deploy/ に cloudflared-config.yml.example・systemd unit(backend/frontend)テンプレート・セットアップ手順書(cloudflared-setup-steps.md)を整備済み。Cloudflare API読み取り調査(2026-07-12)でZone ID確定・cwwd系の名前衝突なし・兄弟プロジェクト全件が個別Tunnel運用と確認済みのため、手順書はcwwd専用の新規Tunnel作成を前提に記載(既存Tunnel相乗りへの読み替え手順も併記)。実Tunnel作成・DNSルーティング(cloudflared tunnel route dns)・CORS本番切替は人間実行待ち。"
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",
@@ -30,8 +30,8 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 74,
-    "frontend_tests_total": 35,
+    "backend_tests_total": 79,
+    "frontend_tests_total": 38,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
@@ -44,19 +44,19 @@
       "projectId": "4561f893-fd3f-4d53-aca0-6fc13aacbef6",
       "location": "frontend/design/",
       "runtime": "dc-runtime (support.js, React18 via CDN)",
-      "status": "data-adapter.js経由で実API接続動作(front?api=backend)。契約テスト14件pass。",
+      "status": "data-adapter.js経由で実API接続動作(front?api=backend)。契約テスト17件pass(STATIONS配線 #55 含む)。",
       "note": "frontend は ClaudeDesign 管理。再取り込みは DesignSync。素React移植はしない（frontend/README.md 参照）。"
     },
     "backend": {
       "stack": "FastAPI + SQLAlchemy(SQLite/PostgreSQL) + httpx + Alembic + APScheduler",
-      "status": "判定エンジン/データソース8種プローブ/認証(JWT+RBAC)/監査ログ/通知/気象庁防災XML警報反映/作業予定CRUD(#16)まで実装。pytest 74件pass、ruff clean。CIにpip-audit依存脆弱性スキャン追加済み。CodeRabbit指摘対応(日時比較・LIKEワイルドカード検証)済み。",
+      "status": "判定エンジン/データソース8種プローブ/認証(JWT+RBAC)/監査ログ/通知/気象庁防災XML警報反映/作業予定CRUD(#16)/OUTLIER品質フラグ(#33一部)まで実装。pytest 79件pass、ruff clean。CIにpip-audit依存脆弱性スキャン追加済み。",
       "note": "ポート固定不可(8000は別プロジェクトCivilPDF-DX使用中)。空きポート起動。"
     },
     "dataWiring": {
       "method": "外部アダプタ(data-adapter.js)。.dc.html無改修・prototypeラップ。index.htmlローダで注入。",
-      "status": "実装＋契約テスト14件pass。デモ動作: front?api=backend。"
+      "status": "実装＋契約テスト17件pass。デモ動作: front?api=backend。STATIONS(観測所ピン)配線済み(#55)。観測所データはS01-S06のみ存在、S07以降の紐付けは#29スコープ。"
     },
-    "notes": "2026-07-12 PR#48 CodeRabbitレビュー対応: 実バグ6件修正(WorkPlan日時比較のTZ混在バグ・WorkPlanUpdate ISO未検証・LIKEワイルドカード誤爆・ci.yml権限過多・README/catalogの表記不整合)、GraphQL reviewThreads.isResolvedで解決確認済み。ID採番の桁上がり/非原子性はIssue #49へ分離(意図的に本PR対象外)。ガバナンステンプレート(.claude/CLAUDE.md, safe-auto-merge.md)への4件の指摘は技術的に正当だが自己改変せず人間判断待ち。"
+    "notes": "2026-07-12 人間承認によりPR#54(Cloudflare手順書)/#57(Issue監査同期)/#58(OUTLIERフラグ)/#59(STATIONS配線)を squash merge。Issue#53/#55自動クローズ、#33はSTALE/DUPLICATE残のためOPEN継続(進捗コメント記録済み)。PR#52(ID採番並行競合)はCodex対抗レビュー(ユーザー実行)待ちでOPEN維持。マージ後main: backend 79 pass / frontend 38 pass / ruff clean。旧PR#48関連メモはgit履歴とIssue#49参照。"
   },
   "issue_audit_2026_07_12": {
     "audited_at": "2026-07-12",
@@ -64,7 +64,8 @@
     "epic_pending_milestone": [42],
     "epic_incomplete": [41, 44],
     "partial_in_progress": [9, 29, 30, 33, 37, 38, 39, 43, 45],
-    "not_started": [31, 34, 35, 36, 55, 56],
+    "not_started": [31, 34, 35, 36, 56],
+    "closed_since_audit": [53, 55],
     "closed_verified": [5, 15, 24, 26, 40],
     "closed_with_gaps_recorded": [1, 2, 46, 47]
   },
