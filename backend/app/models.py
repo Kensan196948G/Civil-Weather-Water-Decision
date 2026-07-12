@@ -147,3 +147,15 @@ class DataSourceStatus(Base):
     avg_ms: Mapped[int] = mapped_column(Integer, default=0)
     trust: Mapped[str] = mapped_column(String(20), default="補助")  # 公式/準公式/補完/補助
     note: Mapped[str] = mapped_column(Text, default="")
+
+
+class IdCounter(Base):
+    """ID採番カウンタ（#49）。
+
+    max(id)+1 方式は読取〜INSERTの間に排他が無く同時実行で重複するため、
+    本テーブルの行UPDATE（DB側で直列化される）で次番号を確保する。
+    name はIDプレフィックス（S/DR/WP/L）、value は払い出し済みの最大番号。
+    """
+    __tablename__ = "id_counters"
+    name: Mapped[str] = mapped_column(String(30), primary_key=True)
+    value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

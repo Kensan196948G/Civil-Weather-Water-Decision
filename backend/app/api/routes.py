@@ -3,20 +3,22 @@ from __future__ import annotations
 
 import csv
 import io
+import random
 import re
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, field_validator, model_validator
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
     AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
-    Site, User, WorkPlan, WorkType,
+    IdCounter, Site, User, WorkPlan, WorkType,
 )
 from ..services import assessment, notifications
 from ..services.audit import audit
@@ -27,26 +29,53 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 WORK_KEYS = {"river", "concrete", "earthwork", "pavement", "crane", "heat"}
 RIVER_STATES = {"none", "stable", "rising", "stale"}
-_ID_COMMIT_ATTEMPTS = 3
+_ID_COMMIT_ATTEMPTS = 5
 
 
-def _next_numeric_id(db: Session, model, prefix: str, width: int) -> str:
-    """既存IDを全件パースし数値maxを取って+1する（#49: 文字列順ソートは桁上がりで崩れるため使わない）。"""
+def _max_existing_numeric(db: Session, model, prefix: str) -> int:
+    """既存IDを全件パースし数値maxを返す（#49: 文字列順ソートは桁上がりで崩れるため使わない）。"""
     ids = db.scalars(select(model.id)).all()
     nums = [int(x[len(prefix):]) for x in ids if x[len(prefix):].isdigit()]
-    return f"{prefix}{(max(nums) + 1) if nums else 1:0{width}d}"
+    return max(nums) if nums else 0
+
+
+def _allocate_id(db: Session, model, prefix: str, width: int) -> str:
+    """id_counters の行UPDATE（DB側で直列化される）により一意な次番号を確保する（#49）。
+
+    max(id)+1 の読取→INSERT方式は同時実行で同じ候補を計算し得るため、採番自体を
+    カウンタ行の原子的 UPDATE ... RETURNING に寄せる（PostgreSQL は行ロック、
+    SQLite は単一ライタで直列化）。カウンタ行が無い初回のみ既存IDのmaxから遅延初期化し、
+    同時初期化の PK 衝突は _commit_with_retry 側のリトライで一方が UPDATE 経路に乗る。
+    """
+    nxt = db.execute(
+        update(IdCounter)
+        .where(IdCounter.name == prefix)
+        .values(value=IdCounter.value + 1)
+        .returning(IdCounter.value)
+    ).scalar_one_or_none()
+    if nxt is None:
+        nxt = _max_existing_numeric(db, model, prefix) + 1
+        db.add(IdCounter(name=prefix, value=nxt))
+        db.flush()
+    return f"{prefix}{nxt:0{width}d}"
 
 
 def _commit_with_retry(db: Session, build_and_add):
-    """build_and_add() でID採番〜db.add()まで行い、一意制約違反時は採番からやり直す
-    （#49: 読み取り→計算→INSERTの間に排他ロックが無く、同時リクエストでID重複の恐れがあるため）。"""
-    for _ in range(_ID_COMMIT_ATTEMPTS):
-        result = build_and_add()
+    """build_and_add() でID採番〜db.add()まで行い、競合時は採番からやり直す。
+
+    通常は _allocate_id のカウンタ行更新がDB側で直列化されるため衝突しないが、
+    カウンタ初期化の同時実行（PK衝突）や SQLite のロック競合（OperationalError）に
+    備えたジッタ付きリトライを保険として残す（#49 対抗レビュー指摘対応）。
+    """
+    for attempt in range(1, _ID_COMMIT_ATTEMPTS + 1):
         try:
+            result = build_and_add()
             db.commit()
             return result
-        except IntegrityError:
+        except (IntegrityError, OperationalError):
             db.rollback()
+            if attempt < _ID_COMMIT_ATTEMPTS:
+                time.sleep(random.uniform(0.01, 0.05) * attempt)  # jitter+backoff
     raise HTTPException(409, "同時登録が競合しました。再試行してください。")
 
 
@@ -179,7 +208,7 @@ class SiteUpdate(BaseModel):
 def create_site(req: SiteCreate, db: Session = Depends(get_db),
                 user: User = Depends(require_role("admin", "tech_manager"))):
     def _build():
-        sid = _next_numeric_id(db, Site, "S", 2)
+        sid = _allocate_id(db, Site, "S", 2)
         site = Site(
             id=sid, site_code=req.site_code or f"CW-{sid}", name=req.name, loc=req.loc,
             latitude=req.latitude, longitude=req.longitude, work_type=req.work_type,
@@ -268,7 +297,7 @@ def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dic
     """判定結果と理由を永続化し、結果IDを返す（監査・実績分析の正本。設計§6.2.11/§6.2.12）。
     #49: 採番〜INSERTを _commit_with_retry() でラップし、同時リクエストによるID重複を防ぐ。"""
     def _build():
-        rid = _next_numeric_id(db, DecisionResult, "DR", 5)
+        rid = _allocate_id(db, DecisionResult, "DR", 5)
         result = DecisionResult(
             id=rid, site_id=site_id, work_type=work_type,
             evaluated_at=datetime.now(assessment.JST).strftime("%m/%d %H:%M"),
@@ -430,7 +459,7 @@ def create_work_plan(req: WorkPlanCreate, db: Session = Depends(get_db),
         raise HTTPException(404, "site not found")
 
     def _build():
-        plan = WorkPlan(id=_next_numeric_id(db, WorkPlan, "WP", 2), site_id=req.site_id,
+        plan = WorkPlan(id=_allocate_id(db, WorkPlan, "WP", 2), site_id=req.site_id,
                         work_type=req.work_type, title=req.title,
                         planned_start=req.planned_start, planned_end=req.planned_end,
                         contractor=req.contractor, summary=req.summary, status=req.status)
@@ -521,7 +550,7 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db),
 
     def _build():
         entry = DecisionLog(
-            id=_next_numeric_id(db, DecisionLog, "L", 2), site_id=site.id, site_name=site.name,
+            id=_allocate_id(db, DecisionLog, "L", 2), site_id=site.id, site_name=site.name,
             work_type=req.work_type, level=req.level, action=req.action,
             comment=req.comment or "（メモなし）", decided_by=user.display_name,
             decision_result_id=req.decision_result_id,
