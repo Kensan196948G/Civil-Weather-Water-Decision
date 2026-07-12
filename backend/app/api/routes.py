@@ -398,12 +398,6 @@ class WorkPlanUpdate(BaseModel):
         return v
 
 
-def _next_plan_id(db: Session) -> str:
-    ids = db.scalars(select(WorkPlan.id)).all()
-    nums = [int(x[2:]) for x in ids if x[2:].isdigit()]
-    return f"WP{(max(nums) + 1) if nums else 1:02d}"
-
-
 @router.get("/work-plans")
 def list_work_plans(site_id: str | None = None, date: str | None = None,
                     db: Session = Depends(get_db)):
@@ -434,14 +428,18 @@ def create_work_plan(req: WorkPlanCreate, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    pid = _next_plan_id(db)
-    plan = WorkPlan(id=pid, site_id=req.site_id, work_type=req.work_type, title=req.title,
-                    planned_start=req.planned_start, planned_end=req.planned_end,
-                    contractor=req.contractor, summary=req.summary, status=req.status)
-    db.add(plan)
-    db.commit()
-    audit(db, user, "work_plan_create", f"{pid} {plan.title or plan.work_type}", site_id=site.id)
-    return {"id": pid, "status": "created"}
+
+    def _build():
+        plan = WorkPlan(id=_next_numeric_id(db, WorkPlan, "WP", 2), site_id=req.site_id,
+                        work_type=req.work_type, title=req.title,
+                        planned_start=req.planned_start, planned_end=req.planned_end,
+                        contractor=req.contractor, summary=req.summary, status=req.status)
+        db.add(plan)
+        return plan
+
+    plan = _commit_with_retry(db, _build)
+    audit(db, user, "work_plan_create", f"{plan.id} {plan.title or plan.work_type}", site_id=site.id)
+    return {"id": plan.id, "status": "created"}
 
 
 @router.put("/work-plans/{plan_id}")
