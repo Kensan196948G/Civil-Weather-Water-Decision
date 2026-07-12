@@ -32,6 +32,42 @@ def test_normalize_missing_flag():
     assert norm["points"][0]["quality_flag"] == "MISSING"
 
 
+@pytest.mark.parametrize(
+    "temp, precip, wind",
+    [
+        (55.0, 1.0, 5.0),   # 気温が上限超過
+        (-45.0, 1.0, 5.0),  # 気温が下限未満
+        (28.0, 350.0, 5.0),  # 降雨が上限超過
+        (28.0, 1.0, 120.0),  # 風速が上限超過
+    ],
+)
+def test_normalize_outlier_flag(temp, precip, wind):
+    payload = {
+        "hourly": {
+            "time": ["t1"],
+            "temperature_2m": [temp],
+            "precipitation": [precip],
+            "wind_speed_10m": [wind],
+        }
+    }
+    norm = om.normalize(payload)
+    assert norm["points"][0]["quality_flag"] == "OUTLIER"
+
+
+def test_normalize_missing_takes_precedence_over_outlier():
+    # 気温が欠測なら、他フィールドが範囲外でも OUTLIER ではなく MISSING を優先
+    payload = {
+        "hourly": {
+            "time": ["t1"],
+            "temperature_2m": [None],
+            "precipitation": [1.0],
+            "wind_speed_10m": [120.0],
+        }
+    }
+    norm = om.normalize(payload)
+    assert norm["points"][0]["quality_flag"] == "MISSING"
+
+
 def test_window_reading_extracts_peaks():
     norm = om.normalize(SAMPLE)
     wr = om.window_reading(norm["points"])
