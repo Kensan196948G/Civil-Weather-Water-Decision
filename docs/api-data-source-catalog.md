@@ -5,17 +5,19 @@
 
 ## 一覧（`backend/app/seed.py` `SOURCES` / `data_collectors/source_probe.py` `PROBE_TARGETS` 準拠）
 
-| ID | 名称 | 区分 | 用途 | エンドポイント | 認証 | 実装状況 | 実装参照 |
-|---|---|---|---|---|---|---|---|
-| DS-JMA-XML | 気象庁 防災情報XML | 公式・最優先 | 警報・注意報を判定に反映（公式優先） | atomフィード `data.jma.go.jp/developer/xml/feed/extra.xml` → 個別警報XML | 不要 | **実装済み・実接続**（10分キャッシュ） | `jma_warnings.py` |
-| DS-OPEN-METEO | Open-Meteo | 外部API・補完 | 気象予報の補完・時系列生成 | `api.open-meteo.com/v1/forecast` | 不要（APIキー不要） | **実装済み・実接続**（予報キャッシュ5分毎ウォーム） | `open_meteo.py` |
-| DS-WBGT | 環境省 暑さ指数(WBGT) | 公式（未接続） | 熱中症対策の判定材料 | `www.wbgt.env.go.jp` | 不要 | 疎通プローブのみ。値は気温・湿度からの **derived 推定**（`wbgtDerived=true` で明示） | `open_meteo.py: estimate_wbgt()` |
-| DS-RIVER-GO | 川の防災情報（国交省） | 公式（参照） | 河川水位情報の参照案内 | `www.river.go.jp` | 不要 | 疎通プローブのみ。無認証の実測水位APIが無いため公式サイト参照リンク案内に留める | `source_probe.py` |
-| DS-WATER-OPEN | 水防災オープンデータ提供サービス | 準公式（契約制） | 河川観測所の実測データ（将来） | ― | 要契約 | **意図的にプローブ対象外**。未接続・シードのError状態を保持（契約・利用条件確認が必要） | `seed.py: SOURCES` |
-| DS-NASA-POWER | NASA POWER | 公式・補助 | 日射量・長期傾向の参考データ | `power.larc.nasa.gov` | 不要 | 疎通プローブのみ。判定へは未反映（将来拡張） | `source_probe.py` |
-| DS-JMA-CSV | 気象庁 気象データ高度利用（アメダス） | 公式 | アメダス気温・雨量・風速（CSV/機械判読） | `www.jma.go.jp/bosai/amedas/` | 不要 | 疎通プローブのみ。判定へは未反映 | `source_probe.py` |
-| DS-JAXA | JAXA G-Portal / Earth API | 公式・補助 | 衛星データ・水循環 | `gportal.jaxa.jp/gpr/` | 本格利用は要利用登録 | 疎通プローブのみ。初期は将来拡張扱い | `source_probe.py` |
-| DS-NOAA | NOAA | 公式・補助 | 海外気象・研究・補完 | `api.weather.gov` | 不要 | 疎通プローブのみ。国内現場では初期必須ではない | `source_probe.py` |
+| ID | 名称 | 区分 | 用途 | エンドポイント | 認証 | 利用条件・制限 | 実装状況 | 実装参照 |
+|---|---|---|---|---|---|---|---|---|
+| DS-JMA-XML | 気象庁 防災情報XML | 公式・最優先 | 警報・注意報を判定に反映（公式優先） | atomフィード `www.data.jma.go.jp/developer/xml/feed/extra.xml` → 個別警報XML | 不要 | 無料・登録不要（気象庁利用規約の範囲で二次利用可）。高頻度取得は避ける運用が望ましく本実装は10分キャッシュ | **実装済み・実接続**（10分キャッシュ） | `jma_warnings.py` |
+| DS-OPEN-METEO | Open-Meteo | 外部API・補完 | 気象予報の補完・時系列生成 | `api.open-meteo.com/v1/forecast` | 不要（APIキー不要） | 非商用利用は無料枠（呼出数に日次上限あり）。商用利用・SLA保証には有償プラン契約が必要 | **実装済み・実接続**（予報キャッシュ5分毎ウォーム） | `open_meteo.py` |
+| DS-WBGT | 環境省 暑さ指数(WBGT) | 公式（未接続） | 熱中症対策の判定材料 | `www.wbgt.env.go.jp` | 不要 | 公開サイト。大量・商用取得は個別に利用条件確認が望ましい | 疎通プローブのみ。値は気温・湿度からの **derived 推定**（`wbgtDerived=true` で明示） | `open_meteo.py: estimate_wbgt()` |
+| DS-RIVER-GO | 川の防災情報（国交省） | 公式（参照） | 河川水位情報の参照案内 | `www.river.go.jp` | 不要 | 無認証の機械可読APIは非公開（Webサイト参照のみ想定） | 疎通プローブのみ。無認証の実測水位APIが無いため公式サイト参照リンク案内に留める | `source_probe.py` |
+| DS-WATER-OPEN | 水防災オープンデータ提供サービス | 準公式（契約制） | 河川観測所の実測データ（将来） | ― | 要契約 | **本格利用には利用者登録・契約が必要**（有償プランあり）。再配布・SLA等は契約条件に依存 | **意図的にプローブ対象外**。未接続・シードのError状態を保持（契約・利用条件確認が必要） | `seed.py: SOURCES` |
+| DS-NASA-POWER | NASA POWER | 公式・補助 | 日射量・長期傾向の参考データ | `power.larc.nasa.gov` | 不要 | NASA公開データ方針に基づき自由利用可。呼出頻度はFair Use的運用（明示的な数値上限は非公開） | 疎通プローブのみ。判定へは未反映（将来拡張） | `source_probe.py` |
+| DS-JMA-CSV | 気象庁 気象データ高度利用（アメダス） | 公式 | アメダス気温・雨量・風速（CSV/機械判読） | `www.jma.go.jp/bosai/amedas/` | 不要 | 無料・登録不要（気象庁利用規約の範囲で二次利用可） | 疎通プローブのみ。判定へは未反映 | `source_probe.py` |
+| DS-JAXA | JAXA G-Portal / Earth API | 公式・補助 | 衛星データ・水循環 | `gportal.jaxa.jp/gpr/` | 本格利用は要利用登録 | 研究目的中心。商用利用は個別に利用規約確認が必要 | 疎通プローブのみ。初期は将来拡張扱い | `source_probe.py` |
+| DS-NOAA | NOAA | 公式・補助 | 海外気象・研究・補完 | `api.weather.gov` | 不要 | 米国政府データは原則パブリックドメイン相当で自由利用可 | 疎通プローブのみ。国内現場では初期必須ではない | `source_probe.py` |
+
+> 「利用条件・制限」列は一般に公知とされる情報の要約（PoC調査時点）であり、正式な契約・大量アクセスを伴う本番運用の前には、各機関の最新の利用規約・APIドキュメントを必ず確認すること（実態以上に良く見せない方針・設計§16.3）。
 
 ## 判定エンジンへの反映優先順位（公式優先原則・設計§8.3-6）
 

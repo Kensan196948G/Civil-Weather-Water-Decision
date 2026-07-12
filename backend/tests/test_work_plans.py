@@ -101,6 +101,23 @@ def test_update_work_plan_not_found(client):
     assert client.put("/api/work-plans/WP99", json={"status": "done"}).status_code == 404
 
 
+def test_update_work_plan_bad_iso_datetime(client):
+    r = client.put("/api/work-plans/WP01", json={"planned_start": "not-a-date"})
+    assert r.status_code == 422
+
+
+def test_update_work_plan_bad_time_order(client):
+    # WP01: planned_start=2026-06-20T08:00 のまま end だけ start より前にする
+    r = client.put("/api/work-plans/WP01", json={"planned_end": "2026-06-20T07:00"})
+    assert r.status_code == 422
+
+
+def test_list_work_plans_rejects_wildcard_date(client):
+    # date は YYYY-MM-DD 厳密形式のみ許可（LIKE ワイルドカードの誤爆防止）
+    assert client.get("/api/work-plans", params={"date": "2026-06-%"}).status_code == 422
+    assert client.get("/api/work-plans", params={"date": "2026-06"}).status_code == 422
+
+
 def test_evaluate_work_plan(client):
     r = client.post("/api/work-plans/WP03/evaluate")
     assert r.status_code == 200

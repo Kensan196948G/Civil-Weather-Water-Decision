@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -299,6 +300,7 @@ def get_decision_result(result_id: str, db: Session = Depends(get_db)):
 
 # ---------- 作業予定（#16 T1-05・詳細設計§7 /api/work-plans） ----------
 WORK_PLAN_STATUSES = {"planned", "done", "postponed", "cancelled"}
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _work_plan_dict(p: WorkPlan) -> dict:
@@ -342,7 +344,8 @@ class WorkPlanCreate(BaseModel):
 
     @model_validator(mode="after")
     def _order(self):
-        if self.planned_end <= self.planned_start:
+        # _iso が先に通っているため fromisoformat は必ず成功する（文字列比較はTZ有無混在で逆転し得るため使わない）
+        if datetime.fromisoformat(self.planned_end) <= datetime.fromisoformat(self.planned_start):
             raise ValueError("planned_end は planned_start より後である必要があります")
         return self
 
@@ -365,6 +368,17 @@ class WorkPlanUpdate(BaseModel):
     summary: str | None = None
     status: str | None = None
 
+    @field_validator("planned_start", "planned_end")
+    @classmethod
+    def _iso(cls, v):
+        if v is None:
+            return v
+        try:
+            datetime.fromisoformat(v)
+        except ValueError:
+            raise ValueError("日時は ISO 8601（例: 2026-06-20T08:00）で指定してください") from None
+        return v
+
 
 def _next_plan_id(db: Session) -> str:
     ids = db.scalars(select(WorkPlan.id)).all()
@@ -379,7 +393,10 @@ def list_work_plans(site_id: str | None = None, date: str | None = None,
     if site_id:
         q = q.where(WorkPlan.site_id == site_id)
     if date:
-        # 日別表示（FR-014）: planned_start の日付部分（YYYY-MM-DD）で絞り込み
+        if not _DATE_ONLY_RE.match(date):
+            raise HTTPException(422, "date は YYYY-MM-DD 形式で指定してください")
+        # 日別表示（FR-014）: planned_start の日付部分（YYYY-MM-DD）で絞り込み。
+        # 厳密な数字4-2-2形式のみ許可するため LIKE ワイルドカード（% _）が紛れ込む余地はない。
         q = q.where(WorkPlan.planned_start.like(f"{date}%"))
     rows = db.scalars(q).all()
     return [_work_plan_dict(p) for p in rows]
@@ -425,8 +442,14 @@ def update_work_plan(plan_id: str, req: WorkPlanUpdate, db: Session = Depends(ge
             raise HTTPException(422, f"{f} に < > は使用できません")
     start = data.get("planned_start", plan.planned_start)
     end = data.get("planned_end", plan.planned_end)
-    if ("planned_start" in data or "planned_end" in data) and end <= start:
-        raise HTTPException(422, "planned_end は planned_start より後である必要があります")
+    if "planned_start" in data or "planned_end" in data:
+        try:
+            start_at = datetime.fromisoformat(start)
+            end_at = datetime.fromisoformat(end)
+        except ValueError:
+            raise HTTPException(422, "日時は ISO 8601 で指定してください") from None
+        if end_at <= start_at:
+            raise HTTPException(422, "planned_end は planned_start より後である必要があります")
     for k, v in data.items():
         setattr(plan, k, v)
     db.commit()
