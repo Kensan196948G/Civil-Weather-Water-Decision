@@ -38,8 +38,8 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 102,
-    "frontend_tests_total": 38,
+    "backend_tests_total": 117,
+    "frontend_tests_total": 40,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
@@ -52,30 +52,72 @@
       "projectId": "4561f893-fd3f-4d53-aca0-6fc13aacbef6",
       "location": "frontend/design/",
       "runtime": "dc-runtime (support.js, React18 via CDN)",
-      "status": "data-adapter.js経由で実API接続動作(front?api=backend)。契約テスト17件pass(STATIONS配線 #55 含む)。",
+      "status": "data-adapter.js経由で実API接続動作。左サイドメニュー化+右上被り修正(#66)・システム設定画面(#34)実装。契約テスト19件pass。",
       "note": "frontend は ClaudeDesign 管理。再取り込みは DesignSync。素React移植はしない（frontend/README.md 参照）。"
     },
     "backend": {
-      "stack": "FastAPI + SQLAlchemy(SQLite/PostgreSQL) + httpx + Alembic + APScheduler",
-      "status": "判定エンジン/データソース8種プローブ/認証(JWT+RBAC)/監査ログ/通知/気象庁防災XML警報反映/作業予定CRUD(#16)/環境省WBGT実接続(#9)/OUTLIER+STALE品質フラグ(#33)/ID採番のカウンタ直列化(#49)まで実装。pytest 102件pass、ruff clean。CIにpip-audit依存脆弱性スキャン追加済み。",
-      "note": "ポート固定不可(8000は別プロジェクトCivilPDF-DX使用中)。空きポート起動。"
+      "stack": "FastAPI + SQLAlchemy(PostgreSQL=Neon/SQLite) + httpx + Alembic + APScheduler",
+      "status": "判定エンジン/データソース8種プローブ/認証(JWT+RBAC)/監査ログ/通知/気象庁防災XML警報反映/作業予定CRUD/環境省WBGT実接続/OUTLIER+STALE品質フラグ/ID採番カウンタ直列化/判定閾値管理API(#35: DB永続化・使用閾値スナップショット・admin境界・監査同一tx)まで実装。pytest 117件pass、ruff clean。",
+      "note": "DB=Neon PostgreSQL(project shiny-frog-23437883, us-east-2)へ切替済み(2026-07-12ユーザー指示、backend/.envのDATABASE_URL)。ローカル起動: backend=55019/frontend=34979(Tunnel config-cwwd.ymlと対応、要固定化=systemd)。8000は別プロジェクト使用中。"
     },
     "dataWiring": {
       "method": "外部アダプタ(data-adapter.js)。.dc.html無改修・prototypeラップ。index.htmlローダで注入。",
       "status": "実装＋契約テスト17件pass。デモ動作: front?api=backend。STATIONS(観測所ピン)配線済み(#55)。観測所データはS01-S06のみ存在、S07以降の紐付けは#29スコープ。"
     },
-    "notes": "2026-07-12 人間承認により計9本squash merge(PR#54/#57/#58/#59/#60/#61/#62/#52ほか)。Issue #9/#49/#53/#55クローズ、#33はDUPLICATE残のみでOPEN(蓄積型データ導入#31時に設計)。PR#52はCodex対抗レビュー4巡実施: diff起因の[high]2件[medium]2件を全解消(id_countersカウンタ直列採番・3層カウンタ同期・一時エラー限定リトライ・同時実行テスト厳格化)。4巡目[high](監査書き込み非原子性)はmain既存パターンのためIssue#63へ分離。マージ後main: backend 102 pass / frontend 38 pass / ruff clean / オープンPRゼロ。"
+    "notes": "2026-07-12(後半) UI要望対応: 左サイドメニュー化・右上被り根治・選択網掛け(#66/PR#69)、閾値管理(#34/#35=PR#71+#75、Codex対抗レビュー5巡完走+CodeRabbit対応、Issue#74分離)、Access記録(PR#70)。PR#73はbase削除で自動クローズ→#75で再作成の教訓あり(スタックPRのbaseブランチをdelete-branchで消すと子PRがクローズされreopen不可)。Neon移行完了(dev branch検証→ユーザー指示でmain適用・シード投入・DR採番実機確認)。新規Issue: #63(監査原子性) #67(類似判断) #68(AI文章生成) #72(メニュー拡張エピック) #74(async+同期DB)。クローズ: #34/#35/#66。オープンPRゼロ。"
   },
   "issue_audit_2026_07_12": {
     "audited_at": "2026-07-12",
     "note": "3並列エージェントによる独立検証で本セクションの旧内容が陳腐化していたと判明。done_not_closed 11件中9件(#1,#2,#5,#15,#24,#26,#40,#46,#47)は既に他プロセスがクローズ済み。うち#1/#2/#46/#47はクローズ根拠に一部漏れがあり各Issueへコメント記録済み。#46/#47の不足分は#31/#38が既にカバー、独立分は#55(STATIONS配線漏れ)/#56(branch protection未設定)として新規起票。open issue一覧はgh issue list --state openで都度確認すること(このリストは手動監査時点のスナップショット)。",
-    "epic_pending_milestone": [42],
-    "epic_incomplete": [41, 44],
-    "partial_in_progress": [29, 30, 33, 37, 38, 39, 43, 45],
-    "not_started": [31, 34, 35, 36, 56, 63],
-    "closed_since_audit": [9, 49, 53, 55],
-    "closed_verified": [5, 15, 24, 26, 40],
-    "closed_with_gaps_recorded": [1, 2, 46, 47]
+    "epic_pending_milestone": [
+      42,
+      72
+    ],
+    "epic_incomplete": [
+      41,
+      44
+    ],
+    "partial_in_progress": [
+      29,
+      30,
+      33,
+      37,
+      38,
+      39,
+      43,
+      45
+    ],
+    "not_started": [
+      31,
+      36,
+      56,
+      63,
+      67,
+      68,
+      74
+    ],
+    "closed_since_audit": [
+      9,
+      34,
+      35,
+      49,
+      53,
+      55,
+      66
+    ],
+    "closed_verified": [
+      5,
+      15,
+      24,
+      26,
+      40
+    ],
+    "closed_with_gaps_recorded": [
+      1,
+      2,
+      46,
+      47
+    ]
   },
   "pr48_review_2026_07_12": {
     "pr": 48,
@@ -85,7 +127,9 @@
     "ci_status": "全5チェックpass(CodeRabbit/backend/docker-build/frontend/security)",
     "coderabbit_findings_total": 12,
     "coderabbit_findings_resolved": 6,
-    "coderabbit_findings_deferred_to_issue": ["#49 (ID採番のアトミック性)"],
+    "coderabbit_findings_deferred_to_issue": [
+      "#49 (ID採番のアトミック性)"
+    ],
     "coderabbit_findings_pending_human_judgment": [
       ".claude/CLAUDE.md:43 (無条件実行停止)",
       ".claude/CLAUDE.md:94 (deploy.ready/maintenance.phase_mode未定義キー)",
