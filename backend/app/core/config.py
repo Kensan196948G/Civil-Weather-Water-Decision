@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     jwt_secret: str = _DEFAULT_JWT_SECRET
     jwt_expire_minutes: int = 480
 
+    # 設定値（AI APIキー等）の暗号化専用鍵（#80 対抗レビュー high-2）。32バイト以上を推奨。
+    # 設定されていれば鍵導出でこちらを優先する。未設定なら JWT_SECRET から導出するが、
+    # JWT_SECRET が既定値/32バイト未満のときは ai_api_key の保存を拒否する
+    # （crypto.encryption_is_strong と routes の保存ガードで強制）。
+    settings_encryption_key: str = ""
+
     # スケジューラ（定期プローブ＋予報リフレッシュ）。テストでは false。
     enable_scheduler: bool = True
     probe_interval_seconds: int = 300   # データソース状態を5分ごとに実プローブ更新

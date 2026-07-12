@@ -175,3 +175,18 @@ class DecisionRule(Base):
     value: Mapped[float] = mapped_column(Float, nullable=False)
     updated_at: Mapped[str] = mapped_column(String(40), default="")
     updated_by: Mapped[str] = mapped_column(String(100), default="")
+
+
+class AppSetting(Base):
+    """設定画面の汎用 key-value ストア（#80, エピック#72段8）。
+
+    1キー=1行で、通知設定(notify)・データ保存期間(data_retention_days)・
+    ユーザー設定(user_prefs)・AI設定(ai_api_key)を保持する。value は文字列で、
+    JSON設定はJSON文字列、AI APIキーは Fernet 暗号文字列（core/crypto.py）を格納する。
+    暗号強度は JWT_SECRET の秘匿に依存し、本番チェックリスト（JWT_SECRET 32B+）適用で有効化される。
+    """
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
