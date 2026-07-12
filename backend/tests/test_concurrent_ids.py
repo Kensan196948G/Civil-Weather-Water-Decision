@@ -15,19 +15,29 @@ N = 6  # リトライ回数(5)より大きい同時数
 
 
 def _run_concurrent(fn):
-    results = []
+    """N並行で fn を実行。開始バリアで実際の重なりを保証し、ワーカー例外は握り潰さず失敗させる
+    （対抗レビュー: 例外死したスレッドの結果欠落で空リスト＝テスト空振りになるのを防ぐ）。"""
+    results, errors = [], []
     lock = threading.Lock()
+    barrier = threading.Barrier(N)
 
     def worker(i):
-        out = fn(i)
-        with lock:
-            results.append(out)
+        try:
+            barrier.wait(timeout=10)  # 全スレッド同時スタートで確実に競合させる
+            out = fn(i)
+            with lock:
+                results.append(out)
+        except Exception as e:  # noqa: BLE001 - テストでは全例外を失敗として収集
+            with lock:
+                errors.append(repr(e))
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+    assert not errors, f"ワーカー例外が発生: {errors}"
+    assert len(results) == N, f"全ワーカーが応答を返すべき: {len(results)}/{N}"
     return results
 
 
@@ -105,8 +115,8 @@ def test_concurrent_decision_log_creation_all_succeed(client):
     codes = [c for c, _ in results]
     ids = [i for _, i in results if i]
     try:
-        assert all(c in (200, 201) for c in codes), f"全件成功であるべき: {codes}"
-        assert len(set(ids)) == len(ids), f"IDが一意であるべき: {sorted(ids)}"
+        assert codes == [200] * N, f"全件200であるべき: {codes}"
+        assert len(ids) == N and len(set(ids)) == N, f"IDがN件かつ一意であるべき: {sorted(ids)}"
     finally:
         _delete_rows(DecisionLog, ids)
 
