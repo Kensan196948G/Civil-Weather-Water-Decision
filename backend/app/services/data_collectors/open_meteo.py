@@ -18,6 +18,23 @@ HOURLY_VARS = [
     "wind_gusts_10m", "relative_humidity_2m", "weather_code",
 ]
 
+# 物理的妥当範囲（詳細設計 §5.1「範囲」チェック）。センサー/APIの異常値検知が目的で、
+# 実際の極端気象（観測記録: 気温-41.0/+41.1℃、瞬間風速約91m/s）を誤検知しない安全マージンを取る。
+TEMP_C_RANGE = (-40.0, 50.0)
+PRECIP_MM_RANGE = (0.0, 300.0)
+WIND_MS_RANGE = (0.0, 100.0)
+
+
+def _is_outlier(temp_c: float | None, precip_mm: float | None, wind_ms: float | None) -> bool:
+    """気温・降雨・風速のいずれかが物理的妥当範囲外なら True（詳細設計 §5.2 OUTLIER）。"""
+    if temp_c is not None and not (TEMP_C_RANGE[0] <= temp_c <= TEMP_C_RANGE[1]):
+        return True
+    if precip_mm is not None and not (PRECIP_MM_RANGE[0] <= precip_mm <= PRECIP_MM_RANGE[1]):
+        return True
+    if wind_ms is not None and not (WIND_MS_RANGE[0] <= wind_ms <= WIND_MS_RANGE[1]):
+        return True
+    return False
+
 
 def estimate_wbgt(temp_c: float | None, rh_pct: float | None) -> float | None:
     """WBGT 近似推定（屋外, BoM 近似）。公式 WBGT 未接続時の derived 値。
@@ -46,8 +63,13 @@ def normalize(payload: dict) -> dict:
 
     points = []
     for i, t in enumerate(times):
-        # 主要フィールド（降雨・気温）の欠測で MISSING
-        flag = "MISSING" if (temp[i] is None or pr[i] is None) else "OK"
+        # 主要フィールド（降雨・気温）の欠測で MISSING、次点で範囲外値を OUTLIER
+        if temp[i] is None or pr[i] is None:
+            flag = "MISSING"
+        elif _is_outlier(temp[i], pr[i], ws[i]):
+            flag = "OUTLIER"
+        else:
+            flag = "OK"
         points.append({
             "time": t,
             "temp_c": temp[i],
