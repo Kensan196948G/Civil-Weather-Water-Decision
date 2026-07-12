@@ -271,6 +271,17 @@
       login: login, logout: logout, getToken: getToken,
       me: function () { return j("/api/auth/me"); },
       notifications: function () { return j("/api/notifications"); },
+      rules: function () { return j("/api/admin/rules"); },
+      saveRules: function (updates) {
+        // PUT はエラー詳細(422の検証メッセージ等)を画面表示するため status も返す
+        return _fetch(url("/api/admin/rules"), {
+          method: "PUT",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+          body: JSON.stringify({ updates: updates })
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
       mapDashToSites: mapDashToSites, mapSources: mapSources, _state: CW
     };
   }
@@ -278,21 +289,38 @@
   // ---- ブラウザ自動起動 ----
   if (typeof window !== "undefined" && window.document) {
     var apiBase = window.__CW_API_BASE__ != null ? window.__CW_API_BASE__ : "";
-    // ナビへ「現場登録」を追加し、register 画面のときだけ注入パネルを表示する
+    var cwUser = null; // ログイン中ユーザー（ロールでナビ表示・編集可否を出し分け）
+    // ナビへ「現場登録」等を追加し、該当画面のときだけ注入パネルを表示する
     var regInst = null;
     function cwToggleRegScreen(show) {
       var el = document.getElementById("cw-reg-screen");
       if (el) el.style.display = show ? "block" : "none";
     }
+    function cwToggleSettingsScreen(show) {
+      var el = document.getElementById("cw-settings-screen");
+      if (el) {
+        var was = el.style.display;
+        el.style.display = show ? "block" : "none";
+        if (show && was !== "block") cwLoadSettings(); // 表示のたびに最新値を取得
+      }
+    }
+    function cwNavItem(inst, key, label) {
+      var active = inst.state.screen === key;
+      return {
+        label: label, weight: active ? 800 : 600,
+        color: active ? "#13344f" : "#697A88", bar: active ? "#13344f" : "transparent",
+        onClick: function () { inst.go(key); },
+        badge: 0, badgeShow: "none", badgeBg: "#c62828", badgeColor: "#fff"
+      };
+    }
     function cwInjectNav(inst, vals) {
       if (!vals.nav || !vals.nav.concat) return;
-      var active = inst.state.screen === "register";
-      vals.nav = vals.nav.concat([{
-        label: "現場登録", weight: active ? 800 : 600,
-        color: active ? "#13344f" : "#697A88", bar: active ? "#13344f" : "transparent",
-        onClick: function () { inst.go("register"); },
-        badge: 0, badgeShow: "none", badgeBg: "#c62828", badgeColor: "#fff"
-      }]);
+      var extra = [cwNavItem(inst, "register", "現場登録")];
+      // システム設定は閲覧権限のあるロール（admin/tech_manager）のみ表示（#34）
+      if (cwUser && (cwUser.role === "admin" || cwUser.role === "tech_manager")) {
+        extra.push(cwNavItem(inst, "settings", "システム設定"));
+      }
+      vals.nav = vals.nav.concat(extra);
     }
     var adapter = createAdapter({
       base: apiBase,
@@ -316,6 +344,7 @@
           inst._dashMap = null; inst.__cwDashVer = adapter._state.ver;
         }
         cwToggleSourceNote(inst.state.screen === "source"); // データソース画面の更新間隔注記
+        cwToggleSettingsScreen(inst.state.screen === "settings"); // システム設定画面（#34）
         cwSyncWbgtScreen(inst);                              // WBGT画面の地図
       }
     });
@@ -406,6 +435,113 @@
     }
 
     // ---- データソース画面: 5分更新の注記バー ----
+    // 「システム設定」画面（#34: 判定閾値の閲覧・編集。API: /api/admin/rules）
+    function cwLoadSettings() {
+      var list = document.getElementById("cw-set-list");
+      var msg = document.getElementById("cw-set-msg");
+      if (!list) return;
+      list.innerHTML = '<div class="cw-set-empty">読込中…</div>';
+      if (msg) msg.textContent = "";
+      adapter.rules().then(function (d) {
+        var rules = (d && d.rules) || [];
+        if (!rules.length) { list.innerHTML = '<div class="cw-set-empty">取得できませんでした</div>'; return; }
+        var canEdit = cwUser && cwUser.role === "admin";
+        list.innerHTML = rules.map(function (r) {
+          return '<div class="cw-set-row" data-key="' + esc(r.key) + '" data-default="' + r.default + '">'
+            + '<div class="cw-set-info"><div class="t">' + esc(r.label)
+            + (r.overridden ? ' <span class="cw-set-badge">上書き中</span>' : "")
+            + '</div><div class="d">' + esc(r.desc) + '</div>'
+            + (r.overridden && r.updated_by
+               ? '<div class="d">変更: ' + esc(r.updated_by) + '（' + esc(r.updated_at || "") + '）</div>' : "")
+            + '</div>'
+            + '<div class="cw-set-def">既定 ' + r.default + (r.unit ? " " + esc(r.unit) : "") + '</div>'
+            + '<div class="cw-set-input"><input type="number" step="0.1" value="' + r.value + '"'
+            + ' min="' + r.min + '" max="' + r.max + '"' + (canEdit ? "" : " disabled") + '>'
+            + (r.unit ? '<span class="u">' + esc(r.unit) + "</span>" : "") + '</div>'
+            + '</div>';
+        }).join("");
+        var save = document.getElementById("cw-set-save");
+        if (save) save.style.display = canEdit ? "inline-block" : "none";
+        var note = document.getElementById("cw-set-note");
+        if (note) note.textContent = canEdit
+          ? "既定値と同じ値にして保存すると上書きは解除されます。"
+          : "閲覧のみ（変更は管理者アカウントで行ってください）。";
+      }).catch(function () {
+        list.innerHTML = '<div class="cw-set-empty">取得に失敗しました（権限またはAPIエラー）</div>';
+      });
+    }
+    function cwSaveSettings() {
+      var msg = document.getElementById("cw-set-msg");
+      var updates = {};
+      var rows = document.querySelectorAll("#cw-set-list .cw-set-row");
+      rows.forEach(function (row) {
+        var key = row.getAttribute("data-key");
+        var def = parseFloat(row.getAttribute("data-default"));
+        var input = row.querySelector("input");
+        if (!key || !input || input.value === "") return;
+        var v = parseFloat(input.value);
+        if (isNaN(v)) return;
+        // 既定値と同値なら上書き解除(null)、それ以外は上書き値として送信
+        updates[key] = (v === def) ? null : v;
+      });
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "保存中…"; }
+      adapter.saveRules(updates).then(function (res) {
+        if (res.ok) {
+          if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "保存しました（判定へ即時反映されます）"; }
+          cwLoadSettings();
+        } else {
+          var detail = (res.body && res.body.detail) || ("HTTP " + res.status);
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "保存できません: " + detail; }
+        }
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラーで保存できませんでした"; }
+      });
+    }
+    function installSettingsScreen() {
+      if (document.getElementById("cw-settings-screen")) return;
+      var css = document.createElement("style");
+      css.textContent =
+        "#cw-settings-screen{display:none;position:fixed;left:0;right:0;top:56px;bottom:0;z-index:30;overflow:auto;"
+        + "background:#eef1f4;font-family:'Noto Sans JP',system-ui,sans-serif;color:#16212c}"
+        + ".cw-set-card{background:#fff;margin:22px auto;width:min(760px,94vw);border-radius:12px;padding:22px 24px;box-shadow:0 1px 4px rgba(0,0,0,.08)}"
+        + ".cw-set-card h2{margin:0 0 4px;font-size:17px;color:#13344f}"
+        + ".cw-set-card p.sub{margin:0 0 14px;font-size:11.5px;color:#7e8c99}"
+        + ".cw-set-row{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid #f0f3f6}"
+        + ".cw-set-info{flex:1;min-width:0}"
+        + ".cw-set-info .t{font-size:13px;font-weight:700;color:#1c2935}"
+        + ".cw-set-info .d{font-size:11px;color:#7e8c99;margin-top:2px}"
+        + ".cw-set-badge{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:8px;background:#fdf6e0;"
+        + "border:1px solid #ecdca0;color:#8a6d1a;font-size:10px;font-weight:700;vertical-align:1px}"
+        + ".cw-set-def{flex:none;width:110px;text-align:right;font-size:11px;color:#7e8c99}"
+        + ".cw-set-input{flex:none;display:flex;align-items:center;gap:5px}"
+        + ".cw-set-input input{width:96px;padding:7px 8px;border:1px solid #d4dce2;border-radius:7px;"
+        + "font:600 13px 'Noto Sans JP',sans-serif;text-align:right;box-sizing:border-box}"
+        + ".cw-set-input input:disabled{background:#f4f6f8;color:#8a99a5}"
+        + ".cw-set-input .u{font-size:11px;color:#7e8c99;min-width:34px}"
+        + ".cw-set-empty{padding:20px;color:#7e8c99;font-size:12px;text-align:center}"
+        + ".cw-set-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:16px}"
+        + ".cw-set-actions button{padding:10px 18px;border-radius:7px;font:700 13px 'Noto Sans JP',sans-serif;cursor:pointer;border:none}"
+        + "#cw-set-reload{background:#eef1f4;color:#5a6b7b}#cw-set-save{background:#16527d;color:#fff}"
+        + ".cw-set-msg{font-size:12px;min-height:16px;flex:1}"
+        + "#cw-set-note{margin:10px 0 0;font-size:11px;color:#7e8c99}";
+      document.head.appendChild(css);
+      var screen = document.createElement("div");
+      screen.id = "cw-settings-screen";
+      screen.innerHTML =
+        '<div class="cw-set-card">'
+        + "<h2>システム設定 — 判定閾値（会社基準）</h2>"
+        + '<p class="sub">注意・中止検討の判定に使う閾値です。変更は全現場の判定に即時反映されます（監査ログに記録）。</p>'
+        + '<div id="cw-set-list"></div>'
+        + '<p id="cw-set-note"></p>'
+        + '<div class="cw-set-actions"><div class="cw-set-msg" id="cw-set-msg"></div>'
+        + '<button id="cw-set-reload" type="button">再読込</button>'
+        + '<button id="cw-set-save" type="button">保存</button></div>'
+        + "</div>";
+      document.body.appendChild(screen);
+      screen.querySelector("#cw-set-reload").addEventListener("click", cwLoadSettings);
+      screen.querySelector("#cw-set-save").addEventListener("click", cwSaveSettings);
+    }
+
     function installSourceNote() {
       if (document.getElementById("cw-src-note")) return;
       var n = document.createElement("div");
@@ -541,6 +677,7 @@
       var p = document.getElementById("cw-user"); if (p) p.style.display = "flex";
     }
     function setUserPill(u) {
+      cwUser = u || cwUser; // ロール別のナビ表示・設定編集可否に使用（#34）
       var n = document.getElementById("cw-user-name");
       if (n && u) n.textContent = (u.displayName || "") + "（" + roleLabel(u.role) + "）";
     }
@@ -592,7 +729,7 @@
         + "nav>button:not([style*=\"transparent\"]){background:rgba(19,52,79,.08) !important}"
         + "nav>button:hover{background:rgba(19,52,79,.05)}"
         + "main{margin-left:226px !important;margin-right:18px !important}"
-        + "#cw-reg-screen,#cw-wbgt-screen{left:210px !important}"
+        + "#cw-reg-screen,#cw-wbgt-screen,#cw-settings-screen{left:210px !important}"
         + "}";
       document.head.appendChild(css);
       mountHeaderTools();
@@ -711,6 +848,7 @@
           adapter.patch(e.Logic.prototype);
           installLayout();  // 先にツールコンテナを用意（ログイン画面・ベルが append する）
           installRegisterScreen(adapter);
+          installSettingsScreen();
           installSourceNote();
           installWbgtScreen();
           installLoginScreen();
