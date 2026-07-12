@@ -8,11 +8,12 @@ import random
 import re
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -21,7 +22,7 @@ from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
     AppSetting, AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
-    IdCounter, Site, User, WorkPlan, WorkType,
+    IdCounter, Site, SiteLink, User, WorkPlan, WorkType,
 )
 from ..services import assessment, notifications, rules as rules_service
 from ..services.audit import audit, audit_add
@@ -64,7 +65,8 @@ def _allocate_id(db: Session, model, prefix: str, width: int) -> str:
 
 
 # 採番対象の (モデル, プレフィックス)。重複検出時のカウンタ再同期に使う
-_COUNTER_SPECS = ((Site, "S"), (DecisionResult, "DR"), (WorkPlan, "WP"), (DecisionLog, "L"))
+_COUNTER_SPECS = ((Site, "S"), (DecisionResult, "DR"), (WorkPlan, "WP"),
+                  (DecisionLog, "L"), (SiteLink, "SL"))
 
 # リトライしてよい一時エラーのみ許可（恒久障害を409に偽装しない: 対抗レビュー[medium]）
 _SQLITE_TRANSIENT_MARKERS = ("database is locked", "database table is locked")
@@ -156,6 +158,7 @@ async def get_site(site_id: str, db: Session = Depends(get_db)):
             "manager": site.manager + "（現場管理者）", "project": site.project_type,
             "hasRiver": site.work_type == "river" or site.river_work_flag,
             "plans": plans,
+            "links": [_site_link_dict(ln) for ln in site.links],
             "history": [{"datetime": h.decided_at, "action": h.action, "level": h.level,
                          "comment": h.comment, "by": h.decided_by} for h in history]}
 
@@ -637,6 +640,179 @@ def deactivate_site(site_id: str, db: Session = Depends(get_db),
     audit_add(db, user, "site_deactivate", f"{site_id} {site.name}", site_id=site_id)
     db.commit()
     return {"id": site.id, "status": "inactive"}
+
+
+# ---------- 現場別 公式リンク（#30 T2-02 / FR-035: 川の防災情報リンク管理） ----------
+SITE_LINK_KINDS = {"river", "weather", "wbgt", "disaster", "other"}
+_SITE_LINKS_MAX = 20  # 1現場あたりの上限（応答肥大化・DoS防止。対抗レビュー[medium]）
+
+
+def _validate_https_url(v: str) -> str:
+    """https のみ許可し javascript:/data:/http 等の危険・非暗号スキームや制御文字を拒否する。
+
+    リンクは現場詳細でクリック導線として使われるため、スキームを厳格に検証する
+    （危険スキーム/XSS 多層防御。SiteCreate 等の入力境界チェックと同方針）。
+    """
+    u = (v or "").strip()
+    if not u:
+        raise ValueError("URL は必須です")
+    if len(u) > 500:
+        raise ValueError("URL は 500 文字以内で指定してください")
+    # 空白・制御文字（C0/DEL/C1 含む）の埋め込みはスキーム偽装/ヘッダインジェクションの温床のため拒否
+    if any(c.isspace() or ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f for c in u):
+        raise ValueError("URL に空白・制御文字は使用できません")
+    # バックスラッシュはブラウザ/パーサ差で "/" と解釈されホスト偽装に使われるため拒否（対抗レビュー[high]）
+    if "\\" in u:
+        raise ValueError("URL にバックスラッシュは使用できません")
+    parsed = urlparse(u)
+    # scheme を小文字化して比較（"HTTPS" も許容しつつ http/javascript/data は拒否）
+    if parsed.scheme.lower() != "https":
+        raise ValueError("URL は https:// で始まる必要があります")
+    # userinfo（https://river.go.jp@evil.example）は公式ドメインなりすましに使われるため拒否
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL にユーザー情報（@）は使用できません")
+    if not parsed.hostname:
+        raise ValueError("URL のホストが指定されていません")
+    return u
+
+
+def _validate_link_label(v: str) -> str:
+    v = (v or "").strip()
+    if not v:
+        raise ValueError("リンク名称は必須です")
+    if len(v) > 100:
+        raise ValueError("リンク名称は 100 文字以内で指定してください")
+    if "<" in v or ">" in v:  # XSS 多層防御（名称は現場詳細に表示される）
+        raise ValueError("名称に < > は使用できません")
+    return v
+
+
+class SiteLinkCreate(BaseModel):
+    label: str
+    url: str
+    kind: str = "river"
+    sort_order: int = 0
+
+    @field_validator("label")
+    @classmethod
+    def _label(cls, v):
+        return _validate_link_label(v)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v):
+        return _validate_https_url(v)
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v):
+        if v not in SITE_LINK_KINDS:
+            raise ValueError(f"kind は {sorted(SITE_LINK_KINDS)} のいずれか")
+        return v
+
+
+class SiteLinkUpdate(BaseModel):
+    label: str | None = None
+    url: str | None = None
+    kind: str | None = None
+    sort_order: int | None = None
+
+    @field_validator("label")
+    @classmethod
+    def _label(cls, v):
+        return v if v is None else _validate_link_label(v)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v):
+        return v if v is None else _validate_https_url(v)
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v):
+        if v is not None and v not in SITE_LINK_KINDS:
+            raise ValueError(f"kind は {sorted(SITE_LINK_KINDS)} のいずれか")
+        return v
+
+
+def _site_link_dict(ln: SiteLink) -> dict:
+    return {"id": ln.id, "siteId": ln.site_id, "label": ln.label,
+            "url": ln.url, "kind": ln.kind, "sortOrder": ln.sort_order}
+
+
+@router.get("/sites/{site_id}/links")
+def list_site_links(site_id: str, db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    rows = db.scalars(select(SiteLink).where(SiteLink.site_id == site_id)
+                      .order_by(SiteLink.sort_order, SiteLink.id)).all()
+    return [_site_link_dict(ln) for ln in rows]
+
+
+@router.post("/sites/{site_id}/links", status_code=201)
+def create_site_link(site_id: str, req: SiteLinkCreate, db: Session = Depends(get_db),
+                     user: User = Depends(require_role("admin", "tech_manager"))):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    # 上限・重複チェック（対抗レビュー[medium]: 無制限登録による肥大化と同一URLの多重登録を防ぐ）
+    count = db.scalar(select(func.count()).select_from(SiteLink)
+                      .where(SiteLink.site_id == site_id))
+    if count >= _SITE_LINKS_MAX:
+        raise HTTPException(422, f"リンクは1現場あたり最大 {_SITE_LINKS_MAX} 件までです")
+    dup = db.scalar(select(SiteLink).where(SiteLink.site_id == site_id,
+                                           SiteLink.url == req.url))
+    if dup:
+        raise HTTPException(409, "同じURLのリンクが既に登録されています")
+
+    def _build():
+        link = SiteLink(id=_allocate_id(db, SiteLink, "SL", 3), site_id=site_id,
+                        label=req.label, url=req.url, kind=req.kind, sort_order=req.sort_order)
+        db.add(link)
+        # 監査行を同一トランザクションへ（#63 と同方式。commit後のaudit失敗による不整合を防ぐ）
+        audit_add(db, user, "site_link_create", f"{link.id} {site_id} {req.kind}", site_id=site_id)
+        return link
+
+    link = _commit_with_retry(db, _build)
+    return {"id": link.id, "status": "created"}
+
+
+@router.put("/site-links/{link_id}")
+def update_site_link(link_id: str, req: SiteLinkUpdate, db: Session = Depends(get_db),
+                     user: User = Depends(require_role("admin", "tech_manager"))):
+    link = db.get(SiteLink, link_id)
+    if not link:
+        raise HTTPException(404, "site link not found")
+    data = req.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(422, "更新内容がありません")
+    if "url" in data:  # URL変更時も同一現場内の重複を防ぐ（対抗レビュー[medium]）
+        dup = db.scalar(select(SiteLink).where(SiteLink.site_id == link.site_id,
+                                               SiteLink.url == data["url"],
+                                               SiteLink.id != link_id))
+        if dup:
+            raise HTTPException(409, "同じURLのリンクが既に登録されています")
+    for k, v in data.items():
+        setattr(link, k, v)
+    # 監査行を更新と同一commitへ（#63 と同方式）
+    audit_add(db, user, "site_link_update", f"{link_id} {','.join(data.keys())}", site_id=link.site_id)
+    db.commit()
+    return {"id": link.id, "status": "updated"}
+
+
+@router.delete("/site-links/{link_id}")
+def delete_site_link(link_id: str, db: Session = Depends(get_db),
+                     user: User = Depends(require_role("admin", "tech_manager"))):
+    link = db.get(SiteLink, link_id)
+    if not link:
+        raise HTTPException(404, "site link not found")
+    site_id = link.site_id  # delete 後は参照できないため先に確保
+    # 監査行を削除と同一commitへ（#63 と同方式）
+    audit_add(db, user, "site_link_delete", f"{link_id} {site_id}", site_id=site_id)
+    db.delete(link)
+    db.commit()
+    return {"id": link_id, "status": "deleted"}
 
 
 # ---------- ダッシュボード ----------

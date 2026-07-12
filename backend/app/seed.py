@@ -14,7 +14,7 @@ from .core.config import settings
 from .core.db import SessionLocal
 from .core.security import hash_password
 from .models import (
-    DataSourceStatus, DecisionLog, IdCounter, Site, Station, User, WorkPlan, WorkType,
+    DataSourceStatus, DecisionLog, IdCounter, Site, SiteLink, Station, User, WorkPlan, WorkType,
 )
 
 # デモ用ユーザー（5ロール）。本番では各自パスワード変更／Entra ID 連携。
@@ -80,6 +80,17 @@ PLANS = [
     ("WP05", "S06", "pavement", "表層 舗設", "2026-06-20T08:00", "2026-06-20T15:00", "◎◎道路"),
 ]
 
+# 現場別の公式リンク（#30 T2-02 / FR-035）。河川作業のある現場に「川の防災情報」への導線を用意。
+# 現場別の精緻なURL(観測所ページ)は観測所正規化(#29)後に対応。初期は公式トップへの参照リンク。
+SITE_LINKS = [
+    # id, site_id, label, url, kind, sort_order
+    ("SL001", "S01", "川の防災情報（国交省）", "https://www.river.go.jp/", "river", 1),
+    ("SL002", "S05", "川の防災情報（国交省）", "https://www.river.go.jp/", "river", 1),
+    ("SL003", "S07", "川の防災情報（国交省）", "https://www.river.go.jp/", "river", 1),
+    ("SL004", "S09", "川の防災情報（国交省）", "https://www.river.go.jp/", "river", 1),
+    ("SL005", "S13", "川の防災情報（国交省）", "https://www.river.go.jp/", "river", 1),
+]
+
 SOURCES = [
     ("DS-OPEN-METEO", "Open-Meteo", "外部API", "OK", "—", 0, 240, "補完", "予報・時系列の補完データ。APIキー不要。公式警報を優先します。"),
     ("DS-JMA-XML", "気象庁 防災情報XML", "公式", "OK", "—", 0, 410, "公式", "警報・注意報・防災気象情報。最優先で扱います。"),
@@ -118,6 +129,8 @@ def seed(db: Session) -> None:
     for (pid, sid, wt, title, st, en, con) in PLANS:
         db.add(WorkPlan(id=pid, site_id=sid, work_type=wt, title=title,
                         planned_start=st, planned_end=en, contractor=con))
+    for (lid, sid, label, url, kind, order) in SITE_LINKS:
+        db.add(SiteLink(id=lid, site_id=sid, label=label, url=url, kind=kind, sort_order=order))
     for (sidc, name, kind, status, lok, fails, ms, trust, note) in SOURCES:
         db.add(DataSourceStatus(id=sidc, name=name, kind=kind, status=status, last_ok=lok,
                                 fails=fails, avg_ms=ms, trust=trust, note=note))
@@ -147,6 +160,7 @@ def seed(db: Session) -> None:
         "S": _maxnum([s[0] for s in SITES], "S"),
         "WP": _maxnum([p[0] for p in PLANS], "WP"),
         "L": _maxnum([h[0] for h in HISTORY], "L"),
+        "SL": _maxnum([sl[0] for sl in SITE_LINKS], "SL"),
         "DR": 0,
     }
     for cname, cval in counter_values.items():

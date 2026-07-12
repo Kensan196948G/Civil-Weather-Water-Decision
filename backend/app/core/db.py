@@ -19,6 +19,8 @@ if _is_sqlite:
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=5000")
         cur.execute("PRAGMA synchronous=NORMAL")
+        # FK整合をPostgreSQLと同等に強制（SQLiteは既定OFF。孤児行の混入防止 — #30 対抗レビュー[medium]）
+        cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
