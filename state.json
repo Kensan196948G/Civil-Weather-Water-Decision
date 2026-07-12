@@ -37,11 +37,17 @@
         "cwwd-frontend(0.0.0.0:34979)",
         "cwwd-tunnel"
       ],
-      "systemd_applied_at": "2026-07-12"
+      "systemd_applied_at": "2026-07-12",
+      "neon_tables_added_2026_07_12": [
+        "app_settings(#80)",
+        "site_links(#30)"
+      ],
+      "alembic_head": "d5e8f1a2b3c4",
+      "settings_encryption_key_set": true
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",
-  "phase": "Verify",
+  "phase": "Monitor",
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
@@ -166,6 +172,14 @@
       80,
       85
     ],
-    "prod_hardening_pending": "#2相当(APP_ENV/JWT_SECRET/SETTINGS_ENCRYPTION_KEY/ADMIN_PASSWORD/CORS)は秘密登録を伴うため人間ゲート。"
+    "prod_hardening_pending": "#2相当(APP_ENV/JWT_SECRET/SETTINGS_ENCRYPTION_KEY/ADMIN_PASSWORD/CORS)は秘密登録を伴うため人間ゲート。",
+    "deployed": {
+      "status": "全7PR(#76/#78/#81/#82/#83/#84/#86)マージ・デプロイ完了。オープンPRゼロ。",
+      "frontend": "新5グループメニュー(#79)を34979/公開URLで配信。クリック時薄網掛け・ロール制御・施工判定プリセット。準備中画面(海象/海上作業/50年確率波)の器あり。",
+      "backend_neon": "app_settings(#80)+site_links(#30)をNeon本番へDDL適用(alembic head d5e8f1a2b3c4)。設定API/AI設定(暗号化保存)実機検証済。SETTINGS_ENCRYPTION_KEYを.envに登録(AIキー保存200確認)。",
+      "human_gate_note": "本番ハードニング(APP_ENV=production/JWT_SECRET/ADMIN_PASSWORD/CORS絞り込み)は引き続き人間ゲート。現状APP_ENV=local+Cloudflare Accessでエッジ防御。",
+      "process_note": "Neon dev検証ブランチ(dev-issue-80-migration-check)をCTOが削除。CLAUDE.md 8.6では本来人間決裁だが使い捨て検証ブランチ(自動期限付き・固有データなし)。以後dev削除も事前確認。",
+      "deferred": "現場詳細への site_links UI配線は #85(メニューUIと同一ファイルのため分離)。"
+    }
   }
 }
