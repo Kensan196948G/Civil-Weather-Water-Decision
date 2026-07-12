@@ -30,7 +30,7 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 79,
+    "backend_tests_total": 102,
     "frontend_tests_total": 38,
     "security_critical": 0,
     "blocker_count": 0,
@@ -49,23 +49,23 @@
     },
     "backend": {
       "stack": "FastAPI + SQLAlchemy(SQLite/PostgreSQL) + httpx + Alembic + APScheduler",
-      "status": "判定エンジン/データソース8種プローブ/認証(JWT+RBAC)/監査ログ/通知/気象庁防災XML警報反映/作業予定CRUD(#16)/OUTLIER品質フラグ(#33一部)まで実装。pytest 79件pass、ruff clean。CIにpip-audit依存脆弱性スキャン追加済み。",
+      "status": "判定エンジン/データソース8種プローブ/認証(JWT+RBAC)/監査ログ/通知/気象庁防災XML警報反映/作業予定CRUD(#16)/環境省WBGT実接続(#9)/OUTLIER+STALE品質フラグ(#33)/ID採番のカウンタ直列化(#49)まで実装。pytest 102件pass、ruff clean。CIにpip-audit依存脆弱性スキャン追加済み。",
       "note": "ポート固定不可(8000は別プロジェクトCivilPDF-DX使用中)。空きポート起動。"
     },
     "dataWiring": {
       "method": "外部アダプタ(data-adapter.js)。.dc.html無改修・prototypeラップ。index.htmlローダで注入。",
       "status": "実装＋契約テスト17件pass。デモ動作: front?api=backend。STATIONS(観測所ピン)配線済み(#55)。観測所データはS01-S06のみ存在、S07以降の紐付けは#29スコープ。"
     },
-    "notes": "2026-07-12 人間承認によりPR#54(Cloudflare手順書)/#57(Issue監査同期)/#58(OUTLIERフラグ)/#59(STATIONS配線)を squash merge。Issue#53/#55自動クローズ、#33はSTALE/DUPLICATE残のためOPEN継続(進捗コメント記録済み)。PR#52(ID採番並行競合)はCodex対抗レビュー(ユーザー実行)待ちでOPEN維持。マージ後main: backend 79 pass / frontend 38 pass / ruff clean。旧PR#48関連メモはgit履歴とIssue#49参照。"
+    "notes": "2026-07-12 人間承認により計9本squash merge(PR#54/#57/#58/#59/#60/#61/#62/#52ほか)。Issue #9/#49/#53/#55クローズ、#33はDUPLICATE残のみでOPEN(蓄積型データ導入#31時に設計)。PR#52はCodex対抗レビュー4巡実施: diff起因の[high]2件[medium]2件を全解消(id_countersカウンタ直列採番・3層カウンタ同期・一時エラー限定リトライ・同時実行テスト厳格化)。4巡目[high](監査書き込み非原子性)はmain既存パターンのためIssue#63へ分離。マージ後main: backend 102 pass / frontend 38 pass / ruff clean / オープンPRゼロ。"
   },
   "issue_audit_2026_07_12": {
     "audited_at": "2026-07-12",
     "note": "3並列エージェントによる独立検証で本セクションの旧内容が陳腐化していたと判明。done_not_closed 11件中9件(#1,#2,#5,#15,#24,#26,#40,#46,#47)は既に他プロセスがクローズ済み。うち#1/#2/#46/#47はクローズ根拠に一部漏れがあり各Issueへコメント記録済み。#46/#47の不足分は#31/#38が既にカバー、独立分は#55(STATIONS配線漏れ)/#56(branch protection未設定)として新規起票。open issue一覧はgh issue list --state openで都度確認すること(このリストは手動監査時点のスナップショット)。",
     "epic_pending_milestone": [42],
     "epic_incomplete": [41, 44],
-    "partial_in_progress": [9, 29, 30, 33, 37, 38, 39, 43, 45],
-    "not_started": [31, 34, 35, 36, 56],
-    "closed_since_audit": [53, 55],
+    "partial_in_progress": [29, 30, 33, 37, 38, 39, 43, 45],
+    "not_started": [31, 34, 35, 36, 56, 63],
+    "closed_since_audit": [9, 49, 53, 55],
     "closed_verified": [5, 15, 24, 26, 40],
     "closed_with_gaps_recorded": [1, 2, 46, 47]
   },
@@ -84,7 +84,7 @@
       ".claude/CLAUDE.md:726 (終了分岐の人間承認境界矛盾)",
       ".claude/commands/safe-auto-merge.md:18,28 (TOCTOU・allowlist方式)"
     ],
-    "merge_status": "human_approval_required",
-    "note": "mainブランチ宛のためauto-merge対象外。人間の明示的な「マージしますか？[y/N]」確認待ち。"
+    "merge_status": "merged (2026-07-12 人間承認済み)",
+    "note": "履歴記録。deferred分は#49で対応完了(PR#52)。CLAUDE.md/safe-auto-merge.mdへの4指摘は引き続き人間判断待ち(自己改変しない方針)。"
   }
 }
