@@ -87,7 +87,7 @@ def build_reading(work_type: str, wr: dict, site: Site,
 
 async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
                       start: str | None = None, end: str | None = None,
-                      warnmap: dict | None = None, fresh_th: bool = False) -> dict:
+                      warnmap: dict | None = None, th: dict | None = None) -> dict:
     """1現場を評価してダッシュボード/詳細用 dict を返す。"""
     wt = work_type or site.work_type
     if fetch is None:
@@ -120,9 +120,9 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
     reading = build_reading(wt, wr, site, pref_warnings)
     if status == "STALE":
         reading.stale_weather = True  # 前回取得値での参考表示を判定理由に明示（§5.3）
-    # #35: 実効閾値はDBが単一の真実。永続化を伴う評価(fresh_th=True)はキャッシュを
-    # バイパスし、他ワーカーのTTL窓による古い閾値での保存を防ぐ(表示用は短TTLで足りる)
-    decision = evaluate(wt, reading, th=rules_service.effective_th(fresh=fresh_th))
+    # #35: 実効閾値はDBが単一の真実。永続化を伴う評価は呼び出し側が fresh 解決した
+    # th を注入する(表示用は th=None → 短TTLキャッシュ解決で足りる)
+    decision = evaluate(wt, reading, th=th or rules_service.effective_th())
 
     return {
         "id": site.id, "name": site.name, "code": site.site_code, "loc": site.loc,
@@ -138,7 +138,6 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
                     for x in decision["reasons"]],
         "reasonsRaw": decision["reasons"],  # reason_code 付きの生出力（永続化用）
         "dataQuality": decision["data_quality_summary"],
-        "thresholdsUsed": decision["thresholds_used"],  # 監査再現用(persist側でJSON保存)
         "weatherStatus": status,
         "fetchedAt": data.get("fetched_at"),
         "updated": datetime.now(JST).strftime("%H:%M"),
@@ -152,17 +151,19 @@ async def assess_all(sites: list[Site], *, fetch=None) -> list[dict]:
 
 
 async def assess_decision(site: Site, work_type: str, start: str | None, end: str | None,
-                          *, fetch=None, fresh_th: bool = False) -> dict:
-    """作業判断画面の評価。判定エンジン出力（設計 §8.2）＋参照情報を返す。"""
-    card = await assess_site(site, fetch=fetch, work_type=work_type, start=start, end=end,
-                             fresh_th=fresh_th)
+                          *, fetch=None, th: dict | None = None) -> dict:
+    """作業判断画面の評価。判定エンジン出力（設計 §8.2）＋参照情報を返す。
+
+    閾値dict(th)は応答へ含めない: 閾値の閲覧は /api/admin/rules の権限境界に限定し、
+    一般ユーザー向け応答からの漏えいを防ぐ（#35 対抗レビュー4巡目）。
+    """
+    card = await assess_site(site, fetch=fetch, work_type=work_type, start=start, end=end, th=th)
     return {
         "siteId": site.id, "siteName": site.name, "workType": work_type,
         "overall_level": card["level"], "overall_label": card["levelLabel"],
         "summary": card["summary"], "reasons": card["reasons"],
         "reasonsRaw": card["reasonsRaw"],
         "data_quality_summary": card["dataQuality"],
-        "thresholdsUsed": card["thresholdsUsed"],
         "weatherStatus": card["weatherStatus"], "fetchedAt": card["fetchedAt"],
         "refs": ["気象: Open-Meteo", "河川: 川の防災情報",
                  "WBGT: 環境省(公式予報)" if not card["wbgtDerived"] else "WBGT: 環境省(推定)",

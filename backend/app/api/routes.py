@@ -22,7 +22,7 @@ from ..models import (
     IdCounter, Site, User, WorkPlan, WorkType,
 )
 from ..services import assessment, notifications, rules as rules_service
-from ..services.audit import audit
+from ..services.audit import audit, audit_add
 from ..services.data_collectors import open_meteo, source_probe
 
 # ルータ全体に認証を必須化（/auth と /health は別ルータ/main で公開）
@@ -196,6 +196,10 @@ def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
         if errors:
             db.rollback()
             raise HTTPException(422, "; ".join(errors))
+        # 監査行を同一トランザクションに含める: 監査記録なしの設定変更を残さない
+        # (commit後のaudit失敗で「変更は永続・監査は欠落」となるのを防ぐ。対抗レビュー4巡目)
+        audit_add(db, user, "rules_update",
+                  ", ".join(f"{k}={'default' if v is None else v}" for k, v in req.updates.items()))
         try:
             db.commit()
         except IntegrityError:
@@ -203,8 +207,6 @@ def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
             db.rollback()
             raise HTTPException(409, "設定が競合しました。再試行してください。") from None
     rules_service.clear_cache()  # 自プロセスの実効閾値キャッシュを即時無効化
-    audit(db, user, "rules_update",
-          ", ".join(f"{k}={'default' if v is None else v}" for k, v in req.updates.items()))
     return {"status": "updated", "rules": rules_service.list_rules(db)}
 
 
@@ -379,7 +381,8 @@ class EvaluateReq(BaseModel):
     end: str | None = None
 
 
-def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dict) -> str:
+def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dict,
+                             thresholds: dict | None = None) -> str:
     """判定結果と理由を永続化し、結果IDを返す（監査・実績分析の正本。設計§6.2.11/§6.2.12）。
     #49: 採番〜INSERTを _commit_with_retry() でラップし、同時リクエストによるID重複を防ぐ。"""
     def _build():
@@ -390,7 +393,7 @@ def _persist_decision_result(db: Session, site_id: str, work_type: str, res: dic
             overall_level=res["overall_level"], overall_label=res["overall_label"],
             summary=res["summary"], data_quality_summary=res["data_quality_summary"],
             weather_status=res.get("weatherStatus", ""),
-            thresholds_json=json.dumps(res.get("thresholdsUsed") or {}, ensure_ascii=False))
+            thresholds_json=json.dumps(thresholds or {}, ensure_ascii=False))
         db.add(result)
         for i, r in enumerate(res.get("reasonsRaw", []), 1):
             db.add(DecisionReason(
@@ -409,9 +412,11 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    # 永続化する判定は閾値キャッシュをバイパス(古い閾値での保存を防ぐ。#35対抗レビュー)
-    res = await assessment.assess_decision(site, req.work_type, req.start, req.end, fresh_th=True)
-    rid = _persist_decision_result(db, site.id, req.work_type, res)
+    # 永続化する判定は閾値キャッシュをバイパスした fresh 値で評価し、同じ値をスナップショット
+    # 保存する(古い閾値での保存を防ぐ)。応答には閾値を含めない(admin読み取り境界の維持)
+    th = rules_service.effective_th(fresh=True)
+    res = await assessment.assess_decision(site, req.work_type, req.start, req.end, th=th)
+    rid = _persist_decision_result(db, site.id, req.work_type, res, thresholds=th)
     audit(db, user, "evaluate", f"{rid} {req.work_type} L{res['overall_level']}", site_id=site.id)
     res["resultId"] = rid
     return res

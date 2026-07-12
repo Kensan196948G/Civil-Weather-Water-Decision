@@ -198,3 +198,36 @@ def test_persisting_evaluation_bypasses_stale_cache(client, monkeypatch):
         db.close()
     assert th["rain_heavy"] == 30.0  # 永続化パスはキャッシュをバイパスして最新を使用
     client.put("/api/admin/rules", json={"updates": {"rain_heavy": None}})
+
+
+def test_thresholds_not_leaked_to_general_responses(client):
+    """閾値dictは/api/admin/rules以外の応答に載らない（admin読み取り境界の維持）。"""
+    token = login_token(client, "viewer")
+    h = {"Authorization": "Bearer " + token}
+    dash = client.get("/api/dashboard/site-risk", headers=h)
+    assert dash.status_code == 200
+    assert "thresholds" not in dash.text.lower()
+    ev = client.post("/api/decisions/evaluate", headers=h,
+                     json={"site_id": "S01", "work_type": "earthwork"})
+    assert ev.status_code == 200
+    assert "thresholds" not in ev.text.lower()
+    detail = client.get("/api/sites/S01", headers=h)
+    assert detail.status_code == 200
+    assert "thresholds" not in detail.text.lower()
+
+
+def test_rule_change_rolls_back_when_audit_fails(client, monkeypatch):
+    """監査行の書き込みが失敗したら設定変更ごとロールバック（監査なき変更を残さない）。"""
+    from app.api import routes as routes_mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("audit insert failed")
+
+    monkeypatch.setattr(routes_mod, "audit_add", _boom)
+    # TestClient は未処理例外を再送出する(実運用では汎用500)。commit前に失敗する点が本質
+    with pytest.raises(RuntimeError):
+        client.put("/api/admin/rules", json={"updates": {"gust_stop": 22.0}})
+    monkeypatch.undo()
+
+    rules = {x["key"]: x for x in client.get("/api/admin/rules").json()["rules"]}
+    assert rules["gust_stop"]["overridden"] is False, "監査失敗時は変更が残らない"
