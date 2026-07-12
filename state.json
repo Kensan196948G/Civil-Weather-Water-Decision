@@ -180,6 +180,15 @@
       "human_gate_note": "本番ハードニング(APP_ENV=production/JWT_SECRET/ADMIN_PASSWORD/CORS絞り込み)は引き続き人間ゲート。現状APP_ENV=local+Cloudflare Accessでエッジ防御。",
       "process_note": "Neon dev検証ブランチ(dev-issue-80-migration-check)をCTOが削除。CLAUDE.md 8.6では本来人間決裁だが使い捨て検証ブランチ(自動期限付き・固有データなし)。以後dev削除も事前確認。",
       "deferred": "現場詳細への site_links UI配線は #85(メニューUIと同一ファイルのため分離)。"
-    }
+    },
+    "ui_bugfix_and_verify": {
+      "issue": "初回デプロイ後ユーザーが「メニューが変わっていない」と報告。",
+      "root_cause": "CSSカスケードバグ: @media(min-width:960px){#cw-sidebar{display:flex}} の後にベース #cw-sidebar{display:none} を記述し、同詳細度でソース順が勝ちPC幅でもサイドバー非表示。curl/jsdomでは検出不能(jsdomはCSSカスケード未評価)。",
+      "fix": "PR #88(merged): display:flex に !important + serve.py で .js を no-store 配信。",
+      "verify": "Playwright+Firefox(Chromium系はkernel6.17でSIGTRAP全滅)で本番34979を実描画。sidebarDisplay=flex/width=224/5グループ17項目表示を確認。ユーザーが公開URLで正常閲覧を確認。",
+      "lesson": "UI変更は実ブラウザ(Firefox)で computed style/スクショ確認してから完了報告する。"
+    },
+    "user_confirmed": "2026-07-12 ユーザーが https://cwwd.mirai-dx-platform.com/ で正常閲覧を確認。",
+    "next_topic": "本番向けデータ投入の相談(次回セッション最優先・実装先走らずヒアリングから・人間ゲート順守)。"
   }
 }
