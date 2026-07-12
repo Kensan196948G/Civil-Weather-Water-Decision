@@ -1,7 +1,7 @@
 # backend — FastAPI バックエンド（PoC）
 
 気象（Open-Meteo ライブ）→ 正規化・品質フラグ → 判定エンジン → API、を提供する。
-WebUI（`frontend/`）の `#46 データ接続` の接続先。PoC は **SQLite**（DBサーバ不要）。
+WebUI（`frontend/`）のデータ接続先（`#46` data-adapter 経由で実装済み）。開発は **SQLite**（DBサーバ不要）、本番候補は **PostgreSQL**（Alembic、#12）。
 
 ## アーキテクチャ / データフロー
 
@@ -21,15 +21,19 @@ SQLite: sites / stations / work_types / work_plans / decision_logs / data_source
 backend/
 ├── app/
 │   ├── main.py                       # FastAPI app / CORS / lifespan(init_db) / /health
-│   ├── core/{config,db}.py           # 設定(.env) / SQLAlchemy(SQLite)
-│   ├── models.py                     # ORM（設計§6のサブセット）
-│   ├── seed.py                       # テーブル作成＋サンプル6現場投入（冪等）
+│   ├── core/{config,db,security,deps}.py  # 設定(.env) / SQLAlchemy / JWT・bcrypt / RBAC依存
+│   ├── models.py                     # ORM（users/audit_logs含む10テーブル）
+│   ├── seed.py                       # テーブル作成＋16現場・9データソース・5ロールのデモユーザー投入（冪等）
+│   ├── scheduler.py                  # APScheduler（定期プローブ・予報リフレッシュ）
 │   ├── services/
 │   │   ├── decision_engine.py        # 判定ルール（設計§8/§9）★中核
 │   │   ├── assessment.py             # 気象取得→Reading→判定 のオーケストレーション
-│   │   └── data_collectors/open_meteo.py  # Open-Meteo 取得・正規化・WBGT推定
-│   └── api/routes.py                 # エンドポイント（設計§7）
-├── tests/                            # 26 tests（engine12 / collector5 / api9）
+│   │   ├── audit.py                  # 監査ログ記録
+│   │   ├── notifications.py          # 通知導出（画面内 + Slack/Teams拡張点）
+│   │   └── data_collectors/{open_meteo,jma_warnings,source_probe}.py
+│   └── api/{routes.py,auth.py}       # エンドポイント（設計§7）/ 認証
+├── migrations/                       # Alembic（3リビジョン。#12参照）
+├── tests/                            # 54 tests（api17 / auth10 / engine13 / jma_warnings3 / notifications1 / open_meteo5 / source_probe5）
 ├── requirements.txt / pyproject.toml
 ```
 
@@ -76,22 +80,31 @@ docker compose up -d            # backend 起動時に alembic upgrade head ＋ 
 
 ## 主なエンドポイント（設計 §7）
 
-| メソッド | パス | 概要 |
-|---|---|---|
-| GET | `/health` | ヘルスチェック |
-| GET | `/api/sites` /`/api/sites/{id}` /`/api/sites/{id}/stations` | 現場一覧/詳細/観測所 |
-| GET | `/api/dashboard/site-risk` | 現場別リスク（ライブ判定） |
-| GET | `/api/dashboard/data-sources` | データソース状態 |
-| GET | `/api/weather/timeseries?site_id=` | 気象時系列（24h） |
-| POST | `/api/decisions/evaluate` | 作業判断評価（判定エンジン §8.2） |
-| GET/POST | `/api/decision-logs` | 判断履歴 取得/記録 |
-| GET | `/api/decision-logs/export.csv` | 判断履歴CSV（BOM付） |
-| POST | `/api/data-collectors/run` | 手動再取得（キャッシュ更新） |
+ルータ全体（`/api/*`、認証エンドポイント除く）は既定で認証必須（`Depends(get_current_user)`）。`ENABLE_AUTH=false`（ローカル開発）でバイパス可。
+
+| メソッド | パス | 概要 | 認可 |
+|---|---|---|---|
+| GET | `/health` | ヘルスチェック | 不要 |
+| POST | `/api/auth/login` | ログイン（JWT発行、5回/300秒でロック） | 不要 |
+| GET | `/api/auth/me` | ログイン中ユーザー情報 | 認証済み全員 |
+| GET | `/api/sites` /`/api/sites/{id}` /`/api/sites/{id}/stations` | 現場一覧/詳細（ライブ判定・作業予定込み）/観測所 | 認証済み全員 |
+| POST/PUT/DELETE | `/api/sites`（登録）/`/api/sites/{id}`（更新/無効化） | 現場CRUD（#14） | `admin`,`tech_manager` |
+| GET | `/api/work-types` | 作業種別マスタ | 認証済み全員 |
+| GET | `/api/dashboard/site-risk` | 現場別リスク（ライブ判定） | 認証済み全員 |
+| GET | `/api/dashboard/data-sources` | データソース状態 | 認証済み全員 |
+| GET | `/api/weather/timeseries?site_id=` | 気象時系列（24h） | 認証済み全員 |
+| POST | `/api/decisions/evaluate` | 作業判断評価＋`decision_results`/`decision_reasons`永続化（#23） | 認証済み全員 |
+| GET | `/api/decision-results/{id}` | 判定結果詳細取得（#23） | 認証済み全員 |
+| GET/POST | `/api/decision-logs` | 判断履歴 取得/記録 | POSTは`admin`,`tech_manager`,`site_manager`,`safety` |
+| GET | `/api/decision-logs/export.csv` | 判断履歴CSV（BOM付） | 認証済み全員 |
+| POST | `/api/data-collectors/run` | 手動再取得（全ソース同期プローブ） | 認証済み全員 |
+| GET | `/api/notifications` | 通知一覧（判定結果から導出） | 認証済み全員 |
+| GET | `/api/admin/audit-logs` | 監査ログ一覧 | `admin`,`tech_manager` |
 
 ## テスト
 
 ```bash
-cd backend && python3 -m pytest      # 26 passed
+cd backend && python3 -m pytest      # 54 passed
 ```
 
 ## 設計準拠ポイント
@@ -101,11 +114,21 @@ cd backend && python3 -m pytest      # 26 passed
 - **公式優先**: 河川の洪水情報・気象庁警報は外部予報より高い severity（`flood_warning` 等）。
 - **WBGT は derived**: 公式（環境省）未接続のため気温・湿度から推定し `wbgtDerived=true` で明示。
 
+## 認証 / RBAC / 監査ログ / 通知（#25, T3-04 実装済み）
+
+- `core/security.py`: JWT発行・bcryptハッシュ・ログイン試行回数制限・タイミング攻撃対策（ダミーハッシュ比較）。
+- `core/deps.py`: `require_role()` によるロールベース認可（`admin` / `tech_manager` / `site_manager` / `safety` / `viewer` の5ロール）。
+- `services/audit.py`: 認証・現場変更・判断記録などの監査ログを永続化（`GET /api/admin/audit-logs`）。
+- `services/notifications.py`: 判定結果（severity≥2 = 中止検討/河川/障害）から通知を導出。画面内通知に加え、Slack/Teams Webhook連携の拡張点あり（未設定時はログのみ）。
+- `core/config.py: _guard_production()`: `APP_ENV!=local` 時に `ENABLE_AUTH=false`・既定JWT_SECRET・32byte未満のsecretを起動時 `RuntimeError` で拒否（本番誤設定の防止）。
+
 ## 次フェーズ（残作業）
 
-- `#46` WebUI のモックを本API へ接続（`frontend/README.md` 対応表）。CORS は許可済み。
-- `#20` 環境省 WBGT 実データ接続（現状 derived 推定）。
-- 河川（川の防災情報）・気象庁防災XML の連携（Phase 2 / #29〜#33）。
+- `#20` / `#9` 環境省 WBGT 実データ接続（現状 `estimate_wbgt()` による derived 推定。実測CSVは地点コード・年月をフォーム送信で指定する動的仕様のため未接続）。
+- `#29`〜`#31` 河川観測所マスタの正規化（`site_stations` 多対多）・河川観測取り込み・専用時系列API。
+- `#34` / `#35` 閾値設定画面・判定ルール管理API（`/api/admin/rules`）。現状 `decision_engine.py` 内の `RULES` にハードコード。
+- `#33` データ品質サービス（異常値・重複検知の専用化。欠測処理は実装済み）。
+- `#36`〜`#39` ダッシュボード強化・気象時系列グラフ・バッチ拡張・データソース監視強化。
 
 ## 定期バッチ / データソース実プローブ（#47 実装済み）
 
@@ -129,12 +152,3 @@ cd backend && python3 -m pytest      # 26 passed
 - **水防災オープンデータ（契約制）は対象外**＝シードの Error/未接続を保持（実態以上に良く見せない）。
 - 手動再取得 `POST /api/data-collectors/run` も同期で全ソースをプローブする。
 - テストでは `ENABLE_SCHEDULER=false`（ネット非依存）。
-
-## 現場の登録/更新/無効化（#14 実装済み）
-
-| メソッド | パス | 概要 |
-|---|---|---|
-| GET | `/api/work-types` | 作業種別マスタ（登録フォーム用） |
-| POST | `/api/sites` | 現場登録（id自動採番・バリデーション） |
-| PUT | `/api/sites/{id}` | 現場更新（部分） |
-| DELETE | `/api/sites/{id}` | 現場無効化（status=inactive、ダッシュボードから除外） |

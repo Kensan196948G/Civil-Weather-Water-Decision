@@ -53,26 +53,30 @@ Construction Weather & Water Decision Support
 
 ## WebUI
 
-WebUI は ClaudeDesign で作成し `frontend/` に取り込み済み（モックデータで動作する6画面 SPA）。
-起動方法・ClaudeDesign 再取り込み手順・モック→実API のデータ接続計画は [frontend/README.md](./frontend/README.md) を参照。
+WebUI は ClaudeDesign で作成し `frontend/` に取り込み済み（6画面 SPA）。
+バックエンド API へのデータ接続は外部アダプタ方式（`#46`、`data-adapter.js`）で実装済み。
+起動方法・ClaudeDesign 再取り込み手順・データ接続の仕組みは [frontend/README.md](./frontend/README.md) を参照。
 
 ## 開発ステータス / Status
 
 | 項目 | 内容 |
 |---|---|
-| フェーズ | Phase 0（足場・調査） |
+| フェーズ | コア機能実装済み・拡張/品質強化フェーズへ移行中 |
 | 登録日 | 2026-06-19 |
 | 本番リリース期限 | 2026-12-19（登録から6ヶ月） |
 
-マイルストーン・タスクは GitHub Issues / Milestones で管理します。
+認証/RBAC/監査ログ（#25）・現場CRUD（#14）・判定結果永続化（#23）・気象庁防災情報XML警報の実反映（#26）・
+データ接続アダプタ（#46）・定期バッチ（#47）まで実装済み（backend 54 tests pass）。
+残課題（河川観測所マスタ正規化・閾値設定UI・データ品質サービス等）は [backend/README.md](./backend/README.md) の
+「次フェーズ（残作業）」を参照。マイルストーン・タスクは GitHub Issues / Milestones で管理します。
 
-## 技術スタック（PoC） / Tech Stack
+## 技術スタック / Tech Stack
 
-- フロントエンド: React + Vite + TypeScript + Tailwind CSS
+- フロントエンド: ClaudeDesign 生成 SPA（`.dc.html` + dc-runtime + CDN 経由 React 18。Vite/TypeScript ビルドは不使用）
 - バックエンド: FastAPI (Python 3.12) + SQLAlchemy + Alembic
-- DB: PostgreSQL 16
-- バッチ: APScheduler
-- コンテナ: Docker Compose
+- DB: SQLite（開発）/ PostgreSQL 16（本番候補、同一 Alembic マイグレーションで両対応）
+- バッチ: APScheduler（データソース定期プローブ・予報リフレッシュ）
+- コンテナ: Docker Compose（postgres + backend + frontend）
 
 ## ライセンス / License
 

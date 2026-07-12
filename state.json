@@ -4,7 +4,7 @@
     "repository": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision.git",
     "registered_at": "2026-06-19",
     "release_deadline": "2026-12-19",
-    "current_phase": "Phase 0",
+    "current_phase": "M1 PoC Demoable達成・M2 Feature Complete移行中",
     "milestones": {
       "M0_foundation_ready": "2026-07-02",
       "M1_poc_demoable": "2026-07-30",
@@ -20,23 +20,27 @@
   },
   "session": {
     "last_phase": "Build",
+    "last_synced_at": "2026-07-12",
     "frontend": {
       "source": "ClaudeDesign",
       "projectId": "4561f893-fd3f-4d53-aca0-6fc13aacbef6",
       "location": "frontend/design/",
       "runtime": "dc-runtime (support.js, React18 via CDN)",
-      "status": "モックデータで6画面動作。実APIへのデータ接続は次フェーズ。",
+      "status": "6画面SPA。data-adapter.js（#46）で実APIへ接続済み。ログイン/RBAC・通知ベル・現場登録画面も注入実装済み。",
       "note": "frontend は ClaudeDesign 管理。再取り込みは DesignSync。素React移植はしない（frontend/README.md 参照）。"
     },
     "backend": {
-      "stack": "FastAPI + SQLAlchemy(SQLite) + httpx",
-      "status": "判定エンジン/Open-Meteoコレクタ/API実装・26テストpass・ライブ判定動作確認済み。",
-      "note": "ポート固定不可(8000は別プロジェクトCivilPDF-DX使用中)。空きポート起動。"
+      "stack": "FastAPI + SQLAlchemy(SQLite/PostgreSQL) + Alembic + httpx + APScheduler",
+      "status": "判定エンジン/データコレクタ/認証・RBAC/監査ログ/現場CRUD/判定結果永続化/気象庁XML警報/定期バッチ実装・54テストpass・ruff clean。",
+      "note": "ポート固定不可(8000は別プロジェクトCivilPDF-DX使用中)。空きポート起動。DBスキーマ正本はAlembic(#12)。"
     },
     "dataWiring": {
       "method": "外部アダプタ(data-adapter.js)。.dc.html無改修・prototypeラップ。index.htmlローダで注入。",
-      "status": "実装＋契約テスト9件pass。デモ動作: front?api=backend。ブラウザ実描画は要ユーザー確認。"
+      "status": "実装＋契約テスト14件pass（logic-smoke 21件と合わせてfrontend計35件pass）。デモ動作: front?api=backend。ブラウザ実描画は要ユーザー確認（サンドボックスでヘッドレスChrome起動不可のため）。"
     },
-    "notes": "実装計画→GitHub足場→WebUI取り込み→バックエンド(26テスト)→#46 データ接続アダプタ実装(契約テスト9pass)。ブラウザ確認待ち。"
+    "completedIssues": ["#9(サンプル保存分)", "#12", "#14", "#20(疎通確認のみ)", "#23", "#25", "#26", "#46", "#47"],
+    "openIssues": ["#29", "#30", "#31", "#33", "#34", "#35", "#36", "#37", "#38", "#39"],
+    "docSyncNote": "2026-07-12: mainのstate.json/README.md/backend README.md/frontend README.mdが2026-06-19 Phase0時点のまま未更新だった問題を発見し是正（docs/sync-docs-with-main-reality ブランチ）。以後、機能実装PRごとにこのファイルとREADME群を同時更新すること。",
+    "notes": "実装計画→GitHub足場→WebUI取り込み→バックエンド初期実装→#46データ接続アダプタ→#25認証/RBAC/監査ログ→#26気象庁XML警報→#47定期バッチ→ドキュメント実態同期(本更新)。次はWBGT実データ接続(#20)・河川観測所マスタ(#29-#31)が主要残課題。"
   }
 }

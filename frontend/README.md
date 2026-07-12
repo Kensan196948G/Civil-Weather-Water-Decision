@@ -1,7 +1,8 @@
 # frontend — WebUI（ClaudeDesign 取り込み）
 
 本ディレクトリは、ClaudeDesign で作成した WebUI プロトタイプをリポジトリに取り込んだものです。
-現状は**モックデータで動作する完全な6画面 SPA** で、次フェーズで実 API に接続します。
+`.dc.html` 自体はモックデータのままだが、`data-adapter.js`（外部アダプタ、`#46` 実装済み）が実行時に
+prototype をラップして実 API のデータへ差し替える。`?api=` 未指定、またはバックエンド未起動時はモック表示にフォールバックする。
 
 ```
 frontend/
@@ -94,26 +95,28 @@ python3 frontend/serve.py
 
 > **ネイティブ ClaudeDesign 画面化への移行**: 現状の登録画面はアダプタ注入。正式に ClaudeDesign の画面にしたい場合は、ClaudeDesign で「現場登録」画面（フォーム）を1枚追加し `POST /api/sites`（body は上記payload）を呼ぶだけ。API は完成済みなので、デザイン側にフォームができたらアダプタの注入版は外せる。
 
-### 旧計画（対応表・参考）
+### モック→API 対応表（実装状況、`data-adapter.js` 実コード基準）
 
-`<script data-dc-script>` のハードコード値を API（詳細設計 §7）へ差し替える対応。data-adapter.js が下表を実装済み。
+`<script data-dc-script>` のハードコード値を API へ差し替える対応。**接続先 API 列は詳細設計 §7 の想定パスではなく、
+`data-adapter.js` が実際に fetch しているパス**（一部は設計と異なる形・未接続のまま）。
 
-| 現状（モック） | 役割 | 接続先 API（詳細設計 §7） |
-|---|---|---|
-| `SITES`（ダッシュボード一覧） | 現場別リスク一覧 | `GET /api/dashboard/site-risk` |
-| `SITES`（現場詳細の1件） | 現場詳細 | `GET /api/sites/{id}` |
-| `genHourly()` 気温/雨量/風速 | 気象時系列グラフ | `GET /api/weather/timeseries` |
-| `genHourly()` 水位 + 閾値 | 河川時系列グラフ | `GET /api/river/timeseries` |
-| `genHourly()` WBGT | WBGT時系列・ランキング | `GET /api/wbgt/timeseries` |
-| `STATIONS` / `COORDS` | 観測所マーカー・上流線 | `GET /api/sites/{id}/stations`（site_stations） |
-| `resultVM()` 作業種別別の判定 | 作業判断の評価結果 | `POST /api/work-plans/{id}/evaluate`（判定エンジン §8） |
-| `evaluate()` | 評価実行 | 同上 |
-| `record()` | 判断メモ記録 | `POST /api/decision-logs` |
-| `state.history` | 判断履歴 | `GET /api/decision-logs` |
-| `exportCsv()` | CSV出力 | `GET /api/decision-logs/export.csv` |
-| `sources`（データソース状態） | データソース状態画面 | `GET /api/dashboard/data-sources` |
-| `refresh()` | 手動再取得 | `POST /api/data-collectors/run` |
-| `links` | 公式リンク | 静的（気象庁/川の防災情報/環境省WBGT/Open-Meteo） |
+| 現状（モック） | 役割 | 接続先 API（実装） | 状態 |
+|---|---|---|---|
+| `SITES`（ダッシュボード一覧） | 現場別リスク一覧 | `GET /api/dashboard/site-risk` | ✅ 接続済み |
+| `SITES`（現場詳細の1件） | 現場詳細 | `GET /api/sites/{id}` | ✅ 接続済み |
+| `genHourly()` 気温/雨量/風速 | 気象時系列グラフ | `GET /api/weather/timeseries?site_id=` | ✅ 接続済み |
+| `genHourly()` WBGT | WBGT時系列・ランキング | 同上（`wbgt_derived` フィールド。専用エンドポイントなし） | ✅ 接続済み（derived推定値） |
+| `genHourly()` 水位 + 閾値 | 河川時系列グラフ | ― | ❌ 未接続。実河川水位APIが無いため元のモック推定値を維持 |
+| `STATIONS` | 観測所マーカー・上流線 | `GET /api/sites/{id}/stations` | ❌ 未接続（バックエンドに実装はあるがアダプタ未使用） |
+| `COORDS` | 地図ピン座標（全国16現場） | `GET /api/sites` + `GET /api/dashboard/site-risk` の緯度経度 | ✅ 接続済み |
+| `resultVM()` / `evaluate()` 作業種別別の判定 | 作業判断の評価結果 | `POST /api/decisions/evaluate`（判定エンジン §8、`decision_results`永続化#23） | ✅ 接続済み |
+| `record()` | 判断メモ記録 | `POST /api/decision-logs` | ✅ 接続済み |
+| `state.history` | 判断履歴 | `GET /api/decision-logs` | ✅ 接続済み |
+| `exportCsv()` | CSV出力 | `GET /api/decision-logs/export.csv` | ✅ 接続済み |
+| `sources`（データソース状態） | データソース状態画面 | `GET /api/dashboard/data-sources` | ✅ 接続済み |
+| `refresh()` | 手動再取得 | `POST /api/data-collectors/run` | ✅ 接続済み |
+| ― | ログイン/認証/通知（モックに無かった新規機能） | `POST /api/auth/login`, `GET /api/auth/me`, `GET /api/notifications` | ✅ 接続済み（#25, T3-04） |
+| `links` | 公式リンク | 静的（気象庁/川の防災情報/環境省WBGT/Open-Meteo） | 静的のまま（設計どおり） |
 
 ### 接続時の設計原則（要件・詳細設計より厳守）
 
