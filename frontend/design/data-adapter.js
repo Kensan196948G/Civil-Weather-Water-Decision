@@ -552,6 +552,55 @@
       });
       adapter.me().then(function (u) { if (u && u.role) { hideLogin(); setUserPill(u); } }).catch(function () {});
     }
+    // ---- レイアウト調整（#66: 左サイドメニュー化＋右上ヘッダ被り修正。.dc.html無改修） ----
+    function mountHeaderTools() {
+      // ベル・ユーザー表示をヘッダ右側の実DOMフローへ挿入（fixed座標の重なりを根治）。
+      // dc-runtime がヘッダを再レンダーして外れた場合は MutationObserver 経由で再マウントする。
+      var tools = document.getElementById("cw-hdr-tools");
+      if (!tools) {
+        tools = document.createElement("div");
+        tools.id = "cw-hdr-tools";
+      }
+      var hdr = document.querySelector("header > div:nth-child(2)"); // 右側flexコンテナ
+      if (hdr) {
+        if (tools.parentNode !== hdr) hdr.appendChild(tools);
+      } else if (!tools.parentNode) {
+        document.body.appendChild(tools); // ヘッダ未描画時のフォールバック（fixedで右上へ）
+      }
+      return tools;
+    }
+    function installLayout() {
+      if (document.getElementById("cw-layout-css")) return;
+      var css = document.createElement("style");
+      css.id = "cw-layout-css";
+      css.textContent =
+        // 右上ツール: ヘッダ内フローで整列（座標ハードコードなし）。body直下に落ちた時のみfixed
+        "#cw-hdr-tools{display:flex;align-items:center;gap:8px;flex:none;"
+        + "font-family:'Noto Sans JP',system-ui,sans-serif}"
+        + "body>#cw-hdr-tools{position:fixed;top:8px;right:14px;z-index:50}"
+        // モックのユーザー表示（山田 太郎）は非表示化（実ログインユーザーのピルに置き換わる）
+        + "header>div:nth-child(2)>div:nth-child(4){display:none !important}"
+        + "@media(max-width:700px){#cw-user-name{display:none}}"
+        // 左サイドメニュー（PC幅のみ。狭幅は従来の上部タブへフォールバック）
+        + "@media(min-width:960px){"
+        + "nav{position:fixed !important;top:56px !important;left:0;bottom:0;width:210px;"
+        + "flex-direction:column !important;align-items:stretch;gap:2px !important;padding:12px 8px !important;"
+        + "border-bottom:none !important;border-right:1px solid #dce3ea;overflow:hidden auto !important;"
+        + "box-shadow:1px 0 3px rgba(20,40,60,.05) !important}"
+        + "nav>button{justify-content:flex-start;border-radius:8px;padding:11px 12px !important}"
+        // 選択中メニューは薄い網掛け（非選択はインラインの 'transparent' 下線を持つことで判別）
+        + "nav>button:not([style*=\"transparent\"]){background:rgba(19,52,79,.08) !important}"
+        + "nav>button:hover{background:rgba(19,52,79,.05)}"
+        + "main{margin-left:226px !important;margin-right:18px !important}"
+        + "#cw-reg-screen,#cw-wbgt-screen{left:210px !important}"
+        + "}";
+      document.head.appendChild(css);
+      mountHeaderTools();
+      // ヘッダ再レンダーでツールが外れたら自動復元（コールバックは no-op 主体で軽量）
+      new MutationObserver(function () { mountHeaderTools(); })
+        .observe(document.body, { childList: true, subtree: true });
+    }
+
     function installLoginScreen() {
       if (document.getElementById("cw-login")) return;
       var css = document.createElement("style");
@@ -567,9 +616,10 @@
         + ".cw-login-card button{width:100%;margin-top:18px;padding:11px;border:none;border-radius:8px;background:#16527d;color:#fff;font:700 14px 'Noto Sans JP',sans-serif;cursor:pointer}"
         + ".cw-login-msg{margin-top:10px;font-size:12px;min-height:16px;color:#c62828}"
         + ".cw-login-hint{margin-top:14px;font-size:11px;color:#7e8c99;line-height:1.7}"
-        + "#cw-user{position:fixed;right:14px;top:9px;z-index:50;display:none;align-items:center;gap:8px;"
-        + "font:600 11.5px 'Noto Sans JP',sans-serif;color:#cfe0ef}"
-        + "#cw-user button{background:#1d4d74;color:#fff;border:none;border-radius:6px;padding:4px 10px;font:700 11px 'Noto Sans JP',sans-serif;cursor:pointer}";
+        + "#cw-user{display:none;align-items:center;gap:8px;"
+        + "font:600 11.5px 'Noto Sans JP',sans-serif;color:#cfe0ef;max-width:220px}"
+        + "#cw-user-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+        + "#cw-user button{background:#1d4d74;color:#fff;border:none;border-radius:6px;padding:4px 10px;font:700 11px 'Noto Sans JP',sans-serif;cursor:pointer;flex:none}";
       document.head.appendChild(css);
       var ov = document.createElement("div"); ov.id = "cw-login";
       ov.innerHTML =
@@ -584,7 +634,7 @@
       document.body.appendChild(ov);
       var pill = document.createElement("div"); pill.id = "cw-user";
       pill.innerHTML = '<span id="cw-user-name"></span><button id="cw-logout">ログアウト</button>';
-      document.body.appendChild(pill);
+      (document.getElementById("cw-hdr-tools") || document.body).appendChild(pill);
       ov.querySelector("#cw-login-form").addEventListener("submit", function (e) {
         e.preventDefault();
         var f = e.target, msg = ov.querySelector("#cw-login-msg");
@@ -603,12 +653,12 @@
       if (document.getElementById("cw-bell")) return;
       var css = document.createElement("style");
       css.textContent =
-        "#cw-bell{position:fixed;right:150px;top:8px;z-index:50;display:none;cursor:pointer;font-size:17px;"
-        + "color:#cfe0ef;background:#1d4d74;border:none;border-radius:8px;padding:4px 9px;position:fixed}"
+        "#cw-bell{display:none;cursor:pointer;font-size:17px;"
+        + "color:#cfe0ef;background:#1d4d74;border:none;border-radius:8px;padding:4px 9px;flex:none}"
         + ".cw-bell-badge{background:#c62828;color:#fff;font:700 10px sans-serif;min-width:15px;height:15px;"
         + "border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 3px;margin-left:3px}"
         + ".cw-bell-badge.on{display:inline-flex}"
-        + "#cw-notif{position:fixed;right:14px;top:44px;z-index:51;display:none;width:min(380px,92vw);max-height:62vh;"
+        + "#cw-notif{position:fixed;right:14px;top:60px;z-index:51;display:none;width:min(380px,92vw);max-height:62vh;"
         + "overflow:auto;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.28);font-family:'Noto Sans JP',system-ui,sans-serif}"
         + "#cw-notif.on{display:block}"
         + "#cw-notif h3{margin:0;padding:13px 16px;font-size:13px;color:#13344f;border-bottom:1px solid #eef1f4}"
@@ -622,7 +672,8 @@
       var panel = document.createElement("div");
       panel.id = "cw-notif";
       panel.innerHTML = "<h3>通知</h3><div id=\"cw-notif-list\"></div>";
-      document.body.appendChild(bell);
+      var tools = document.getElementById("cw-hdr-tools");
+      if (tools) tools.insertBefore(bell, tools.firstChild); else document.body.appendChild(bell);
       document.body.appendChild(panel);
       bell.addEventListener("click", function () { panel.classList.toggle("on"); });
     }
@@ -658,6 +709,7 @@
         if (e && e.Logic && e.Logic.prototype && e.Logic.prototype.renderVals) {
           clearInterval(t);
           adapter.patch(e.Logic.prototype);
+          installLayout();  // 先にツールコンテナを用意（ログイン画面・ベルが append する）
           installRegisterScreen(adapter);
           installSourceNote();
           installWbgtScreen();
