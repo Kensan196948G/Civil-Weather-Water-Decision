@@ -39,7 +39,7 @@ Mirai-DX-Project 系の兄弟プロジェクトは `mirai-dx-platform.com` を�
 
 本プロジェクトは **`https://cwwd.mirai-dx-platform.com`**（Tunnel: `cwwd-civil-weather-water` /
 ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開通し、フォアグラウンド起動で
-全ルート疎通（front 200 / `/health` / `/api/*` 401認証ガード）を確認済み。手順の正本は
+3ルート疎通（front 200 / `/health` / `/api/sites` 401認証ガード）を確認済み。手順の正本は
 `deploy/cloudflared-setup-steps.md`（`route dns` は必ず `--config` 明示 — デフォルト `config.yml` の
 別プロジェクトTunnel指定が優先される罠あり）。
 
