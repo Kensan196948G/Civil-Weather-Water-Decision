@@ -62,17 +62,43 @@ cp deploy/cloudflared-config.yml.example ~/.cloudflared/config-cwwd.yml
 ## 4. DNSルーティング
 
 ```bash
-cloudflared tunnel route dns cwwd-civil-weather-water cwwd.mirai-dx-platform.com
+cloudflared tunnel --config ~/.cloudflared/config-cwwd.yml \
+  route dns cwwd-civil-weather-water cwwd.mirai-dx-platform.com
 ```
+
+> ⚠️ **必ず `--config` を明示すること**（2026-07-12 実害確認済みの罠）:
+> `~/.cloudflared/config.yml`（デフォルト設定）に別プロジェクトの `tunnel:` 指定があると、
+> `route dns` は**引数のトンネル名よりデフォルトconfigの指定を優先**し、CNAMEが別トンネル
+> （このマシンでは onegate）に向いてしまう。誤って向けた場合は `--overwrite-dns` を付けて
+> 正しい `--config` で再実行すれば上書き修正できる:
+>
+> ```bash
+> cloudflared tunnel --config ~/.cloudflared/config-cwwd.yml \
+>   route dns --overwrite-dns cwwd-civil-weather-water cwwd.mirai-dx-platform.com
+> ```
+>
+> 成功時は出力の `tunnelID=` が自分のトンネルID（手順1で控えた値）と一致することを必ず確認する。
 
 ## 5. 動作確認（フォアグラウンド一時起動）
 
 ```bash
 cloudflared tunnel --config ~/.cloudflared/config-cwwd.yml run cwwd-civil-weather-water
 # 別ターミナルから
-curl -I https://cwwd.mirai-dx-platform.com/
-curl -I https://cwwd.mirai-dx-platform.com/api/health   # パス分割する場合
+curl -I https://cwwd.mirai-dx-platform.com/          # frontend: HTTP/2 200
+curl https://cwwd.mirai-dx-platform.com/health       # backend: {"status":"ok",...}
+curl -o /dev/null -w "%{http_code}\n" https://cwwd.mirai-dx-platform.com/api/sites  # 401=認証ガード動作
 ```
+
+> 2026-07-12 実施済み: 上記3ルート（front / `/health` / `/api/sites`）の疎通を確認
+> （Tunnel ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`。401確認は `/api/sites` の実測であり、
+> 全APIエンドポイントの保護を個別確認したわけではない）。
+>
+> 🚨 **`APP_ENV=local` のままの公開状態を残さないこと（必須）**:
+> local ではデモ資格情報（admin/admin123 等）でログイン可能なため、この状態での外部公開は
+> 重大リスク。動作確認が済んだら**必ず Ctrl+C で Tunnel を停止**する。常時公開へ移行する場合は、
+> 事前に §7 の本番チェックリスト適用（`APP_ENV=production` でデモユーザーは投入されなくなる）
+> **に加えて**、Cloudflare Access（Zero Trust）や IP 制限等のエッジ側アクセス制御の併用を必須とする。
+> 「一時的だから」と local のまま公開を続ける運用を常態化させない。
 
 問題なければ Ctrl+C で停止し、常駐化へ進む。
 

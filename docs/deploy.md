@@ -30,21 +30,26 @@ docker compose up -d   # postgres + backend(+migrate&seed) + frontend
 
 代替: Cloudflare Pages（フロント静的）＋ コンテナ基盤（backend）。
 
-## 公開ドメイン（予定・未着手）
+## 公開ドメイン（Tunnel開通済み・常駐化と本番化は未了）
 
 Mirai-DX-Project 系の兄弟プロジェクトは `mirai-dx-platform.com` を共通ドメインとし、
-「Cloudflare Tunnel 1本 ＋ 専用サブドメイン ＋ systemd常駐サービス」という構成で公開している
-（例: `arcsphere.mirai-dx-platform.com`, `railway.mirai-dx-platform.com`, `riskchecker.mirai-dx-platform.com`）。
+**プロジェクトごとの個別 Cloudflare Tunnel ＋ 専用サブドメイン ＋ systemd常駐サービス**という構成で
+公開している（例: `arcsphere.mirai-dx-platform.com`, `riskchecker.mirai-dx-platform.com`。
+実機 `cloudflared tunnel list` / Cloudflare API で全プロジェクト個別Tunnel運用と確認済み）。
 
-本プロジェクトの割当サブドメインは **`cwwd.mirai-dx-platform.com`** に決定（2026-07-12）。
-ただし現時点では **名称の予約のみ**で、以下は未着手（Phase 2 の現段階では時期尚早と判断し、
-デプロイ準備フェーズで着手）:
+本プロジェクトは **`https://cwwd.mirai-dx-platform.com`**（Tunnel: `cwwd-civil-weather-water` /
+ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開通し、フォアグラウンド起動で
+3ルート疎通（front 200 / `/health` / `/api/sites` 401認証ガード）を確認済み。手順の正本は
+`deploy/cloudflared-setup-steps.md`（`route dns` は必ず `--config` 明示 — デフォルト `config.yml` の
+別プロジェクトTunnel指定が優先される罠あり）。
 
-- [ ] backend/frontend の systemd 常駐化（`*.service` unit作成）
-- [ ] `deploy/cloudflared-config.yml.example`（tunnel設定テンプレ）作成
-- [ ] Cloudflare Tunnel 作成・DNS ルーティング（`cloudflared tunnel route dns` ― 人間実行）
+- [x] `deploy/cloudflared-config.yml.example`（tunnel設定テンプレ）作成
+- [x] Cloudflare Tunnel 作成・DNS ルーティング（`cloudflared tunnel route dns` ― 人間実行、2026-07-12）
+- [x] state.json への `deploy_plan.public_url` 反映
+- [ ] backend/frontend の systemd 常駐化（`*.service` unit適用。現状はフォアグラウンド一時起動のみ）
 - [ ] `CORS_ORIGINS` を `https://cwwd.mirai-dx-platform.com` に更新
-- [ ] state.json への `deploy.public_url` 反映（実デプロイ後）
+- [ ] 本番チェックリスト適用（下記）。**現状は `APP_ENV=local` のままの一時公開**で、
+      デモ資格情報が有効なため常時公開前に必須
 
 ## 本番デプロイ前チェックリスト（必須）
 
