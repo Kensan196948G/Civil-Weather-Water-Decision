@@ -1,7 +1,7 @@
 """revoked token ledger
 
 Revision ID: f6b7c8d9e0a1
-Revises: f2a4d6c8e9b1
+Revises: d5e8f1a2b3c4
 Create Date: 2026-07-13 10:40:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'f6b7c8d9e0a1'
-down_revision: Union[str, Sequence[str], None] = 'f2a4d6c8e9b1'
+down_revision: Union[str, Sequence[str], None] = 'd5e8f1a2b3c4'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
