@@ -17,7 +17,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from ..core import crypto, ops_status, readiness
+from ..core import crypto
 from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
@@ -1177,7 +1177,12 @@ async def run_collectors(db: Session = Depends(get_db),
 @router.get("/notifications")
 async def list_notifications(db: Session = Depends(get_db),
                              user: User = Depends(get_current_user)):
-    notifs = await notifications.build_current_notifications(db)
+    sites = db.scalars(select(Site).where(Site.status == "active").order_by(Site.id)).all()
+    cards = await assessment.assess_all(list(sites))
+    src = db.scalars(select(DataSourceStatus).order_by(DataSourceStatus.id)).all()
+    sources = [{"id": d.id, "name": d.name, "status": d.status,
+                "fails": d.fails, "lastOk": d.last_ok} for d in src]
+    notifs = notifications.build_notifications(cards, sources)
     return {"count": len(notifs), "notifications": notifs}
 
 
@@ -1188,16 +1193,3 @@ def list_audit_logs(limit: int = 100, db: Session = Depends(get_db),
     rows = db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)).all()
     return [{"id": r.id, "timestamp": r.timestamp, "user": r.username, "action": r.action,
              "message": r.message, "siteId": r.site_id} for r in rows]
-
-
-@router.get("/admin/ops/readiness-detail")
-def readiness_detail(user: User = Depends(require_role("admin", "tech_manager"))):
-    return readiness.check_readiness_detail()
-
-
-@router.get("/admin/ops/status-snapshot")
-def status_snapshot(user: User = Depends(require_role("admin", "tech_manager"))):
-    try:
-        return ops_status.load_ops_status_snapshot()
-    except ops_status.OpsStatusSnapshotError as exc:
-        raise HTTPException(503, f"ops status snapshot unavailable: {exc.reason}") from exc

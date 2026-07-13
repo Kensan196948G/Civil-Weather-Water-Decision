@@ -7,17 +7,12 @@
 frontend/
 ├── design/                          # ClaudeDesign 出力（再取り込みの対象）
 │   ├── 気象河川施工判断支援.dc.html   # 本体（無改修。<x-dc>テンプレ ＋ <script data-dc-script>）
-│   ├── support.js                   # dc-runtime（React/ReactDOM は vendor/ からロードしマウント）
+│   ├── support.js                   # dc-runtime（React/ReactDOM を CDN 自動ロードしマウント）
 │   ├── data-adapter.js              # ★実APIへ接続する外部アダプタ（.dc.html を触らず prototype をラップ）
 │   └── index.html                   # ローダ（.dc.html を取得しアダプタ＋API設定を注入）
 ├── test/
 │   ├── logic-smoke.mjs              # ロジック層スモークテスト（DOM不要）
-│   ├── adapter-contract.cjs         # アダプタ契約テスト（patch後 renderVals が API由来か検証）
-│   ├── api-config-policy.cjs        # ?api= の公開/開発オリジン制限
-│   ├── serve-proxy-policy.py        # serve.py の同一オリジン /api proxy 契約
-│   ├── cdn-policy.cjs               # JS/CSS/font CDN の混入検出
-│   ├── vendor-assets-policy.cjs     # vendor参照・Leaflet画像・SRI・ライセンス同梱検査
-│   └── e2e_smoke.py                 # Playwright: local起動→ログイン→表示→ログアウト
+│   └── adapter-contract.cjs         # アダプタ契約テスト（patch後 renderVals が API由来か検証）
 └── README.md
 ```
 
@@ -25,45 +20,32 @@ frontend/
 
 `.dc.html` は素の HTML ではなく、**dc-runtime（`support.js`）上で動く React アプリ**です。
 
-- `support.js` が `vendor/` 配下の React 18.3.1 / ReactDOM / Babel standalone をロードし、`<x-dc>` テンプレートと `<script data-dc-script>` の `class Component extends DCLogic` をパースして `ReactDOM.createRoot().render()` でマウントする。
+- `support.js` が React 18.3.1 / ReactDOM を unpkg から **SRI 付きで自動ロード**し、`<x-dc>` テンプレートと `<script data-dc-script>` の `class Component extends DCLogic` をパースして `ReactDOM.createRoot().render()` でマウントする。
 - 画面状態は `state.screen`（`dashboard` / `site` / `decision` / `wbgt` / `history` / `source` の6画面）で切替。
 - `renderVals()` が画面ごとのビューモデル（`vals`）を生成し、テンプレートにバインドする。**DOM/Leaflet に触れない純粋計算**なので、ロジックだけ Node で単体検証できる（`test/logic-smoke.mjs`）。
-- 地図は self-host した Leaflet（既定はタイルなし）、グラフは JS で生成する SVG。
+- 地図は Leaflet（OpenStreetMap タイル）、グラフは JS で生成する SVG。
 
-> JS/CSS/font CDN 依存は `frontend/design/vendor/` へ固定版をself-host済み。
-> タイルURLは起動前の `window.__CW_TILE_URL__` または `serve.py` の `CW_TILE_URL` で明示した場合だけ使う。
-> 未指定または `CW_TILE_URL=none` / `off` / `disabled` はタイルなしで地図UIを表示する。
-> 本番systemdは外部タイル通信抑止のため `none` で運用し、必要時は内部タイルサービスURLへ差し替える。
-> タイルの帰属表示が必要な場合は `window.__CW_TILE_ATTRIBUTION__` または `CW_TILE_ATTRIBUTION` も設定する。
+> CDN 依存: React/ReactDOM/Babel（unpkg）、Leaflet（unpkg）、Noto Sans JP（Google Fonts）、OSM タイル。
+> 完全オフライン運用時はこれらを self-host する必要がある（将来課題）。
 
 ## 起動方法（ローカル）
 
 **`frontend/serve.py`（推奨）** を使う。自動IP＋空きポートで配信し、`.dc.html` をディスク上は無改修のまま
 HTTP応答時に data-adapter.js / API設定を**サーバ側注入**する（`document.write` を使わないので、
-Leaflet 等の script が parser-blocking 警告なしで読み込まれる）。
+Leaflet 等の外部 script が parser-blocking 警告なしで読み込まれる）。
 
 ```bash
 python3 frontend/serve.py
-# 起動ログの URL を開く。backend proxy を使う場合:
-#   CW_BACKEND_PROXY_BASE=http://127.0.0.1:55019 python3 frontend/serve.py
+# 起動ログの URL を ?api=http://<host>:<backend-port> 付きで開く
+#   例: http://192.168.0.185:39109/?api=http://192.168.0.185:36437
 ```
-
-`serve.py` は `PORT` と `HOST` を環境変数で指定できる。本番 systemd は `HOST=127.0.0.1` で
-Cloudflare Tunnel からのみ到達させる。LAN 直アクセス検証が必要な開発時だけ `HOST=0.0.0.0` を使う。
-HTML/JS/CSS/404 等の全レスポンスに基本HTTPセキュリティヘッダ（nosniff / frame deny / no-referrer /
-permissions policy / HSTS / COOP / CORP / legacy download hardening）を付与する。HTML と JS は更新反映を
-優先して `Cache-Control: no-store` で配信する。
-`Content-Security-Policy-Report-Only` も付与するが、現状は `.dc.html` の inline script/style と
-`support.js` の runtime Babel / `new Function` があるため enforce はしない。CSP enforce は
-ClaudeDesign 出力の precompile 化・inline style 削減後に切り替える。local E2E / 開発の `?api=` を保つため
-report-only の `connect-src` は `127.0.0.1` / `localhost` / `[::1]` を許可する。
 
 > 素の `python3 -m http.server`（`frontend/design` で）も可だが、その場合 `index.html` が
 > `document.write` でアダプタを注入するため Chrome の parser-blocking 警告が出る。常用は `serve.py` 推奨。
 
-> 注意: このホストでは Chromium/Chrome の headless が SIGTRAP で落ちるため、E2E smoke は
-> Playwright Firefox を既定にする。CI でも local backend/frontend と Open-Meteo スタブを起動し、
-> 本番SecretsやCloudflare Accessには依存しない。
+> 注意: 本リポジトリの CI 実行環境（コンテナ）では Chrome がヘッドレス起動できず（SIGTRAP / core dump）、
+> 自動スクリーンショット検証は不可。**実描画は各自のブラウザで確認**すること。
+> ロジックの健全性は `node frontend/test/logic-smoke.mjs`（DOM 不要）で担保する。
 
 ## ClaudeDesign からの再取り込み
 
@@ -92,15 +74,12 @@ UI を ClaudeDesign 側で更新したら、DesignSync コネクタで `design/`
 cd backend && BPORT=$(python3 -c "import socket;s=socket.socket();s.bind(('0.0.0.0',0));print(s.getsockname()[1]);s.close()") \
   && python3 -m uvicorn app.main:app --host 0.0.0.0 --port "$BPORT"
 # 2) フロント（別ターミナル, serve.py が自動IP＋空きポートで配信）
-CW_BACKEND_PROXY_BASE="http://127.0.0.1:$BPORT" python3 frontend/serve.py
-# 3) ブラウザで起動ログの LOOPBACK URL を開く（同一オリジン /api proxy）
+python3 frontend/serve.py
+# 3) ブラウザで:  http://<host>:<frontport>/?api=http://<host>:<BPORT>
+#    ?api= は localStorage に保存され、次回以降は省略可。バックエンド未起動ならモック表示にフォールバック。
 ```
 
-`?api=` は公開ホストでは同一オリジン以外を無視する。localhost / 127.0.0.1 / プライベートIP で開いた
-開発時のみ、同じ開発ネットワーク上の API オリジンを保存する。production loopback 確認では
-`?api=` を使わず、`CW_BACKEND_PROXY_BASE` による同一オリジン proxy を使う。
-
-> `vals` の形は変えていないため、テンプレート（画面）は無改修。`?api=` も proxy も無ければ素のモック表示。
+> `vals` の形は変えていないため、テンプレート（画面）は無改修。`?api=` を付けなければ素のモック表示。
 
 ### アダプタが追加する機能（.dc.html 無改修）
 
@@ -108,11 +87,10 @@ CW_BACKEND_PROXY_BASE="http://127.0.0.1:$BPORT" python3 frontend/serve.py
 - **5分ごとの定期自動更新**: ダッシュボード/データソースを再取得（サーバ側は APScheduler でも実施 → backend/README）。
 - **「現場詳細」はドリルダウン専用**: ナビタブから除外（`hideNav:["現場詳細"]`）。詳細はダッシュボードの現場カード/地図ピンのクリックで特定の1現場のみ表示。"全現場の詳細" は存在せず一覧はダッシュボードが担う。
 - **全国マップ対応**: API の緯度経度から `this.COORDS` を再構築し、ダッシュボード地図に全16現場（札幌〜那覇）を表示。`fitBounds` で全国にズーム。データ更新時は地図キャッシュを破棄して再描画。
-- **熱中症/WBGT 画面に全国地図**: Leaflet 地図で現場を WBGT リスク色（ほぼ安全〜危険）のピンで表示。スケール凡例＋現場別ランキング併設（注入パネル。`.dc.html` 無改修）。タイル背景は `CW_TILE_URL` 指定時のみ表示。
+- **熱中症/WBGT 画面に全国地図**: OpenStreetMap で現場を WBGT リスク色（ほぼ安全〜危険）のピンで表示。スケール凡例＋現場別ランキング併設（注入パネル。`.dc.html` 無改修）。
 - **データソース画面に更新間隔を明記**: 「5分ごとに自動更新」の注記バーを画面下部に表示。
-- **ログイン/RBAC**: 未認証時はログイン画面を表示。全 fetch に `Authorization: Bearer` を付与し、401 でローカルトークンを削除。右上ログアウトは `POST /api/auth/logout` でサーバ側JWT失効台帳へ登録してからローカルトークンを削除。デモ: `admin/admin123`（管理者）, `yamada/pass1234`（現場管理者）, `viewer/pass1234`（閲覧。現場登録は403）。
-- **通知ベル**: 右上の🔔に要対応件数（中止検討/河川/障害＝severity≥2）のバッジ。クリックで通知一覧（`GET /api/notifications` を判定結果から導出）。5分ごと更新。Slack/Teams 外部送信は管理画面の通知フラグとサーバ側 `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` の両方が有効な場合のみ行う。
-- **運用状態画面**: 管理メニューの「運用状態」（admin/技術管理者限定）が `opsStatusSnapshot()` で `GET /api/admin/ops/status-snapshot` を認証付き取得。allowlist 済み systemd service / timer / failed unit snapshot を表形式で表示し、再読込できる。
+- **ログイン/RBAC**: 未認証時はログイン画面を表示。全 fetch に `Authorization: Bearer` を付与し、401 で自動ログアウト。右上にユーザー名＋ログアウト。デモ: `admin/admin123`（管理者）, `yamada/pass1234`（現場管理者）, `viewer/pass1234`（閲覧。現場登録は403）。
+- **通知ベル**: 右上の🔔に要対応件数（中止検討/河川/障害＝severity≥2）のバッジ。クリックで通知一覧（`GET /api/notifications` を判定結果から導出）。5分ごと更新。
 
 > **ネイティブ ClaudeDesign 画面化への移行**: 現状の登録画面はアダプタ注入。正式に ClaudeDesign の画面にしたい場合は、ClaudeDesign で「現場登録」画面（フォーム）を1枚追加し `POST /api/sites`（body は上記payload）を呼ぶだけ。API は完成済みなので、デザイン側にフォームができたらアダプタの注入版は外せる。
 
@@ -148,16 +126,8 @@ CW_BACKEND_PROXY_BASE="http://127.0.0.1:$BPORT" python3 frontend/serve.py
 
 ```bash
 node frontend/test/logic-smoke.mjs       # 6画面VM・判定(6作業種別)・グラフ・WBGT境界（21件）
-node frontend/test/adapter-contract.cjs  # アダプタ: patch後 renderVals が API由来か（29件）
-node frontend/test/api-config-policy.cjs # ?api= の公開/開発オリジン制限（3件）
-python3 frontend/test/serve-proxy-policy.py # serve.py: /api proxy 固定origin/GET/POST/502契約
-node frontend/test/cdn-policy.cjs        # JS/CSS/font CDN の混入検出
-node frontend/test/vendor-assets-policy.cjs # vendor参照・Leaflet画像・SRI・ライセンス同梱
-python -m pip install playwright         # 初回のみ
-python -m playwright install firefox     # 初回のみ
-python frontend/test/e2e_smoke.py        # E2E: local起動→ログイン→運用状態表示→ログアウト
+node frontend/test/adapter-contract.cjs  # アダプタ: patch後 renderVals が API由来か（14件）
 ```
 
-> `e2e_smoke.py` は `APP_ENV=local` の一時SQLite DBとOpen-Meteoスタブを使う。
-> E2E中は `tile.openstreetmap.org` をブロックし、外部タイル通信に依存しない起動を検証する。
-> 失敗調査時は `E2E_DEBUG=1 python frontend/test/e2e_smoke.py` でブラウザ/プロセスログを出力する。
+> 本環境では Chrome がヘッドレス起動不可のため、実ブラウザ描画は各自で確認すること。
+> 上記2テストで「ロジック」と「API配線契約」を担保する。

@@ -10,34 +10,11 @@ User=kensan
 Group=kensan
 WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/frontend
 Environment=PORT=34979
-Environment=HOST=127.0.0.1
-Environment=CW_TILE_URL=none
-Environment=CW_BACKEND_PROXY_BASE=http://127.0.0.1:55019
 ExecStart=/usr/bin/python3 serve.py
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=full
-ProtectHome=read-only
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-ProtectHostname=true
-RestrictSUIDSGID=true
-RestrictRealtime=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-LockPersonality=true
-SystemCallArchitectures=native
-MemoryDenyWriteExecute=true
-CapabilityBoundingSet=
-AmbientCapabilities=
-KeyringMode=private
-RemoveIPC=true
-UMask=0077
 
 [Install]
 WantedBy=multi-user.target

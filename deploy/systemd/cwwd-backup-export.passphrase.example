@@ -1,5 +1,0 @@
-# Copy to /home/kensan/.config/cwwd/backup-export.passphrase on the production host.
-# Store a high-entropy passphrase only; no key=value wrapper.
-# chmod 600 /home/kensan/.config/cwwd/backup-export.passphrase
-# Example generation:
-# openssl rand -base64 48

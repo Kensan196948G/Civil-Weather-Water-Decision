@@ -54,15 +54,9 @@ function points24() {
 }
 let lastPost = null;
 let lastReq = null;
-const _store = {};
-global.localStorage = {
-  getItem: function (k) { return Object.prototype.hasOwnProperty.call(_store, k) ? _store[k] : null; },
-  setItem: function (k, v) { _store[k] = String(v); },
-  removeItem: function (k) { delete _store[k]; },
-};
 function fetchMock(u, opts) {
   var method = (opts && opts.method) || "GET";
-  lastReq = { url: u, method: method, headers: (opts && opts.headers) || {} };
+  lastReq = { url: u, method: method };
   let data = {}, status = 200;
   if (method === "POST" && u.indexOf("/api/sites") >= 0 && u.indexOf("/api/sites/") < 0) {
     lastPost = JSON.parse(opts.body); data = { id: "S07", code: "CW-S07", name: lastPost.name, status: "created" }; status = 201;
@@ -80,8 +74,6 @@ function fetchMock(u, opts) {
     data = { ok: true, models: ["claude-sonnet-5", "claude-opus-4-8"] };
   } else if (u.indexOf("/api/admin/settings/ai") >= 0 && method === "DELETE") {
     data = { ok: true, ai: { configured: false, masked: null } };
-  } else if (u.indexOf("/api/auth/logout") >= 0 && method === "POST") {
-    data = { revoked: true };
   } else if (u.indexOf("/api/admin/settings") >= 0 && method === "PUT") {
     lastPost = JSON.parse(opts.body);
     data = { ai: { configured: true, masked: "****abcd" }, notify: { slack_enabled: true, teams_enabled: false },
@@ -91,20 +83,6 @@ function fetchMock(u, opts) {
       data_retention_days: 365, user_prefs: {} };
   } else if (u.indexOf("/api/admin/audit-logs") >= 0) {
     data = [{ id: 1, timestamp: "2026-07-12 21:00:00", user: "admin", action: "login", message: "ログイン成功", siteId: null }];
-  } else if (u.indexOf("/api/admin/ops/status-snapshot") >= 0) {
-    data = {
-      status: "ok",
-      snapshot: {
-        snapshot_utc: "2026-07-13T03:00:00Z",
-        services: [{ unit: "cwwd-backend.service", active_state: "active", result: "success", n_restarts: "0" }],
-        timers: [{ unit: "cwwd-ops-status.timer", active_state: "active", unit_file_state: "enabled",
-          last_trigger: "Mon 2026-07-13 12:00:00 JST", next_elapse: "Mon 2026-07-13 12:30:00 JST",
-          service_result: "success" }],
-        failed_units: [],
-        failed_units_count: 0,
-      },
-      metadata: { path: "/var/lib/cwwd/ops-status.json", age_seconds: 42, max_age_seconds: 3600 },
-    };
   } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/stations") >= 0) {
     data = [{ id: "ST1", name: "北川 護岸地点 水位観測所", type: "river", rel: "最寄り", lat: 35.766, lon: 139.776 }];
   } else if (u.indexOf("/api/sites/") >= 0) {
@@ -204,12 +182,6 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   const al = await adapter.auditLogs(200);
   ok(Array.isArray(al) && al[0].action === "login" && lastReq.url.indexOf("/api/admin/audit-logs?limit=200") >= 0,
     "auditLogs が GET /api/admin/audit-logs?limit=N で監査証跡を取得");
-  localStorage.setItem("cw_token", "ops-token");
-  const ops = await adapter.opsStatusSnapshot();
-  ok(ops && ops.status === "ok" && ops.snapshot && ops.snapshot.failed_units_count === 0
-    && ops.metadata.age_seconds === 42 && lastReq.url.indexOf("/api/admin/ops/status-snapshot") >= 0
-    && lastReq.headers.Authorization === "Bearer ops-token",
-    "opsStatusSnapshot が認証付き GET /api/admin/ops/status-snapshot で運用状態を取得");
   const as = await adapter.appSettings();
   ok(as && as.ai && as.ai.configured === false && as.data_retention_days === 365,
     "appSettings が GET /api/admin/settings から設定を取得");
@@ -229,14 +201,6 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   const raw = await adapter.authedFetch("/api/decision-logs/export.csv");
   ok(raw && raw.ok && lastReq.url.indexOf("/api/decision-logs/export.csv") >= 0,
     "authedFetch が認証付きの素 fetch 応答を返す（CSVダウンロード用）");
-  localStorage.setItem("cw_token", "tok123");
-  const lo = await adapter.logout();
-  ok(lo && lo.ok && lastReq.method === "POST" && lastReq.url.indexOf("/api/auth/logout") >= 0
-    && lastReq.headers.Authorization === "Bearer tok123" && localStorage.getItem("cw_token") === null,
-    "logout が POST /api/auth/logout でサーバ側トークン失効を要求しローカルトークンを削除");
-  lastReq = null;
-  const lo2 = await adapter.logout();
-  ok(lo2 && lo2.skipped && lastReq === null, "logout はトークンなしならサーバへPOSTしない");
 
   console.log("\nRESULT: " + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);

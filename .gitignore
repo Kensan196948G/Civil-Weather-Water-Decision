@@ -39,7 +39,6 @@ pnpm-debug.log*
 *.db-wal
 *.db-shm
 pgdata/
-backups/
 
 # ---- IDE / OS ----
 .vscode/

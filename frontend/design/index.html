@@ -20,31 +20,9 @@
 (function () {
   var params = new URLSearchParams(location.search);
   var api = params.get("api");
-  function isPrivateDevHost(host) {
-    return host === "localhost" || host === "127.0.0.1" || host === "::1" ||
-      /^10\./.test(host) || /^192\.168\./.test(host) ||
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host);
-  }
-  function sanitizeApiBase(raw) {
-    if (!raw) return "";
-    try {
-      var u = new URL(raw, location.origin);
-      if (u.origin === location.origin) return u.origin;
-      if (isPrivateDevHost(location.hostname) &&
-          (isPrivateDevHost(u.hostname) || u.hostname === location.hostname)) {
-        return u.origin;
-      }
-    } catch (e) {}
-    return "";
-  }
   try {
-    if (api !== null) {
-      api = sanitizeApiBase(api);
-      if (api) localStorage.setItem("cw_api", api);
-      else localStorage.removeItem("cw_api");
-    } else {
-      api = sanitizeApiBase(localStorage.getItem("cw_api"));
-    }
+    if (api !== null) localStorage.setItem("cw_api", api);
+    else api = localStorage.getItem("cw_api");
   } catch (e) {}
   api = api || ""; // "" = 同一オリジン
   var DC = "./気象河川施工判断支援.dc.html";

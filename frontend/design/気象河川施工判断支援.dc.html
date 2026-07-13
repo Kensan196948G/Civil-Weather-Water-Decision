@@ -8,8 +8,11 @@
 <body>
 <x-dc>
 <helmet>
-<link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
-<script src="./vendor/leaflet/leaflet.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   *{box-sizing:border-box}
   html,body{margin:0}
@@ -106,7 +109,7 @@
       <!-- map -->
       <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:14px 15px 15px;margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-          <div style="font-size:14px;font-weight:800;color:#27333f">現場マップ</div>
+          <div style="font-size:14px;font-weight:800;color:#27333f">現場マップ（OpenStreetMap ライブ）</div>
           <div style="display:flex;gap:11px;font-size:10.5px;color:#62727f;flex-wrap:wrap">
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#2e7d32"></span>通常</span>
             <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:#e8930c"></span>注意</span>
@@ -115,7 +118,7 @@
           </div>
         </div>
         <div id="cw-map-dash" style="height:380px;border-radius:9px;overflow:hidden;position:relative;z-index:0;background:#dfe6ec"></div>
-        <div style="font-size:10px;color:#9aa7b3;margin-top:7px">ピンをクリックすると現場詳細を開けます</div>
+        <div style="font-size:10px;color:#9aa7b3;margin-top:7px">ピンをクリックすると現場詳細を開けます ・ 地図データ © OpenStreetMap contributors</div>
       </div>
 
       <!-- filter chips -->
@@ -252,7 +255,7 @@
               </div>
             </div>
             <div id="cw-map-site" style="height:320px;border-radius:9px;overflow:hidden;position:relative;z-index:0;background:#dfe6ec"></div>
-            <div style="font-size:10px;color:#9aa7b3;margin-top:7px">青い破線は上流観測所と現場の関係を示します</div>
+            <div style="font-size:10px;color:#9aa7b3;margin-top:7px">青い破線は上流観測所と現場の関係を示します ・ © OpenStreetMap contributors</div>
           </div>
 
           <!-- weather chart -->
@@ -400,7 +403,7 @@
         <div style="display:flex;flex-direction:column;gap:14px">
           <div style="background:#fff;border:1px solid #e2e8ee;border-radius:12px;padding:14px 15px 15px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
-              <div style="font-size:13.5px;font-weight:800;color:#27333f">対象現場の位置</div>
+              <div style="font-size:13.5px;font-weight:800;color:#27333f">対象現場の位置（OpenStreetMap）</div>
               <span style="font-size:10.5px;color:#8b98a5">{{ result.mapNote }}</span>
             </div>
             <div id="cw-map-dec" style="height:230px;border-radius:9px;overflow:hidden;position:relative;z-index:0;background:#dfe6ec"></div>
@@ -658,7 +661,7 @@ class Component extends DCLogic {
   dotPin(L, color) {
     return L.divIcon({ className: 'cw-pin', html: `<div style="width:15px;height:15px;border-radius:50%;background:${color};border:2.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.45)"></div>`, iconSize: [15, 15], iconAnchor: [8, 8], popupAnchor: [0, -8] });
   }
-  osm(L, map) { const u = window.__CW_TILE_URL__ || ''; const a = window.__CW_TILE_ATTRIBUTION__ || ''; if (u) L.tileLayer(u, { maxZoom: 18, attribution: a }).addTo(map); }
+  osm(L, map) { L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }).addTo(map); }
   buildDashMap(L, el) {
     const map = L.map(el, { scrollWheelZoom: false }).setView([35.58, 139.6], 10);
     this.osm(L, map);

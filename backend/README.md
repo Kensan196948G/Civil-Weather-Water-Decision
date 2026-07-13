@@ -29,7 +29,7 @@ backend/
 │   │   ├── assessment.py             # 気象取得→Reading→判定 のオーケストレーション
 │   │   └── data_collectors/open_meteo.py  # Open-Meteo 取得・正規化・WBGT推定
 │   └── api/routes.py                 # エンドポイント（設計§7）
-├── tests/                            # 232 tests（engine/collector/api/auth/audit/notifications/jma_warnings/source_probe/ops scripts 等）
+├── tests/                            # 71 tests（engine/collector/api/auth/audit/notifications/jma_warnings/source_probe 等）
 ├── requirements.txt / pyproject.toml
 ```
 
@@ -47,7 +47,6 @@ echo "http://127.0.0.1:$PORT/health  /  /docs (Swagger UI)"
 > 注意: ポート 8000 は他プロジェクトが使用している場合がある。固定せず空きポートを使うこと。
 > ダッシュボードは全16現場分のライブ予報を取得するため、外部ネットワーク（api.open-meteo.com）への到達性が必要。
 > 取得失敗時も画面は落とさず、欠測として「確認不能」を返す（設計 §15.2）。
-> `/docs` / `/redoc` / `/openapi.json` は `APP_ENV=local` のみ有効。本番では公開しない。
 
 ## DB / マイグレーション（Alembic, #12 実装済み）
 
@@ -69,8 +68,6 @@ python3 -m alembic upgrade head
 ### Docker Compose（postgres + backend + frontend）
 ```bash
 cp .env.example .env
-POSTGRES_PASSWORD="$(openssl rand -base64 24)"
-perl -0pi -e 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$ENV{POSTGRES_PASSWORD}/m' .env
 docker compose up -d            # backend 起動時に alembic upgrade head ＋ seed
 # ホスト 5432 が使用中なら: PG_HOST_PORT=15432 docker compose up -d
 # ブラウザ: http://localhost:3000/?api=http://localhost:8000
@@ -81,10 +78,7 @@ docker compose up -d            # backend 起動時に alembic upgrade head ＋ 
 
 | メソッド | パス | 概要 |
 |---|---|---|
-| GET | `/health` | 軽量ヘルスチェック（プロセス応答） |
-| GET | `/readyz` | Readiness（DB接続 / Alembic head一致 / 主要テーブル存在。NG時503） |
-| GET | `/api/admin/ops/readiness-detail` | 認証付き詳細診断（admin/tech_manager。revision等の運用詳細） |
-| GET | `/api/admin/ops/status-snapshot` | 認証付き ops snapshot（admin/tech_manager。`/var/lib/cwwd/ops-status.json` の allowlist 済み状態） |
+| GET | `/health` | ヘルスチェック |
 | GET | `/api/sites` /`/api/sites/{id}` /`/api/sites/{id}/stations` | 現場一覧/詳細/観測所 |
 | GET | `/api/dashboard/site-risk` | 現場別リスク（ライブ判定） |
 | GET | `/api/dashboard/data-sources` | データソース状態 |
@@ -94,16 +88,10 @@ docker compose up -d            # backend 起動時に alembic upgrade head ＋ 
 | GET | `/api/decision-logs/export.csv` | 判断履歴CSV（BOM付） |
 | POST | `/api/data-collectors/run` | 手動再取得（キャッシュ更新） |
 
-全レスポンスに基本HTTPセキュリティヘッダ（nosniff / frame deny / no-referrer / permissions policy / HSTS /
-COOP / CORP / legacy download hardening）と
-`Cache-Control: no-store` を付与する。将来 `/docs` や静的配信を本番公開する場合はキャッシュ方針を再評価する。
-APIレスポンスには `Content-Security-Policy: default-src 'none'` ベースの厳格ポリシーも付与する。
-local の Swagger UI は開発用のため、この API CSP の対象外にしている。
-
 ## テスト
 
 ```bash
-cd backend && python3 -m pytest
+cd backend && python3 -m pytest      # 71 passed
 ```
 
 ## 設計準拠ポイント
@@ -115,28 +103,11 @@ cd backend && python3 -m pytest
 
 ## 認証 / RBAC / 監査ログ / 通知（#25, T3-04 実装済み）
 
-- `core/security.py`: JWT発行・bcryptハッシュ・タイミング攻撃対策。
-- `core/deps.py`: `require_role()` によるロールベース認可（管理者 / 技術管理者 / 現場管理者 / 安全担当 / 閲覧者）。
-- `login_attempts`: username + client IP のハッシュキーでログイン失敗回数をDB永続化し、再起動/複数プロセスをまたいで429ロックアウトを共有する。
-- `revoked_tokens`: `POST /api/auth/logout` で JWT `jti` を永続失効し、以後のAPIアクセスを401にする。
+- `core/security.py`: JWT発行・bcryptハッシュ・ログイン試行回数制限・タイミング攻撃対策。
+- `core/deps.py`: `require_role()` によるロールベース認可（管理者 / 現場管理者 / 閲覧者）。
 - `services/audit.py`: 認証・現場変更・判断記録などの監査ログを永続化。
 - `services/notifications.py`: 判定結果（severity≥2 = 中止検討/河川/障害）から通知を導出。画面内通知ベルに加え、Slack/Teams 連携の拡張点あり。
-- `SETTINGS_ENCRYPTION_KEY`: AI APIキー等の設定値暗号化専用鍵。本番では32バイト以上が起動時必須で、`JWT_SECRET` と鍵ローテーションを分離する。
-- `SETTINGS_ENCRYPTION_PREVIOUS_KEYS`: 復号専用の旧鍵（カンマ区切り）。ローテーション中だけ設定し、暗号化は常に現行 `SETTINGS_ENCRYPTION_KEY` で行う。保存済みAIキーを再設定/再暗号化したら空に戻す。
 - フロント側の対応は [frontend/README.md](../frontend/README.md) の「ログイン/RBAC」「通知ベル」を参照。
-
-### 設定暗号化キーのローテーション
-
-```bash
-# 1. 新鍵を SETTINGS_ENCRYPTION_KEY、旧鍵を SETTINGS_ENCRYPTION_PREVIOUS_KEYS に設定して backend を起動
-cd backend
-python -m app.tools.reencrypt_settings --dry-run
-python -m app.tools.reencrypt_settings --apply --actor ops
-# 2. SETTINGS_ENCRYPTION_PREVIOUS_KEYS を空に戻して backend を再起動
-```
-
-`--apply` は保存済み `ai_api_key` を現行鍵で再暗号化し、`settings_reencrypt_ai_key` を監査ログへ記録する。
-コマンドは秘密値を標準出力・監査ログへ出さない。
 
 ## 次フェーズ（残作業）
 
@@ -155,7 +126,6 @@ python -m app.tools.reencrypt_settings --apply --actor ops
 |---|---|---|
 | `probe_sources` | **300秒（5分, `PROBE_INTERVAL_SECONDS`）** | 各ソースへ実HTTP疎通し status/last_ok/fails/avg_ms を更新 |
 | `refresh_forecasts` | 300秒（5分, `FORECAST_REFRESH_SECONDS`） | Open-Meteo 予報キャッシュをウォーム |
-| `dispatch_notifications` | 300秒（5分, `NOTIFICATION_DISPATCH_SECONDS`） | severity≥2 をSlack/Teamsまたはログへ送信。DB配送台帳で重複抑止 |
 
 > データソース状態は **5分ごとに自動更新**（フロントの「データソース」画面にも明記）。サンプル現場は全国16件（札幌〜那覇）。
 
