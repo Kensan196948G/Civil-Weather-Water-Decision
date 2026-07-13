@@ -324,9 +324,31 @@
     };
   }
 
+  // ---- API接続先の許可判定（?api= 上書きによる認証情報の外部流出を防ぐ） ----
+  // index.html/serve.py は ?api= の値を無検証で localStorage に永続化し window.__CW_API_BASE__
+  // へ渡す。ここで弾かなければ、悪意あるURL(?api=https://evil.example)を一度開かせるだけで、
+  // 以後のログインPOSTやJWT付きAPIコールが localStorage 永続化のまま外部へ送信され続ける。
+  // LAN内運用を前提に、同一オリジン/localhost/プライベートIPのみ許可する。
+  function isAllowedApiBase(v) {
+    if (!v) return true; // "" = 同一オリジン
+    var m = /^https?:\/\/([^\/?#]+)$/i.exec(v); // パス・クエリ・認証情報付きは拒否
+    if (!m) return false;
+    var host = m[1].split(":")[0];
+    if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return true;
+    var ipv4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
+    if (!ipv4) return false;
+    var a = +ipv4[1], b = +ipv4[2];
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+
   // ---- ブラウザ自動起動 ----
   if (typeof window !== "undefined" && window.document) {
     var apiBase = window.__CW_API_BASE__ != null ? window.__CW_API_BASE__ : "";
+    if (!isAllowedApiBase(apiBase)) {
+      console.warn("[CW] 許可されない API 接続先のため同一オリジンへフォールバックしました: " + apiBase);
+      try { localStorage.removeItem("cw_api"); } catch (e) {}
+      apiBase = "";
+    }
     var cwUser = null; // ログイン中ユーザー（ロールでナビ表示・編集可否を出し分け）
     // ナビへ「現場登録」等を追加し、該当画面のときだけ注入パネルを表示する
     var regInst = null;
@@ -1655,7 +1677,7 @@
 
   // ---- Node からのテスト用 export ----
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { createAdapter: createAdapter };
+    module.exports = { createAdapter: createAdapter, isAllowedApiBase: isAllowedApiBase };
   }
   global.__cwCreateAdapter = createAdapter;
 })(typeof globalThis !== "undefined" ? globalThis : this);

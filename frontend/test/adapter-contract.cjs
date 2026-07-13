@@ -19,7 +19,7 @@ if (!m) { console.error("data-dc-script が見つかりません"); process.exit
 class DCLogic { setState(o) { this.state = Object.assign({}, this.state, o); } }
 const Component = new Function("DCLogic", m[1] + "\nreturn Component;")(DCLogic);
 
-const { createAdapter } = require("../design/data-adapter.js");
+const { createAdapter, isAllowedApiBase } = require("../design/data-adapter.js");
 
 // ---- バックエンド応答形の fetch モック ----
 const SITES_LIST = [
@@ -201,6 +201,17 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   const raw = await adapter.authedFetch("/api/decision-logs/export.csv");
   ok(raw && raw.ok && lastReq.url.indexOf("/api/decision-logs/export.csv") >= 0,
     "authedFetch が認証付きの素 fetch 応答を返す（CSVダウンロード用）");
+
+  // ---- isAllowedApiBase: ?api= 上書きによる認証情報流出対策（Token Exfiltration対応） ----
+  ["", "http://localhost:8000", "http://127.0.0.1:3000", "http://192.168.1.5:8000",
+   "http://10.0.0.5", "http://172.16.0.1", "http://172.31.255.254"].forEach(function (v) {
+    ok(isAllowedApiBase(v) === true, "isAllowedApiBase が許可: " + JSON.stringify(v));
+  });
+  ["https://evil.example", "http://evil.com", "https://8.8.8.8",
+   "http://192.168.1.5/path", "http://user:pass@192.168.1.5", "javascript:alert(1)",
+   "http://172.32.0.1", "http://172.15.0.1"].forEach(function (v) {
+    ok(isAllowedApiBase(v) === false, "isAllowedApiBase が拒否: " + JSON.stringify(v));
+  });
 
   console.log("\nRESULT: " + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
