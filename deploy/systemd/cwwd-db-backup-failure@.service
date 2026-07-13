@@ -1,18 +1,15 @@
 [Unit]
-Description=Civil-Weather-Water-Decision backend (FastAPI/uvicorn, port 55019)
-Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+Description=Civil-Weather-Water-Decision PostgreSQL backup failure alert for %i
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/backup-restore.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 User=kensan
 Group=kensan
-WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/backend
-EnvironmentFile=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/backend/.env
-ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 55019
-Restart=always
-RestartSec=5
+EnvironmentFile=-/home/kensan/.config/cwwd/ops-alert.env
+ExecStart=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/ops-alert.sh --title "CWWD PostgreSQL backup failure: %i" --message "Failed systemd unit: %i. Check: journalctl -u %i -n 120 --no-pager" --severity alert --max-chars 3500
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -34,6 +31,3 @@ AmbientCapabilities=
 KeyringMode=private
 RemoveIPC=true
 UMask=0077
-
-[Install]
-WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic Civil-Weather-Water-Decision systemd unit drift check
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+
+[Timer]
+OnBootSec=7min
+OnUnitActiveSec=30min
+RandomizedDelaySec=3min
+AccuracySec=1min
+Persistent=false
+Unit=cwwd-systemd-unit-drift-check.service
+
+[Install]
+WantedBy=timers.target

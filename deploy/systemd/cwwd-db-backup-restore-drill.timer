@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily Civil-Weather-Water-Decision PostgreSQL backup restore drill
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/backup-restore.md
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=30min
+AccuracySec=5min
+Persistent=true
+Unit=cwwd-db-backup-restore-drill.service
+
+[Install]
+WantedBy=timers.target

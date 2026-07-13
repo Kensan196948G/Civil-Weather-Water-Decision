@@ -3,9 +3,15 @@ import os
 import pathlib
 
 # app インポート前にテスト用DBへ差し替え（本番DBを汚さない）＋スケジューラ無効化（ネット非依存）
+# APP_ENV も local 固定（ローカルに本番相当 .env が置かれていても、デモユーザー投入等の
+# local 分岐がテストで無効化されないようにする）
 os.environ["DATABASE_URL"] = "sqlite:///./_test_cw.db"
+os.environ["APP_ENV"] = "local"
 os.environ["ENABLE_SCHEDULER"] = "false"
 os.environ["ENABLE_JMA_WARNINGS"] = "false"  # 気象庁XML取得を無効化（ネット非依存）
+# JWT_SECRET もテスト固定（ローカルに本番相当 .env の強鍵があると、client フィクスチャが
+# 発行したトークンの署名鍵と、テストが monkeypatch で戻す既定弱鍵が食い違い 401 になる）
+os.environ["JWT_SECRET"] = "dev-secret-change-in-production-please-32+"
 # 設定暗号化の専用鍵（#80 high-2）。テストでは適正構成（32バイト以上）を既定にし、
 # ai_api_key 保存の正常系を成立させる。弱鍵拒否は該当テストで settings を差し替えて検証。
 os.environ["SETTINGS_ENCRYPTION_KEY"] = "test-only-settings-encryption-key-32bytes-plus-000"
