@@ -7,14 +7,22 @@
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
+import json
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ..core.config import settings
+from ..models import AppSetting, DataSourceStatus, NotificationDelivery, Site
+from . import assessment
 
 logger = logging.getLogger("cwwd.notify")
 
 DISCLAIMER = "本通知は判断支援です。最終判断は現場責任者が公式情報・現地確認のうえ行ってください。"
+_NOTIFY_KEY = "notify"
 
 
 def build_notifications(cards: list[dict], sources: list[dict]) -> list[dict]:
@@ -51,31 +59,132 @@ def _n(nid, kind, severity, title, site_id, message, time):
             "siteId": site_id, "message": message, "time": time, "disclaimer": DISCLAIMER}
 
 
-async def dispatch(notifs: list[dict]) -> dict:
+async def build_current_notifications(db: Session) -> list[dict]:
+    """現在の現場リスク・データソース状態から通知一覧を生成する。APIとschedulerで共有。"""
+    sites = db.scalars(select(Site).where(Site.status == "active").order_by(Site.id)).all()
+    cards = await assessment.assess_all(list(sites))
+    src = db.scalars(select(DataSourceStatus).order_by(DataSourceStatus.id)).all()
+    sources = [{"id": d.id, "name": d.name, "status": d.status,
+                "fails": d.fails, "lastOk": d.last_ok} for d in src]
+    return build_notifications(cards, sources)
+
+
+def _notify_flags(db: Session) -> dict:
+    row = db.get(AppSetting, _NOTIFY_KEY)
+    if row is None or not row.value:
+        return {"slack_enabled": False, "teams_enabled": False}
+    try:
+        data = json.loads(row.value)
+    except (TypeError, ValueError):
+        return {"slack_enabled": False, "teams_enabled": False}
+    return {
+        "slack_enabled": bool(data.get("slack_enabled")),
+        "teams_enabled": bool(data.get("teams_enabled")),
+    }
+
+
+def enabled_targets(db: Session) -> list[tuple[str, str]]:
+    """UI設定と環境変数の両方で有効な通知先。無ければログにフォールバックする。"""
+    flags = _notify_flags(db)
+    targets: list[tuple[str, str]] = []
+    if flags["slack_enabled"] and settings.slack_webhook_url:
+        targets.append(("slack", settings.slack_webhook_url))
+    if flags["teams_enabled"] and settings.teams_webhook_url:
+        targets.append(("teams", settings.teams_webhook_url))
+    return targets or [("log", "")]
+
+
+def _signature(n: dict) -> str:
+    return "|".join(str(n.get(k) or "") for k in ("kind", "id", "siteId", "severity", "title"))
+
+
+def _ts(now: float) -> str:
+    return datetime.fromtimestamp(now, tz=assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _delivery_row(db: Session, channel: str, notification: dict, now: float) -> NotificationDelivery:
+    fp = _signature(notification)
+    row = db.scalar(select(NotificationDelivery).where(
+        NotificationDelivery.channel == channel,
+        NotificationDelivery.fingerprint == fp,
+    ))
+    if row is None:
+        row = NotificationDelivery(
+            channel=channel,
+            fingerprint=fp,
+            notification_id=str(notification.get("id") or ""),
+            severity=int(notification.get("severity") or 0),
+            status="pending",
+            last_error="",
+            created_at=_ts(now),
+            updated_at=_ts(now),
+        )
+        db.add(row)
+        db.flush()
+    return row
+
+
+def _suppressed(row: NotificationDelivery, now: float) -> bool:
+    ttl = settings.notification_dedup_seconds
+    return bool(ttl > 0 and row.last_sent_at is not None and now - row.last_sent_at < ttl)
+
+
+async def dispatch(db: Session, notifs: list[dict],
+                   *, client: httpx.AsyncClient | None = None, now: float | None = None) -> dict:
     """設定済みの外部通知先（Slack/Teams）へ送信。未設定は no-op。
 
-    現状は手動/将来のスケジューラから呼ぶ拡張点。重大度2以上のみ送る。
+    スケジューラから呼ぶ。重大度2以上のみ送る。同一通知は一定時間抑止する。
     """
-    targets = []
-    if settings.slack_webhook_url:
-        targets.append(("slack", settings.slack_webhook_url))
-    if settings.teams_webhook_url:
-        targets.append(("teams", settings.teams_webhook_url))
+    now = time.time() if now is None else now
+    targets = enabled_targets(db)
     high = [n for n in notifs if n["severity"] >= 2]
-    if not targets:
-        for n in high:
-            logger.info("[notify] %s | %s", n["title"], n["message"])  # 既定はログ
-        return {"sent": 0, "logged": len(high)}
-    sent = 0
-    async with httpx.AsyncClient(timeout=10) as client:
+    sent = logged = suppressed = failed = 0
+    own_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(timeout=10)
+    try:
         for n in high:
             text = f"[{n['title']}] {n['message']}\n{DISCLAIMER}"
             for kind, url in targets:
+                row = _delivery_row(db, kind, n, now)
+                if _suppressed(row, now):
+                    suppressed += 1
+                    continue
+                row.last_attempt_at = now
+                row.updated_at = _ts(now)
                 try:
-                    payload = {"text": text}  # Slack/Teams とも text フィールドで概ね通る
-                    r = await client.post(url, json=payload)
-                    if r.status_code < 400:
-                        sent += 1
+                    if kind == "log":
+                        logger.info("[notify] %s | %s", n["title"], n["message"])
+                        logged += 1
+                        ok = True
+                    else:
+                        payload = {"text": text}  # Slack/Teams とも text フィールドで概ね通る
+                        r = await client.post(url, json=payload)
+                        ok = r.status_code < 400
+                        if ok:
+                            sent += 1
+                        else:
+                            failed += 1
+                            row.last_error = f"HTTP {r.status_code}"
+                    if ok:
+                        row.status = "sent" if kind != "log" else "logged"
+                        row.last_sent_at = now
+                        row.last_error = ""
+                    else:
+                        row.status = "failed"
+                    db.flush()
                 except Exception as e:  # noqa: BLE001
+                    failed += 1
+                    row.status = "failed"
+                    row.last_error = str(e)[:1000]
+                    row.updated_at = _ts(now)
+                    db.flush()
                     logger.warning("notify %s failed: %s", kind, e)
-    return {"sent": sent, "logged": 0}
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if own_client:
+            await client.aclose()
+    return {"sent": sent, "logged": logged, "suppressed": suppressed, "failed": failed}
