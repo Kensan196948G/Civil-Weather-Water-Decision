@@ -13,6 +13,7 @@ import json
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
@@ -69,16 +70,24 @@ async def build_current_notifications(db: Session) -> list[dict]:
     return build_notifications(cards, sources)
 
 
+def _env_default_flags() -> dict:
+    # UI設定未初期化時の既定値。環境変数URLが設定済みなら有効（Track C以前の後方互換）。
+    return {
+        "slack_enabled": bool(settings.slack_webhook_url),
+        "teams_enabled": bool(settings.teams_webhook_url),
+    }
+
+
 def _notify_flags(db: Session) -> dict:
     row = db.get(AppSetting, _NOTIFY_KEY)
     if row is None or not row.value:
-        return {"slack_enabled": False, "teams_enabled": False}
+        return _env_default_flags()
     try:
         data = json.loads(row.value)
     except (TypeError, ValueError):
-        return {"slack_enabled": False, "teams_enabled": False}
+        return _env_default_flags()
     if not isinstance(data, dict):
-        return {"slack_enabled": False, "teams_enabled": False}
+        return _env_default_flags()
     return {
         "slack_enabled": bool(data.get("slack_enabled")),
         "teams_enabled": bool(data.get("teams_enabled")),
@@ -110,19 +119,31 @@ def _delivery_row(db: Session, channel: str, notification: dict, now: float) -> 
         NotificationDelivery.channel == channel,
         NotificationDelivery.fingerprint == fp,
     ))
-    if row is None:
-        row = NotificationDelivery(
-            channel=channel,
-            fingerprint=fp,
-            notification_id=str(notification.get("id") or ""),
-            severity=int(notification.get("severity") or 0),
-            status="pending",
-            last_error="",
-            created_at=_ts(now),
-            updated_at=_ts(now),
-        )
-        db.add(row)
+    if row is not None:
+        return row
+    row = NotificationDelivery(
+        channel=channel,
+        fingerprint=fp,
+        notification_id=str(notification.get("id") or ""),
+        severity=int(notification.get("severity") or 0),
+        status="pending",
+        last_error="",
+        created_at=_ts(now),
+        updated_at=_ts(now),
+    )
+    db.add(row)
+    try:
         db.flush()
+    except IntegrityError:
+        # 複数プロセスが同時実行された場合の (channel, fingerprint) 一意制約違反。
+        # 自分の挿入を諦めて他プロセスが挿入した既存行に乗り換える（dispatch全体を止めない）。
+        db.rollback()
+        row = db.scalar(select(NotificationDelivery).where(
+            NotificationDelivery.channel == channel,
+            NotificationDelivery.fingerprint == fp,
+        ))
+        if row is None:
+            raise
     return row
 
 

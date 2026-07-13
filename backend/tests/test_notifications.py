@@ -124,9 +124,52 @@ async def test_notify_settings_gate_external_targets(client, monkeypatch):
 
     with SessionLocal() as db:
         _clear_notification_state(db)
-        assert notifications.enabled_targets(db) == [("log", "")]
-        db.add(AppSetting(key="notify", value=json.dumps({"slack_enabled": True,
+        # UI設定(AppSettings.notify)が未初期化の間は、環境変数URLの有無をそのまま
+        # 既定値として使う（Track C以前は環境変数のみで送信していたための後方互換）。
+        assert notifications.enabled_targets(db) == [("slack", "https://hooks.example/slack")]
+        # UIで明示的にオフへ切り替えたら、それを優先して外部送信を止められる。
+        db.add(AppSetting(key="notify", value=json.dumps({"slack_enabled": False,
                                                           "teams_enabled": False}),
                           updated_at="now", updated_by="test"))
         db.commit()
+        assert notifications.enabled_targets(db) == [("log", "")]
+        # UIで明示的にオンへ戻せば送信対象に復帰する。
+        row = db.get(AppSetting, "notify")
+        row.value = json.dumps({"slack_enabled": True, "teams_enabled": False})
+        db.commit()
         assert notifications.enabled_targets(db) == [("slack", "https://hooks.example/slack")]
+
+
+@pytest.mark.asyncio
+async def test_delivery_row_recovers_from_integrity_error(client, monkeypatch):
+    """_delivery_row の SELECT 直後、flush 前に別セッションが同じ行を commit するレースを再現する。
+
+    一意制約違反 (IntegrityError) を実際に起こし、それを catch して自分の挿入を
+    諦め、既存行へ乗り換えることを検証する（dispatch 全体を止めないための対応）。
+    """
+    with SessionLocal() as db:
+        _clear_notification_state(db)
+        n = _notif()
+        fp = notifications._signature(n)
+        original_flush = db.flush
+        raced = {"done": False}
+
+        def racing_flush(*args, **kwargs):
+            if not raced["done"]:
+                raced["done"] = True
+                with SessionLocal() as winner_db:
+                    winner_db.add(NotificationDelivery(
+                        channel="log", fingerprint=fp, notification_id=n["id"],
+                        severity=n["severity"], status="pending", last_error="",
+                        created_at="now", updated_at="now"))
+                    winner_db.commit()
+            return original_flush(*args, **kwargs)
+
+        monkeypatch.setattr(db, "flush", racing_flush)
+        row = notifications._delivery_row(db, "log", n, 100.0)
+
+        all_rows = db.scalars(select(NotificationDelivery).where(
+            NotificationDelivery.channel == "log", NotificationDelivery.fingerprint == fp)).all()
+
+    assert row.fingerprint == fp
+    assert len(all_rows) == 1  # 自分の挿入は破棄され、他方が commit した行に統一される
