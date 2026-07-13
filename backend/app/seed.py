@@ -159,14 +159,14 @@ def seed(db: Session) -> None:
     for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
         db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
                            action=act, comment=comment, decided_by=by, decided_at=dt))
-    # デモユーザー(admin/admin123 等)は local のみ。本番は環境変数の管理者だけ作成（#2）
+    # デモユーザー(admin/admin123 等)は local のみ。本番管理者は本関数冒頭の
+    # _sync_production_users() で既に同期済み（#90 対抗レビュー critical-1: ここで再度
+    # 呼ぶと同一主キー U01 の User が2件 pending になり commit 時に IntegrityError となる）。
     if settings.app_env == "local":
         for (uid, uname, disp, role, dept, pw) in USERS:
             db.add(User(id=uid, username=uname, display_name=disp, role=role,
                         department=dept, email=f"{uname}@example.com",
                         password_hash=hash_password(pw)))
-    else:
-        _sync_production_users(db)
 
     # 固定IDシード後にID採番カウンタを実データのmaxへ同期（#49: カウンタ遅延による採番衝突を防ぐ）
     def _maxnum(ids: list[str], prefix: str) -> int:
