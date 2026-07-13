@@ -77,6 +77,8 @@ def _notify_flags(db: Session) -> dict:
         data = json.loads(row.value)
     except (TypeError, ValueError):
         return {"slack_enabled": False, "teams_enabled": False}
+    if not isinstance(data, dict):
+        return {"slack_enabled": False, "teams_enabled": False}
     return {
         "slack_enabled": bool(data.get("slack_enabled")),
         "teams_enabled": bool(data.get("teams_enabled")),
@@ -134,6 +136,9 @@ async def dispatch(db: Session, notifs: list[dict],
     """設定済みの外部通知先（Slack/Teams）へ送信。未設定は no-op。
 
     スケジューラから呼ぶ。重大度2以上のみ送る。同一通知は一定時間抑止する。
+    配送1件ごとに commit する（複数配送の一括commit/rollackだと、外部送信が
+    成功した直後に後続の配送で例外が起きた場合、rollbackで送信済み記録ごと
+    失われて次回実行時に再送してしまうため）。
     """
     now = time.time() if now is None else now
     targets = enabled_targets(db)
@@ -152,6 +157,7 @@ async def dispatch(db: Session, notifs: list[dict],
                     continue
                 row.last_attempt_at = now
                 row.updated_at = _ts(now)
+                db.commit()  # 試行記録を先に確定
                 try:
                     if kind == "log":
                         logger.info("[notify] %s | %s", n["title"], n["message"])
@@ -160,30 +166,25 @@ async def dispatch(db: Session, notifs: list[dict],
                     else:
                         payload = {"text": text}  # Slack/Teams とも text フィールドで概ね通る
                         r = await client.post(url, json=payload)
-                        ok = r.status_code < 400
+                        ok = 200 <= r.status_code < 300  # 3xx等を成功扱いにしない
                         if ok:
                             sent += 1
                         else:
                             failed += 1
                             row.last_error = f"HTTP {r.status_code}"
-                    if ok:
-                        row.status = "sent" if kind != "log" else "logged"
-                        row.last_sent_at = now
-                        row.last_error = ""
-                    else:
-                        row.status = "failed"
-                    db.flush()
                 except Exception as e:  # noqa: BLE001
+                    ok = False
                     failed += 1
-                    row.status = "failed"
                     row.last_error = str(e)[:1000]
-                    row.updated_at = _ts(now)
-                    db.flush()
                     logger.warning("notify %s failed: %s", kind, e)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+                if ok:
+                    row.status = "logged" if kind == "log" else "sent"
+                    row.last_sent_at = now
+                    row.last_error = ""
+                else:
+                    row.status = "failed"
+                row.updated_at = _ts(now)
+                db.commit()  # 送信結果を配送単位で確定
     finally:
         if own_client:
             await client.aclose()

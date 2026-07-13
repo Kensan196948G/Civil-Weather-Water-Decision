@@ -1,5 +1,5 @@
 """アプリ設定（環境変数 / .env から読み込み）。詳細設計 §20 準拠。"""
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_JWT_SECRET = "dev-secret-change-in-production-please-32+"
@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     enable_scheduler: bool = True
     probe_interval_seconds: int = 300   # データソース状態を5分ごとに実プローブ更新
     forecast_refresh_seconds: int = 300  # 予報キャッシュも5分ごとにウォーム
-    notification_dispatch_seconds: int = 300  # 外部通知/ログ通知も5分ごと
-    notification_dedup_seconds: int = 3600  # 同一通知は1時間抑止
+    notification_dispatch_seconds: int = Field(default=300, gt=0)  # 外部通知/ログ通知も5分ごと
+    notification_dedup_seconds: int = Field(default=3600, ge=0)  # 同一通知は1時間抑止（0で無効化）
     probe_timeout_seconds: int = 8
 
     @model_validator(mode="after")

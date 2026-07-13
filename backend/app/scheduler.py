@@ -39,7 +39,7 @@ async def _forecast_job() -> None:
 async def _notification_job() -> None:
     with SessionLocal() as db:
         notifs = await build_current_notifications(db)
-        await dispatch(db, notifs)
+        await dispatch(db, notifs, client=_client)
 
 
 def start():
