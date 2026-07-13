@@ -6,6 +6,63 @@ def test_health(client):
     assert r.status_code == 200 and r.json()["status"] == "ok"
 
 
+def test_readyz(client):
+    # テスト環境は seed.init_db() が起動時に Alembic head まで適用するため決定的に ok になる
+    r = client.get("/readyz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["checks"] == {
+        "database": True, "migrations": True, "tables": True, "config": True,
+    }
+
+
+def test_readiness_detail_requires_admin_or_tech_manager(client):
+    from tests.conftest import login_token
+    token = login_token(client, "viewer")
+    r = client.get("/api/admin/ops/readiness-detail",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+
+
+def test_readiness_detail_admin(client):
+    r = client.get("/api/admin/ops/readiness-detail")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["checks"]["database"] is True
+    assert "details" in body
+
+
+def test_ops_status_snapshot_missing_file(client, monkeypatch, tmp_path):
+    from app.core.config import settings
+    # 本番機には実ファイルが存在し得るため、テスト専用の未作成パスへ差し替えて環境非依存にする
+    monkeypatch.setattr(settings, "ops_status_json_path", str(tmp_path / "ops-status.json"))
+    r = client.get("/api/admin/ops/status-snapshot")
+    assert r.status_code == 503
+    assert "ops status snapshot unavailable" in r.json()["detail"]
+
+
+def test_ops_status_snapshot_ok(client, monkeypatch, tmp_path):
+    import json
+    from app.core.config import settings
+    snapshot_path = tmp_path / "ops-status.json"
+    snapshot_path.write_text(json.dumps({
+        "snapshot_utc": "2026-07-13T00:00:00Z",
+        "services": [{"unit": "cwwd-backend.service", "active_state": "active",
+                       "result": "success", "n_restarts": "0"}],
+        "timers": [],
+        "failed_units": [],
+        "failed_units_count": 0,
+        "status": "ok",
+    }), encoding="utf-8")
+    monkeypatch.setattr(settings, "ops_status_json_path", str(snapshot_path))
+    r = client.get("/api/admin/ops/status-snapshot")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["snapshot"]["services"][0]["unit"] == "cwwd-backend.service"
+
+
 def test_dashboard_site_risk(client):
     r = client.get("/api/dashboard/site-risk")
     assert r.status_code == 200

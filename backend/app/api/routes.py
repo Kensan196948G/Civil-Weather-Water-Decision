@@ -17,7 +17,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from ..core import crypto
+from ..core import crypto, ops_status, readiness
 from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
@@ -1193,3 +1193,17 @@ def list_audit_logs(limit: int = 100, db: Session = Depends(get_db),
     rows = db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)).all()
     return [{"id": r.id, "timestamp": r.timestamp, "user": r.username, "action": r.action,
              "message": r.message, "siteId": r.site_id} for r in rows]
+
+
+# ---------- 運用監視（管理者・技術管理者、#95） ----------
+@router.get("/admin/ops/readiness-detail")
+def readiness_detail(user: User = Depends(require_role("admin", "tech_manager"))):
+    return readiness.check_readiness_detail()
+
+
+@router.get("/admin/ops/status-snapshot")
+def status_snapshot(user: User = Depends(require_role("admin", "tech_manager"))):
+    try:
+        return ops_status.load_ops_status_snapshot()
+    except ops_status.OpsStatusSnapshotError as exc:
+        raise HTTPException(503, f"ops status snapshot unavailable: {exc.reason}") from exc
