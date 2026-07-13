@@ -7,23 +7,36 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import get_db
 from .security import decode_token
-from ..models import User
+from ..models import RevokedToken, User
 
 
-def get_current_user(
+def get_token_payload(
     authorization: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-) -> User:
+) -> dict:
     if not settings.enable_auth:
-        # 認証無効時はダミー管理者（開発・テスト用）
-        return User(id="_dev", username="_dev", display_name="dev", email="", role="admin",
-                    department="", is_active=True)
+        return {"sub": "_dev", "role": "admin"}
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "authentication required")
     token = authorization.split(" ", 1)[1].strip()
     payload = decode_token(token)
     if not payload:
         raise HTTPException(401, "invalid or expired token")
+    return payload
+
+
+def get_current_user(
+    payload: dict = Depends(get_token_payload),
+    db: Session = Depends(get_db),
+) -> User:
+    if not settings.enable_auth:
+        # 認証無効時はダミー管理者（開発・テスト用）
+        return User(id="_dev", username="_dev", display_name="dev", email="", role="admin",
+                    department="", is_active=True)
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(401, "invalid token")
+    if jti and db.get(RevokedToken, jti):
+        raise HTTPException(401, "token revoked")
     user = db.get(User, payload.get("sub"))
     if not user or not user.is_active:
         raise HTTPException(401, "user not found or inactive")

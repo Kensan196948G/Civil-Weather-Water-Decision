@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic Civil-Weather-Water-Decision security surface check
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=15min
+RandomizedDelaySec=2min
+AccuracySec=1min
+Persistent=false
+Unit=cwwd-security-surface-check.service
+
+[Install]
+WantedBy=timers.target

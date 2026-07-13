@@ -83,15 +83,22 @@ cloudflared tunnel --config ~/.cloudflared/config-cwwd.yml \
 
 ```bash
 cloudflared tunnel --config ~/.cloudflared/config-cwwd.yml run cwwd-civil-weather-water
-# 別ターミナルから
+# 別ターミナルから（Cloudflare Access 適用前、または service token / 認証済みセッションで確認）
 curl -I https://cwwd.mirai-dx-platform.com/          # frontend: HTTP/2 200
 curl https://cwwd.mirai-dx-platform.com/health       # backend: {"status":"ok",...}
+curl https://cwwd.mirai-dx-platform.com/readyz       # backend: readiness（DB/Alembic/主要テーブル）
 curl -o /dev/null -w "%{http_code}\n" https://cwwd.mirai-dx-platform.com/api/sites  # 401=認証ガード動作
+curl -o /dev/null -w "%{http_code}\n" https://cwwd.mirai-dx-platform.com/docs       # production edge: 404
 ```
 
 > 2026-07-12 実施済み: 上記3ルート（front / `/health` / `/api/sites`）の疎通を確認
 > （Tunnel ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`。401確認は `/api/sites` の実測であり、
 > 全APIエンドポイントの保護を個別確認したわけではない）。
+> 2026-07-13 更新: systemd 本番設定では `/readyz` を backend へ先着ルーティングし、
+> 無効化済みdocs/OpenAPIパスは edge 404 にして frontend fallback / backend origin に流さない。
+> `ingress[].path` は glob ではなく正規表現として評価されるため、`^/health$` のようにアンカー付きで書く。
+> Cloudflare Access 適用後の未認証 public curl は、上記 backend/frontend 応答ではなく **302 Access login** が期待値。
+> origin 動作は loopback curl、または Access 認証済み/サービス token 付きで確認する。
 >
 > ✅ **2026-07-12: Cloudflare Access 適用済み** — アプリ `cwwd`（session 24h）/ ポリシー `CWWD`
 > （allow: `mirai-const.co.jp` ドメイン or 管理者メール）。未認証アクセスが 302 で Access ログインへ
@@ -131,6 +138,8 @@ Tunnel公開前に、backend の `.env` を本番値へ（`APP_ENV=production` �
 
 - [ ] `APP_ENV=production`
 - [ ] `JWT_SECRET` 32バイト以上のランダム値
+- [ ] `SETTINGS_ENCRYPTION_KEY` 32バイト以上のランダム値（AI APIキー等の設定値暗号化専用）
+- [ ] 鍵ローテーション中のみ `SETTINGS_ENCRYPTION_PREVIOUS_KEYS` に旧鍵（各32バイト以上・カンマ区切り）を設定し、再暗号化後は空に戻す
 - [ ] `ENABLE_AUTH=true`
 - [ ] `ADMIN_PASSWORD` 設定（local限定のデモユーザーは投入されなくなる）
 - [ ] `DATABASE_URL` を PostgreSQL に

@@ -1,0 +1,32 @@
+[Unit]
+Description=Civil-Weather-Water-Decision systemd unit drift check
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+OnFailure=cwwd-ops-failure@%n.service
+
+[Service]
+Type=oneshot
+User=kensan
+Group=kensan
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision
+ExecStart=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/systemd-unit-drift-check.sh --repo-dir /home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/systemd --system-dir /etc/systemd/system
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX
+UMask=0077

@@ -28,7 +28,7 @@ jobs:
         run: python -m pytest -q
 
   security:
-    name: security (dependency scan)
+    name: security (dependency scan + deploy scripts)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,6 +47,50 @@ jobs:
         run: pip install pip-audit
       - name: Audit backend dependencies (requirements.txt)
         run: python -m pip_audit -r requirements.txt
+      - name: Validate deploy shell scripts
+        run: bash -n ../deploy/scripts/app-health-check.sh ../deploy/scripts/cloudflared-config-check.sh ../deploy/scripts/db-backup.sh ../deploy/scripts/db-backup-check.sh ../deploy/scripts/db-backup-export.sh ../deploy/scripts/db-backup-export-check.sh ../deploy/scripts/db-backup-restore-drill.sh ../deploy/scripts/db-restore.sh ../deploy/scripts/disk-space-check.sh ../deploy/scripts/network-exposure-check.sh ../deploy/scripts/ops-alert.sh ../deploy/scripts/ops-failed-units-report.sh ../deploy/scripts/ops-status.sh ../deploy/scripts/ops-status-json-export.sh ../deploy/scripts/ops-status-json-check.sh ../deploy/scripts/public-edge-access-check.sh ../deploy/scripts/secret-file-permission-check.sh ../deploy/scripts/security-surface-check.sh ../deploy/scripts/systemd-timer-freshness-check.sh ../deploy/scripts/systemd-unit-drift-check.sh
+      - name: Validate systemd units
+        run: >
+          systemd-analyze verify
+          ../deploy/systemd/cwwd-backend.service
+          ../deploy/systemd/cwwd-frontend.service
+          ../deploy/systemd/cwwd-tunnel.service
+          ../deploy/systemd/cwwd-cloudflared-config-check.service
+          ../deploy/systemd/cwwd-cloudflared-config-check.timer
+          ../deploy/systemd/cwwd-app-health-check.service
+          ../deploy/systemd/cwwd-app-health-check.timer
+          ../deploy/systemd/cwwd-public-edge-access-check.service
+          ../deploy/systemd/cwwd-public-edge-access-check.timer
+          ../deploy/systemd/cwwd-security-surface-check.service
+          ../deploy/systemd/cwwd-security-surface-check.timer
+          ../deploy/systemd/cwwd-network-exposure-check.service
+          ../deploy/systemd/cwwd-network-exposure-check.timer
+          ../deploy/systemd/cwwd-systemd-unit-drift-check.service
+          ../deploy/systemd/cwwd-systemd-unit-drift-check.timer
+          ../deploy/systemd/cwwd-systemd-timer-freshness-check.service
+          ../deploy/systemd/cwwd-systemd-timer-freshness-check.timer
+          ../deploy/systemd/cwwd-secret-file-permission-check.service
+          ../deploy/systemd/cwwd-secret-file-permission-check.timer
+          ../deploy/systemd/cwwd-ops-status.service
+          ../deploy/systemd/cwwd-ops-status.timer
+          ../deploy/systemd/cwwd-ops-status-json-export.service
+          ../deploy/systemd/cwwd-ops-status-json-export.timer
+          ../deploy/systemd/cwwd-ops-status-json-check.service
+          ../deploy/systemd/cwwd-ops-status-json-check.timer
+          ../deploy/systemd/cwwd-disk-space-check.service
+          ../deploy/systemd/cwwd-disk-space-check.timer
+          ../deploy/systemd/cwwd-db-backup.service
+          ../deploy/systemd/cwwd-db-backup-export.service
+          ../deploy/systemd/cwwd-db-backup-export.timer
+          ../deploy/systemd/cwwd-db-backup-export-check.service
+          ../deploy/systemd/cwwd-db-backup-export-check.timer
+          ../deploy/systemd/cwwd-db-backup-check.service
+          ../deploy/systemd/cwwd-db-backup-check.timer
+          ../deploy/systemd/cwwd-db-backup-restore-drill.service
+          ../deploy/systemd/cwwd-db-backup-restore-drill.timer
+          ../deploy/systemd/cwwd-db-backup-failure@.service
+          ../deploy/systemd/cwwd-ops-failure@.service
+          ../deploy/systemd/cwwd-db-backup.timer
 
   frontend:
     name: frontend (logic + adapter tests)
@@ -60,12 +104,38 @@ jobs:
         run: node frontend/test/logic-smoke.mjs
       - name: Adapter contract test
         run: node frontend/test/adapter-contract.cjs
+      - name: API config policy test
+        run: node frontend/test/api-config-policy.cjs
+      - name: Serve proxy policy test
+        run: python3 frontend/test/serve-proxy-policy.py
+      - name: CDN policy test
+        run: node frontend/test/cdn-policy.cjs
+      - name: Vendor asset policy test
+        run: node frontend/test/vendor-assets-policy.cjs
 
-  docker-build:
-    name: docker build (smoke)
+  e2e-smoke:
+    name: e2e smoke (browser login)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install backend/test deps
+        run: pip install -r backend/requirements.txt playwright
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps firefox
+      - name: Browser E2E smoke
+        run: python frontend/test/e2e_smoke.py
+
+  docker-build:
+    name: docker compose + build (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose config
+        run: POSTGRES_PASSWORD=ci-local-only docker compose config --quiet
       - name: Build backend image
         run: docker build -t cwwd-backend ./backend
       - name: Build frontend image

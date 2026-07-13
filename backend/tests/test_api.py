@@ -1,9 +1,275 @@
 """API 結合テスト（取得→判定→表示の経路。詳細設計 §18.2 TC-001〜010 相当）。"""
 
+import json
+import time
+
+from conftest import login_token
+
+
+SECURITY_HEADERS = {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "permissions-policy": "geolocation=(), microphone=(), camera=()",
+    "strict-transport-security": "max-age=31536000",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-site",
+    "x-permitted-cross-domain-policies": "none",
+    "x-download-options": "noopen",
+    "content-security-policy": (
+        "default-src 'none'; base-uri 'none'; object-src 'none'; "
+        "frame-ancestors 'none'; form-action 'none'"
+    ),
+}
+
+
+def assert_security_headers(response):
+    for key, expected in SECURITY_HEADERS.items():
+        assert response.headers[key] == expected
+    assert response.headers["cache-control"] == "no-store"
+
 
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200 and r.json()["status"] == "ok"
+
+
+def test_health_security_headers(client):
+    r = client.get("/health")
+    assert_security_headers(r)
+
+
+def test_local_api_docs_remain_available_without_api_csp(client):
+    r = client.get("/docs")
+    assert r.status_code == 200
+    assert "swagger" in r.text.lower()
+    assert "content-security-policy" not in r.headers
+
+
+def test_readyz_ok(client):
+    r = client.get("/readyz")
+    assert r.status_code == 200
+    assert_security_headers(r)
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["checks"]["database"] is True
+    assert body["checks"]["migrations"] is True
+    assert body["checks"]["tables"] is True
+    assert "DATABASE_URL" not in r.text
+    assert "postgresql://" not in r.text
+    assert "sqlite:///" not in r.text
+    assert "JWT_SECRET" not in r.text
+    assert "SETTINGS_ENCRYPTION_KEY" not in r.text
+    assert "details" not in body
+
+
+def test_readyz_not_ready_returns_503(client, monkeypatch):
+    from app.core import readiness
+
+    monkeypatch.setattr(readiness, "check_readiness", lambda: {
+        "status": "not_ready",
+        "app": "Civil-Weather-Water-Decision",
+        "env": "local",
+        "checks": {"database": {"ok": False}},
+    })
+    r = client.get("/readyz")
+    assert r.status_code == 503
+    assert_security_headers(r)
+    assert r.json()["status"] == "not_ready"
+
+
+def test_security_headers_on_401_and_422(client):
+    unauthenticated = client.get("/api/sites", headers={"Authorization": ""})
+    assert unauthenticated.status_code == 401
+    assert_security_headers(unauthenticated)
+
+    invalid_payload = client.post("/api/decisions/evaluate", json={"site_id": "S01"})
+    assert invalid_payload.status_code == 422
+    assert_security_headers(invalid_payload)
+
+
+def test_security_headers_on_500():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    route_path = "/__test_security_headers_500"
+    if not any(getattr(route, "path", None) == route_path for route in app.routes):
+        @app.get(route_path)
+        def _raise_for_security_header_test():
+            raise RuntimeError("test-only failure")
+
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.get(route_path)
+    assert r.status_code == 500
+    assert_security_headers(r)
+
+
+def test_readyz_migration_mismatch_is_not_ready(client, monkeypatch):
+    from app.core import readiness
+
+    class FakeScript:
+        def get_heads(self):
+            return ["not-the-current-head"]
+
+    monkeypatch.setattr(readiness.ScriptDirectory, "from_config", lambda _cfg: FakeScript())
+    body = readiness.check_readiness()
+    assert body["status"] == "not_ready"
+    assert body["checks"]["database"] is True
+    assert body["checks"]["migrations"] is False
+    assert "not-the-current-head" not in str(body)
+
+
+def test_readyz_table_probe_failure_is_not_ready(client, monkeypatch):
+    from sqlalchemy import text
+
+    from app.core import readiness
+
+    monkeypatch.setattr(readiness, "_TABLE_PROBES", (text("SELECT * FROM missing_readyz_table"),))
+    body = readiness.check_readiness()
+    assert body["status"] == "not_ready"
+    assert body["checks"]["database"] is True
+    assert body["checks"]["tables"] is False
+    assert "missing_readyz_table" not in str(body)
+
+
+def test_ops_readiness_detail_admin(client):
+    r = client.get("/api/admin/ops/readiness-detail")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["checks"]["database"] is True
+    assert body["details"]["database"]["dialect"] in ("sqlite", "postgresql")
+    assert "current" in body["details"]["migrations"]
+    assert "head" in body["details"]["migrations"]
+    assert "DATABASE_URL" not in r.text
+    assert "JWT_SECRET" not in r.text
+    assert "SETTINGS_ENCRYPTION_KEY" not in r.text
+    assert "postgresql://" not in r.text
+    assert "sqlite:///" not in r.text
+
+
+def test_ops_readiness_detail_allows_tech_manager(client):
+    token = login_token(client, "tanaka")
+    r = client.get("/api/admin/ops/readiness-detail",
+                   headers={"Authorization": "Bearer " + token})
+    assert r.status_code == 200
+
+
+def test_ops_readiness_detail_denies_non_ops_roles_and_unauthenticated(client):
+    for username in ("yamada", "takahashi", "viewer"):
+        token = login_token(client, username)
+        assert client.get("/api/admin/ops/readiness-detail",
+                          headers={"Authorization": "Bearer " + token}).status_code == 403
+    assert client.get("/api/admin/ops/readiness-detail",
+                      headers={"Authorization": ""}).status_code == 401
+    assert client.get("/api/admin/ops/readiness-detail",
+                      headers={"Authorization": "Bearer invalid"}).status_code == 401
+
+
+def _write_ops_status_snapshot(path, *, status="ok"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "snapshot_utc": "2026-07-13T06:00:00Z",
+        "services": [{"unit": "cwwd-backend.service", "active_state": "active"}],
+        "timers": [{"unit": "cwwd-ops-status.timer", "active_state": "active"}],
+        "failed_units": [],
+        "failed_units_count": 0,
+        "status": status,
+        "secret": "do-not-print",
+    }))
+
+
+def test_ops_status_snapshot_admin(client, monkeypatch, tmp_path):
+    from app.core.config import settings
+
+    snapshot = tmp_path / "ops-status.json"
+    _write_ops_status_snapshot(snapshot)
+    monkeypatch.setattr(settings, "ops_status_json_path", str(snapshot))
+    monkeypatch.setattr(settings, "ops_status_json_max_age_seconds", 3600)
+
+    r = client.get("/api/admin/ops/status-snapshot")
+
+    assert r.status_code == 200
+    assert_security_headers(r)
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["snapshot"]["status"] == "ok"
+    assert body["snapshot"]["services"][0]["unit"] == "cwwd-backend.service"
+    assert "secret" not in body["snapshot"]
+    assert "do-not-print" not in r.text
+    assert body["metadata"]["age_seconds"] >= 0
+    assert "DATABASE_URL" not in r.text
+    assert "JWT_SECRET" not in r.text
+    assert "SETTINGS_ENCRYPTION_KEY" not in r.text
+    assert "postgresql://" not in r.text
+    assert "sqlite:///" not in r.text
+
+
+def test_ops_status_snapshot_allows_tech_manager(client, monkeypatch, tmp_path):
+    from app.core.config import settings
+
+    snapshot = tmp_path / "ops-status.json"
+    _write_ops_status_snapshot(snapshot)
+    monkeypatch.setattr(settings, "ops_status_json_path", str(snapshot))
+    token = login_token(client, "tanaka")
+
+    r = client.get("/api/admin/ops/status-snapshot",
+                   headers={"Authorization": "Bearer " + token})
+
+    assert r.status_code == 200
+
+
+def test_ops_status_snapshot_denies_non_ops_roles_and_unauthenticated(client, monkeypatch, tmp_path):
+    from app.core.config import settings
+
+    snapshot = tmp_path / "ops-status.json"
+    _write_ops_status_snapshot(snapshot)
+    monkeypatch.setattr(settings, "ops_status_json_path", str(snapshot))
+
+    for username in ("yamada", "takahashi", "viewer"):
+        token = login_token(client, username)
+        assert client.get("/api/admin/ops/status-snapshot",
+                          headers={"Authorization": "Bearer " + token}).status_code == 403
+    assert client.get("/api/admin/ops/status-snapshot",
+                      headers={"Authorization": ""}).status_code == 401
+    assert client.get("/api/admin/ops/status-snapshot",
+                      headers={"Authorization": "Bearer invalid"}).status_code == 401
+
+
+def test_ops_status_snapshot_unavailable_errors_do_not_leak_body(client, monkeypatch, tmp_path):
+    from app.core.config import settings
+
+    snapshot = tmp_path / "ops-status.json"
+    snapshot.write_text('{"status":"ok","secret":"do-not-print"')
+    monkeypatch.setattr(settings, "ops_status_json_path", str(snapshot))
+
+    r = client.get("/api/admin/ops/status-snapshot")
+
+    assert r.status_code == 503
+    assert_security_headers(r)
+    assert "invalid_json" in r.text
+    assert "do-not-print" not in r.text
+    assert "secret" not in r.text
+
+
+def test_ops_status_snapshot_stale_returns_503(client, monkeypatch, tmp_path):
+    from app.core.config import settings
+
+    snapshot = tmp_path / "ops-status.json"
+    _write_ops_status_snapshot(snapshot)
+    old = int(time.time()) - 7200
+    snapshot.touch()
+    monkeypatch.setattr(settings, "ops_status_json_path", str(snapshot))
+    monkeypatch.setattr(settings, "ops_status_json_max_age_seconds", 60)
+    # touch after writing would refresh mtime; set it old after path/config setup.
+    import os
+    os.utime(snapshot, (old, old))
+
+    r = client.get("/api/admin/ops/status-snapshot")
+
+    assert r.status_code == 503
+    assert "stale" in r.text
 
 
 def test_dashboard_site_risk(client):
@@ -88,7 +354,9 @@ def test_decision_log_create_and_list(client):
 def test_export_csv(client):
     r = client.get("/api/decision-logs/export.csv")
     assert r.status_code == 200
+    assert_security_headers(r)
     assert "text/csv" in r.headers["content-type"]
+    assert "attachment; filename=decision_logs.csv" in r.headers["content-disposition"]
     assert "decision_log_id" in r.text
 
 

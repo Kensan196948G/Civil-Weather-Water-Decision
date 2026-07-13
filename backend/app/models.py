@@ -4,7 +4,7 @@ PoC 簡素化: stations は site に直結（設計の site_stations 多対多�
 """
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .core.db import Base
@@ -203,10 +203,57 @@ class AppSetting(Base):
     1キー=1行で、通知設定(notify)・データ保存期間(data_retention_days)・
     ユーザー設定(user_prefs)・AI設定(ai_api_key)を保持する。value は文字列で、
     JSON設定はJSON文字列、AI APIキーは Fernet 暗号文字列（core/crypto.py）を格納する。
-    暗号強度は JWT_SECRET の秘匿に依存し、本番チェックリスト（JWT_SECRET 32B+）適用で有効化される。
+    本番では SETTINGS_ENCRYPTION_KEY 32B+ を起動時必須とし、JWT_SECRET と鍵用途を分離する。
     """
     __tablename__ = "app_settings"
     key: Mapped[str] = mapped_column(String(60), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")
     updated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class NotificationDelivery(Base):
+    """外部通知/ログ通知の配送台帳。
+
+    channel+fingerprint で同一ハザードの再送を抑止する。fingerprint は通知時刻を含めない安定キー。
+    """
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (UniqueConstraint("channel", "fingerprint",
+                                       name="uq_notification_delivery_channel_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel: Mapped[str] = mapped_column(String(30), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(255), nullable=False)
+    notification_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    severity: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+    last_sent_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_attempt_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class RevokedToken(Base):
+    """JWT失効台帳。jti単位でログアウト/緊急失効を永続化する。"""
+    __tablename__ = "revoked_tokens"
+
+    jti: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    revoked_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(String(80), default="logout")
+
+
+class LoginAttempt(Base):
+    """ログイン試行制限の永続台帳。username+client IP のハッシュキーで失敗回数を共有する。"""
+    __tablename__ = "login_attempts"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    fail_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_failed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_failed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    locked_until: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)

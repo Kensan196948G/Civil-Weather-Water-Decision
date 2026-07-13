@@ -105,6 +105,12 @@ def test_ai_key_plaintext_never_in_responses(client):
 
 
 # ---------- 暗号鍵の強度ガード（#80 high-2） ----------
+def _refresh_admin_token(client):
+    from app.core.security import create_access_token
+
+    client.headers.update({"Authorization": "Bearer " + create_access_token("U01", "admin")})
+
+
 def test_put_ai_key_rejected_when_encryption_weak(client, monkeypatch):
     from app.core import crypto
     from app.core.config import _DEFAULT_JWT_SECRET
@@ -113,6 +119,7 @@ def test_put_ai_key_rejected_when_encryption_weak(client, monkeypatch):
     monkeypatch.setattr(crypto.settings, "settings_encryption_key", "")
     monkeypatch.setattr(crypto.settings, "jwt_secret", _DEFAULT_JWT_SECRET)
     assert crypto.encryption_is_strong() is False
+    _refresh_admin_token(client)
 
     r = client.put("/api/admin/settings", json={"ai_api_key": _SECRET})
     assert r.status_code == 422
@@ -127,9 +134,77 @@ def test_put_ai_key_allowed_with_dedicated_key(client, monkeypatch):
     # JWT_SECRET が弱くても、専用鍵 SETTINGS_ENCRYPTION_KEY があれば保存できる
     monkeypatch.setattr(crypto.settings, "jwt_secret", _DEFAULT_JWT_SECRET)
     assert crypto.encryption_is_strong() is True
+    _refresh_admin_token(client)
     r = client.put("/api/admin/settings", json={"ai_api_key": _SECRET})
     assert r.status_code == 200
     assert r.json()["ai"]["configured"] is True
+
+
+def test_ai_key_encrypted_with_previous_key_is_configured_via_api(client, monkeypatch):
+    from app.core import crypto
+    from app.core.db import SessionLocal
+    from app.models import AppSetting
+
+    old_key = "old-settings-encryption-key-32bytes-minimum-value"
+    new_key = "new-settings-encryption-key-32bytes-minimum-value"
+    monkeypatch.setattr(crypto.settings, "settings_encryption_key", old_key)
+    monkeypatch.setattr(crypto.settings, "settings_encryption_previous_keys", "")
+    token = crypto.encrypt(_SECRET)
+
+    with SessionLocal() as db:
+        db.add(AppSetting(key="ai_api_key", value=token, updated_at="test", updated_by="admin"))
+        db.commit()
+
+    monkeypatch.setattr(crypto.settings, "settings_encryption_key", new_key)
+    monkeypatch.setattr(crypto.settings, "settings_encryption_previous_keys", old_key)
+    got = client.get("/api/admin/settings")
+    assert got.status_code == 200
+    assert got.json()["ai"] == {"configured": True, "masked": "****wxyz"}
+
+
+def test_put_ai_key_after_rotation_encrypts_with_current_key(client, monkeypatch):
+    from app.core import crypto
+    from app.core.db import SessionLocal
+    from app.models import AppSetting
+
+    old_key = "old-settings-encryption-key-32bytes-minimum-value"
+    new_key = "new-settings-encryption-key-32bytes-minimum-value"
+    monkeypatch.setattr(crypto.settings, "settings_encryption_key", new_key)
+    monkeypatch.setattr(crypto.settings, "settings_encryption_previous_keys", old_key)
+    r = client.put("/api/admin/settings", json={"ai_api_key": _SECRET})
+    assert r.status_code == 200
+
+    with SessionLocal() as db:
+        row = db.get(AppSetting, "ai_api_key")
+        token = row.value
+
+    assert crypto.decrypt(token) == _SECRET
+    monkeypatch.setattr(crypto.settings, "settings_encryption_key", old_key)
+    monkeypatch.setattr(crypto.settings, "settings_encryption_previous_keys", "")
+    assert crypto.decrypt(token) is None
+
+
+def test_ai_key_with_wrong_previous_key_is_unconfigured_not_500(client, monkeypatch):
+    from app.core import crypto
+    from app.core.db import SessionLocal
+    from app.models import AppSetting
+
+    old_key = "old-settings-encryption-key-32bytes-minimum-value"
+    new_key = "new-settings-encryption-key-32bytes-minimum-value"
+    wrong_old_key = "wrong-settings-encryption-key-32bytes-minimum-value"
+    monkeypatch.setattr(crypto.settings, "settings_encryption_key", old_key)
+    monkeypatch.setattr(crypto.settings, "settings_encryption_previous_keys", "")
+    token = crypto.encrypt(_SECRET)
+
+    with SessionLocal() as db:
+        db.add(AppSetting(key="ai_api_key", value=token, updated_at="test", updated_by="admin"))
+        db.commit()
+
+    monkeypatch.setattr(crypto.settings, "settings_encryption_key", new_key)
+    monkeypatch.setattr(crypto.settings, "settings_encryption_previous_keys", wrong_old_key)
+    got = client.get("/api/admin/settings")
+    assert got.status_code == 200
+    assert got.json()["ai"] == {"configured": False, "masked": None}
 
 
 # ---------- 検証エラー応答の秘密値非反射（#80 high-1） ----------

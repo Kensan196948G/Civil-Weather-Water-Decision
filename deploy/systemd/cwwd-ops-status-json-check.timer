@@ -1,0 +1,14 @@
+[Unit]
+Description=Regular Civil-Weather-Water-Decision operations status JSON snapshot check
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+
+[Timer]
+OnBootSec=8min
+OnUnitActiveSec=30min
+RandomizedDelaySec=2min
+AccuracySec=1min
+Persistent=false
+Unit=cwwd-ops-status-json-check.service
+
+[Install]
+WantedBy=timers.target

@@ -3,6 +3,7 @@ import os
 import pathlib
 
 # app インポート前にテスト用DBへ差し替え（本番DBを汚さない）＋スケジューラ無効化（ネット非依存）
+os.environ["APP_ENV"] = "local"
 os.environ["DATABASE_URL"] = "sqlite:///./_test_cw.db"
 os.environ["ENABLE_SCHEDULER"] = "false"
 os.environ["ENABLE_JMA_WARNINGS"] = "false"  # 気象庁XML取得を無効化（ネット非依存）
@@ -10,8 +11,9 @@ os.environ["ENABLE_JMA_WARNINGS"] = "false"  # 気象庁XML取得を無効化（
 # ai_api_key 保存の正常系を成立させる。弱鍵拒否は該当テストで settings を差し替えて検証。
 os.environ["SETTINGS_ENCRYPTION_KEY"] = "test-only-settings-encryption-key-32bytes-plus-000"
 _db = pathlib.Path("_test_cw.db")
-if _db.exists():
-    _db.unlink()
+for _path in (_db, pathlib.Path("_test_cw.db-wal"), pathlib.Path("_test_cw.db-shm")):
+    if _path.exists():
+        _path.unlink()
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
