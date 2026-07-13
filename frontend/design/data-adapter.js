@@ -331,9 +331,22 @@
   // LAN内運用を前提に、同一オリジン/localhost/プライベートIPのみ許可する。
   function isAllowedApiBase(v) {
     if (!v) return true; // "" = 同一オリジン
-    var m = /^https?:\/\/([^\/?#]+)$/i.exec(v); // パス・クエリ・認証情報付きは拒否
-    if (!m) return false;
-    var host = m[1].split(":")[0];
+    // 正規表現による手作業パースは "user:pass@host" の userinfo を考慮できず、
+    // 例えば "https://192.168.1.1:@evil.example" のような値を後段の split(":")[0]
+    // に通すと "192.168.1.1" を抽出してしまい許可判定を誤る（実際に fetch/ブラウザが
+    // 接続する先は @ 以降の evil.example）。実リクエストと同じ URL パーサーに判定を
+    // 委譲し、userinfo が付与されている時点で拒否する（対抗レビュー起点 #91 派生）。
+    var u;
+    try {
+      u = new URL(v);
+    } catch (e) {
+      return false;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    if (u.username || u.password) return false;
+    if (u.pathname !== "/" && u.pathname !== "") return false;
+    if (u.search || u.hash) return false;
+    var host = u.hostname;
     if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return true;
     var ipv4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
     if (!ipv4) return false;

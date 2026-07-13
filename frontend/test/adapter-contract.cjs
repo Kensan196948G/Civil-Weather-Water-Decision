@@ -204,12 +204,17 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
 
   // ---- isAllowedApiBase: ?api= 上書きによる認証情報流出対策（Token Exfiltration対応） ----
   ["", "http://localhost:8000", "http://127.0.0.1:3000", "http://192.168.1.5:8000",
-   "http://10.0.0.5", "http://172.16.0.1", "http://172.31.255.254"].forEach(function (v) {
+   "http://10.0.0.5", "http://172.16.0.1", "http://172.31.255.254",
+   "http://[::1]:3000", "http://[::1]"].forEach(function (v) {
     ok(isAllowedApiBase(v) === true, "isAllowedApiBase が許可: " + JSON.stringify(v));
   });
   ["https://evil.example", "http://evil.com", "https://8.8.8.8",
    "http://192.168.1.5/path", "http://user:pass@192.168.1.5", "javascript:alert(1)",
-   "http://172.32.0.1", "http://172.15.0.1"].forEach(function (v) {
+   "http://172.32.0.1", "http://172.15.0.1",
+   // userinfo 混入バイパス: "@" 以前はホストに見える文字列でも実際の接続先は "@" 以降
+   // （PR #92 High: isAllowedApiBase の認証情報混入バイパス）
+   "https://192.168.1.1:@evil.example", "https://localhost:@evil.example",
+   "http://10.0.0.1:x@evil.example", "https://127.0.0.1@evil.example"].forEach(function (v) {
     ok(isAllowedApiBase(v) === false, "isAllowedApiBase が拒否: " + JSON.stringify(v));
   });
 
