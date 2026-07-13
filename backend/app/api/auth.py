@@ -116,16 +116,18 @@ def login(req: LoginReq, request: Request, db: Session = Depends(get_db)):
         verify_password(req.password, DUMMY_HASH)
         valid = False
     if not valid:
-        _record_fail(db, key, normalized_username, ip_hash, now)
-        audit_add(db, None, "login_failed", f"username={req.username}")
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            retry_now = _now_ts()
-            _record_fail(db, key, normalized_username, ip_hash, retry_now)
+        # 同一 (username, ip) キーへの初回失敗が並行して複数届くと、_attempt_row が揃って
+        # 「行なし」と判定し INSERT が競合し得る。1回のリトライだけでは3並行以上で再度
+        # 競合し得るため、最大2回まで試し、それでも競合するなら記録を諦めて401を返す
+        # （試行制限の記録より401応答の確実な返却を優先。対抗レビュー #90 high-2）。
+        for _ in range(2):
+            _record_fail(db, key, normalized_username, ip_hash, _now_ts())
             audit_add(db, None, "login_failed", f"username={req.username}")
-            db.commit()
+            try:
+                db.commit()
+                break
+            except IntegrityError:
+                db.rollback()
         raise HTTPException(401, "ユーザー名またはパスワードが正しくありません")
     _clear_fail(db, key)
     token = create_access_token(user.id, user.role)

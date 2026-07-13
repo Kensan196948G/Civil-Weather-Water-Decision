@@ -59,6 +59,8 @@ def test_production_config_rejects_jwt_secret_fallback_for_settings_encryption()
         ("cors_origins", "https://cwwd.mirai-dx-platform.com/path"),
         ("cors_origins", "https://cwwd.mirai-dx-platform.com?x=1"),
         ("cors_origins", "https://user:pass@cwwd.mirai-dx-platform.com"),
+        ("cors_origins", "https://192.0.2.10"),
+        ("cors_origins", "https://[2001:db8::1]"),
     ],
 )
 def test_production_config_rejects_unsafe_operational_defaults(field, value):

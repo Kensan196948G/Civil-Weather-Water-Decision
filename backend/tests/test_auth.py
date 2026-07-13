@@ -160,6 +160,30 @@ def test_expired_login_lock_resets_failure_window(client, monkeypatch):
         assert row.locked_until is None
 
 
+def test_login_failure_survives_concurrent_insert_conflict(client, monkeypatch):
+    """並行リクエストで _attempt_row が既存行を検出できず INSERT が競合しても、
+    500 にならず確実に 401 を返すことを確認する（#90 対抗レビュー high-2）。
+
+    3並行以上での初回失敗時、_attempt_row が揃って「行なし」と判定してから
+    INSERT すると UNIQUE 制約違反 (IntegrityError) になり得る。1回のリトライ
+    だけでは再度競合し得るため、_attempt_row を常に None を返すよう固定し
+    （＝毎回「行なし」と誤認する状況を再現）、事前に同一 key の行を DB に
+    入れておくことで INSERT が必ず競合するようにし、最大2回試行後も
+    確実に 401 を返す（例外を伝播させない）ことを検証する。
+    """
+    key, username, ip_hash = auth_api._login_attempt_key("race-user", "testclient")
+    with SessionLocal() as db:
+        db.add(LoginAttempt(key=key, username=username, ip_hash=ip_hash, fail_count=1,
+                            first_failed_at=time.time(), last_failed_at=time.time(),
+                            locked_until=None, updated_at=time.time()))
+        db.commit()
+
+    monkeypatch.setattr(auth_api, "_attempt_row", lambda db, k: None)
+
+    r = client.post("/api/auth/login", json={"username": "race-user", "password": "wrong"})
+    assert r.status_code == 401
+
+
 def test_login_failure_attempt_and_audit_persist_together(client):
     before = time.time()
     r = client.post("/api/auth/login", json={"username": "audit-lock", "password": "wrong"})

@@ -1,4 +1,5 @@
 """アプリ設定（環境変数 / .env から読み込み）。詳細設計 §20 準拠。"""
+from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from pydantic import model_validator
@@ -12,7 +13,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="ignore")
 
     app_name: str = "Civil-Weather-Water-Decision"
-    app_env: str = "local"
+    # 既定値を持たせない（必須項目）。既定 "local" だと .env 読み込み漏れ・記載ミスの際に
+    # 本番相当のデプロイが気づかれないまま local 分岐（デモユーザー投入・弱鍵許容等）へ
+    # フェイルオープンしてしまう（対抗レビュー #90 critical-2）。未設定なら起動時に
+    # pydantic の ValidationError で即座に失敗させる。
+    app_env: str
     app_timezone: str = "Asia/Tokyo"
 
     # PoC は SQLite（DBサーバ不要）。本番候補は PostgreSQL に切替。
@@ -95,6 +100,13 @@ class Settings(BaseSettings):
             malformed = []
             for origin in origins:
                 parsed = urlparse(origin)
+                is_ip_literal = False
+                if parsed.hostname:
+                    try:
+                        ip_address(parsed.hostname)
+                        is_ip_literal = True
+                    except ValueError:
+                        pass
                 if (
                     parsed.scheme != "https"
                     or not parsed.netloc
@@ -104,10 +116,14 @@ class Settings(BaseSettings):
                     or parsed.fragment
                     or parsed.username
                     or parsed.password
+                    or is_ip_literal
                 ):
                     malformed.append(origin)
             if malformed:
-                raise RuntimeError("本番では CORS_ORIGINS は https オリジンのみ許可してください")
+                raise RuntimeError(
+                    "本番では CORS_ORIGINS は https のドメイン名オリジンのみ許可してください"
+                    "（IPアドレス直指定は不可。対抗レビュー #90 high-1）"
+                )
         return self
 
 
