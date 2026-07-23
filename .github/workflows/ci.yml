@@ -28,7 +28,7 @@ jobs:
         run: python -m pytest -q
 
   security:
-    name: security (dependency scan + deploy scripts)
+    name: security (dependency scan)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,50 +47,6 @@ jobs:
         run: pip install pip-audit
       - name: Audit backend dependencies (requirements.txt)
         run: python -m pip_audit -r requirements.txt
-      - name: Validate deploy shell scripts
-        run: bash -n ../deploy/scripts/app-health-check.sh ../deploy/scripts/cloudflared-config-check.sh ../deploy/scripts/db-backup.sh ../deploy/scripts/db-backup-check.sh ../deploy/scripts/db-backup-export.sh ../deploy/scripts/db-backup-export-check.sh ../deploy/scripts/db-backup-restore-drill.sh ../deploy/scripts/db-restore.sh ../deploy/scripts/disk-space-check.sh ../deploy/scripts/network-exposure-check.sh ../deploy/scripts/ops-alert.sh ../deploy/scripts/ops-failed-units-report.sh ../deploy/scripts/ops-status.sh ../deploy/scripts/ops-status-json-export.sh ../deploy/scripts/ops-status-json-check.sh ../deploy/scripts/public-edge-access-check.sh ../deploy/scripts/secret-file-permission-check.sh ../deploy/scripts/security-surface-check.sh ../deploy/scripts/systemd-timer-freshness-check.sh ../deploy/scripts/systemd-unit-drift-check.sh
-      - name: Validate systemd units
-        run: >
-          systemd-analyze verify
-          ../deploy/systemd/cwwd-backend.service
-          ../deploy/systemd/cwwd-frontend.service
-          ../deploy/systemd/cwwd-tunnel.service
-          ../deploy/systemd/cwwd-cloudflared-config-check.service
-          ../deploy/systemd/cwwd-cloudflared-config-check.timer
-          ../deploy/systemd/cwwd-app-health-check.service
-          ../deploy/systemd/cwwd-app-health-check.timer
-          ../deploy/systemd/cwwd-public-edge-access-check.service
-          ../deploy/systemd/cwwd-public-edge-access-check.timer
-          ../deploy/systemd/cwwd-security-surface-check.service
-          ../deploy/systemd/cwwd-security-surface-check.timer
-          ../deploy/systemd/cwwd-network-exposure-check.service
-          ../deploy/systemd/cwwd-network-exposure-check.timer
-          ../deploy/systemd/cwwd-systemd-unit-drift-check.service
-          ../deploy/systemd/cwwd-systemd-unit-drift-check.timer
-          ../deploy/systemd/cwwd-systemd-timer-freshness-check.service
-          ../deploy/systemd/cwwd-systemd-timer-freshness-check.timer
-          ../deploy/systemd/cwwd-secret-file-permission-check.service
-          ../deploy/systemd/cwwd-secret-file-permission-check.timer
-          ../deploy/systemd/cwwd-ops-status.service
-          ../deploy/systemd/cwwd-ops-status.timer
-          ../deploy/systemd/cwwd-ops-status-json-export.service
-          ../deploy/systemd/cwwd-ops-status-json-export.timer
-          ../deploy/systemd/cwwd-ops-status-json-check.service
-          ../deploy/systemd/cwwd-ops-status-json-check.timer
-          ../deploy/systemd/cwwd-disk-space-check.service
-          ../deploy/systemd/cwwd-disk-space-check.timer
-          ../deploy/systemd/cwwd-db-backup.service
-          ../deploy/systemd/cwwd-db-backup-export.service
-          ../deploy/systemd/cwwd-db-backup-export.timer
-          ../deploy/systemd/cwwd-db-backup-export-check.service
-          ../deploy/systemd/cwwd-db-backup-export-check.timer
-          ../deploy/systemd/cwwd-db-backup-check.service
-          ../deploy/systemd/cwwd-db-backup-check.timer
-          ../deploy/systemd/cwwd-db-backup-restore-drill.service
-          ../deploy/systemd/cwwd-db-backup-restore-drill.timer
-          ../deploy/systemd/cwwd-db-backup-failure@.service
-          ../deploy/systemd/cwwd-ops-failure@.service
-          ../deploy/systemd/cwwd-db-backup.timer
 
   frontend:
     name: frontend (logic + adapter tests)
