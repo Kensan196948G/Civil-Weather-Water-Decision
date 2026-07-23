@@ -525,9 +525,15 @@
       document.body.appendChild(screen);
 
       var sel = screen.querySelector("#cw-reg-wt");
-      adapter.workTypes().then(function (wts) {
-        sel.innerHTML = wts.map(function (w) { return '<option value="' + w.id + '">' + w.name + "</option>"; }).join("");
-      }).catch(function () { sel.innerHTML = '<option value="river">河川内作業</option>'; });
+      // 未ログイン時は /api/work-types が401になることが確定しているため取得自体を省略する
+      // （ログイン成功時は location.reload() で全体を再初期化するため、認証後は必ず再取得される）
+      if (adapter.getToken()) {
+        adapter.workTypes().then(function (wts) {
+          sel.innerHTML = wts.map(function (w) { return '<option value="' + w.id + '">' + w.name + "</option>"; }).join("");
+        }).catch(function () { sel.innerHTML = '<option value="river">河川内作業</option>'; });
+      } else {
+        sel.innerHTML = '<option value="river">河川内作業</option>';
+      }
 
       var chk = screen.querySelector('[name=river_work_flag]');
       var riverRow = screen.querySelector("#cw-reg-river");
