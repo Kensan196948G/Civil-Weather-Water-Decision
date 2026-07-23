@@ -178,9 +178,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "content-type", "content-disposition", "cache-control",
             "www-authenticate", "location",
         }
+        has_cache_control = False
         for key, value in headers.items():
             if key.lower() in passthrough:
                 self.send_header(key, value)
+                if key.lower() == "cache-control":
+                    has_cache_control = True
+        if not has_cache_control:
+            # バックエンドが Cache-Control を返さない場合でも、認証情報を含む
+            # API 応答がブラウザ/中間キャッシュに保存されないよう既定で no-store を強制する。
+            self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
