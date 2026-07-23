@@ -203,10 +203,35 @@ class AppSetting(Base):
     1キー=1行で、通知設定(notify)・データ保存期間(data_retention_days)・
     ユーザー設定(user_prefs)・AI設定(ai_api_key)を保持する。value は文字列で、
     JSON設定はJSON文字列、AI APIキーは Fernet 暗号文字列（core/crypto.py）を格納する。
-    暗号強度は JWT_SECRET の秘匿に依存し、本番チェックリスト（JWT_SECRET 32B+）適用で有効化される。
+    本番では SETTINGS_ENCRYPTION_KEY 32B+ を起動時必須とし、JWT_SECRET と鍵用途を分離する。
     """
     __tablename__ = "app_settings"
     key: Mapped[str] = mapped_column(String(60), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")
     updated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class RevokedToken(Base):
+    """JWT失効台帳。jti単位でログアウト/緊急失効を永続化する。"""
+    __tablename__ = "revoked_tokens"
+
+    jti: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    revoked_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(String(80), default="logout")
+
+
+class LoginAttempt(Base):
+    """ログイン試行制限の永続台帳。username+client IP のハッシュキーで失敗回数を共有する。"""
+    __tablename__ = "login_attempts"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    fail_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_failed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_failed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    locked_until: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import bcrypt
 import jwt
@@ -36,6 +37,7 @@ def create_access_token(sub: str, role: str) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": sub, "role": role, "iat": now,
+        "jti": uuid4().hex,
         "exp": now + timedelta(minutes=settings.jwt_expire_minutes),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
