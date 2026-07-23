@@ -1570,9 +1570,18 @@
         + '<label>パスワード</label><input name="password" type="password" autocomplete="current-password" required>'
         + '<button type="submit">ログイン</button>'
         + '<div class="cw-login-msg" id="cw-login-msg"></div>'
-        + '<div class="cw-login-hint">デモ: admin / admin123（管理者） ・ yamada / pass1234（現場管理者） ・ viewer / pass1234（閲覧）</div>'
+        + '<div class="cw-login-hint" id="cw-login-hint"></div>'
         + "</form>";
       document.body.appendChild(ov);
+      // デモ資格情報のヒントは env=local（seed.py がデモユーザーを作成する環境）でのみ表示する。
+      // 本番はデモ資格情報が存在しない/パスワードが異なり得るため、無条件表示は誤情報になる。
+      // /health は認証不要・同一オリジンで安全に参照可能。取得失敗時は表示しない（fail-closed）。
+      fetch(apiBase + "/health").then(function (r) { return r.json(); }).then(function (h) {
+        if (h && h.env === "local") {
+          var hint = ov.querySelector("#cw-login-hint");
+          if (hint) hint.textContent = "デモ: admin / admin123（管理者） ・ yamada / pass1234（現場管理者） ・ viewer / pass1234（閲覧）";
+        }
+      }).catch(function () {});
       var pill = document.createElement("div"); pill.id = "cw-user";
       pill.innerHTML = '<span id="cw-user-name"></span><button id="cw-logout">ログアウト</button>';
       (document.getElementById("cw-hdr-tools") || document.body).appendChild(pill);
