@@ -529,7 +529,13 @@
       // （ログイン成功時は location.reload() で全体を再初期化するため、認証後は必ず再取得される）
       if (adapter.getToken()) {
         adapter.workTypes().then(function (wts) {
-          sel.innerHTML = wts.map(function (w) { return '<option value="' + w.id + '">' + w.name + "</option>"; }).join("");
+          sel.innerHTML = "";
+          wts.forEach(function (w) {
+            var opt = document.createElement("option");
+            opt.value = w.id;
+            opt.textContent = w.name;
+            sel.appendChild(opt);
+          });
         }).catch(function () { sel.innerHTML = '<option value="river">河川内作業</option>'; });
       } else {
         sel.innerHTML = '<option value="river">河川内作業</option>';
