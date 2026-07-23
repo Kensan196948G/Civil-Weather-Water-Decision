@@ -318,11 +318,36 @@
     "gi"
   );
   var CAMEL_ATTR_RE = /(\s)([a-z]+[A-Z][A-Za-z0-9]*)(\s*=)/g;
+  var SVG_TEMPLATE_ATTR_SAFE_VALUES = {
+    x: "0",
+    y: "0",
+    x1: "0",
+    x2: "0",
+    y1: "0",
+    y2: "0",
+    cx: "0",
+    cy: "0",
+    width: "0",
+    height: "0",
+    d: "M 0 0",
+    points: "0,0"
+  };
+  var SVG_TEMPLATE_ATTR_RE = /(\s)(x|y|x1|x2|y1|y2|cx|cy|width|height|d|points)(=)(["'])([^"']*\{\{[^"']+\}\}[^"']*)\4/gi;
+  function encodeSvgTemplateAttrs(html) {
+    return html.replace(
+      SVG_TEMPLATE_ATTR_RE,
+      (_, sp, name, eq, q, value) => {
+        const safe = SVG_TEMPLATE_ATTR_SAFE_VALUES[name.toLowerCase()] || "0";
+        return sp + name + eq + q + safe + q + " data-dc-bind-" + name.toLowerCase() + "=" + q + value + q;
+      }
+    );
+  }
   function encodeCase(html) {
     html = html.replace(
       IMPORT_SELF_CLOSE_RE,
       (_, t, a) => "<" + t + a + "></" + t + ">"
     );
+    html = encodeSvgTemplateAttrs(html);
     html = html.replace(/<helmet(\s|>)/gi, "<sc-helmet$1");
     html = html.replace(/<\/helmet\s*>/gi, "</sc-helmet>");
     html = html.replace(
@@ -371,6 +396,11 @@
     for (const { name, value } of [...node.attributes]) {
       if (name === "sc-name" || name === "data-dc-tpl") continue;
       let key = name;
+      if (key.startsWith("data-dc-bind-")) {
+        key = key.slice("data-dc-bind-".length);
+        propGetters.push([key, compileAttr(value)]);
+        continue;
+      }
       if (key.startsWith(CAMEL_ATTR))
         key = kebabToCamel(key.slice(CAMEL_ATTR.length));
       if (key === "hint-size") {

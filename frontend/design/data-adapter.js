@@ -19,6 +19,14 @@
     var bump = opts.bump || function () {};
     var _open = opts.open || function () {};
     var CW = { sites: null, meta: null, sources: null, history: null, series: {}, stations: {}, result: null, ver: 0 };
+    var FALLBACK_WORK_TYPES = [
+      { id: "river", name: "河川内作業" },
+      { id: "concrete", name: "コンクリート打設" },
+      { id: "earthwork", name: "土工" },
+      { id: "pavement", name: "舗装" },
+      { id: "crane", name: "クレーン作業" },
+      { id: "heat", name: "暑熱作業" }
+    ];
 
     function url(p) { return base + p; }
 
@@ -145,7 +153,10 @@
         return Promise.all([loadSources(), loadHistory(), loadSeries()]);
       });
     }
-    function workTypes() { return j("/api/work-types"); }
+    function workTypes() {
+      if (!getToken()) return Promise.resolve(FALLBACK_WORK_TYPES.slice());
+      return j("/api/work-types").catch(function () { return FALLBACK_WORK_TYPES.slice(); });
+    }
     function createSite(payload) {
       return _fetch(url("/api/sites"), {
         method: "POST",
@@ -361,6 +372,13 @@
       console.warn("[CW] 許可されない API 接続先のため同一オリジンへフォールバックしました: " + apiBase);
       try { localStorage.removeItem("cw_api"); } catch (e) {}
       apiBase = "";
+    }
+    function cwShouldProbeHealth() {
+      if (apiBase) return true;
+      return !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
+    }
+    function cwHasLoginApi() {
+      return !!apiBase || !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
     }
     var cwUser = null; // ログイン中ユーザー（ロールでナビ表示・編集可否を出し分け）
     // ナビへ「現場登録」等を追加し、該当画面のときだけ注入パネルを表示する
@@ -1576,18 +1594,25 @@
       // デモ資格情報のヒントは env=local（seed.py がデモユーザーを作成する環境）でのみ表示する。
       // 本番はデモ資格情報が存在しない/パスワードが異なり得るため、無条件表示は誤情報になる。
       // /health は認証不要・同一オリジンで安全に参照可能。取得失敗時は表示しない（fail-closed）。
-      fetch(apiBase + "/health").then(function (r) { return r.json(); }).then(function (h) {
-        if (h && h.env === "local") {
-          var hint = ov.querySelector("#cw-login-hint");
-          if (hint) hint.textContent = "デモ: admin / admin123（管理者） ・ yamada / pass1234（現場管理者） ・ viewer / pass1234（閲覧）";
-        }
-      }).catch(function () {});
+      // 静的ローカル確認ではバックエンドが無く404がコンソールへ出るため、明示API指定時だけ確認する。
+      if (cwShouldProbeHealth()) {
+        fetch(apiBase + "/health").then(function (r) { return r.json(); }).then(function (h) {
+          if (h && h.env === "local") {
+            var hint = ov.querySelector("#cw-login-hint");
+            if (hint) hint.textContent = "デモ: admin / admin123（管理者） ・ yamada / pass1234（現場管理者） ・ viewer / pass1234（閲覧）";
+          }
+        }).catch(function () {});
+      }
       var pill = document.createElement("div"); pill.id = "cw-user";
       pill.innerHTML = '<span id="cw-user-name"></span><button id="cw-logout">ログアウト</button>';
       (document.getElementById("cw-hdr-tools") || document.body).appendChild(pill);
       ov.querySelector("#cw-login-form").addEventListener("submit", function (e) {
         e.preventDefault();
         var f = e.target, msg = ov.querySelector("#cw-login-msg");
+        if (!cwHasLoginApi()) {
+          msg.textContent = "ローカル静的表示ではログインできません。バックエンドURLを ?api= に指定してください。";
+          return;
+        }
         msg.textContent = "認証中…";
         adapter.login(f.username.value, f.password.value).then(function (res) {
           if (res.ok) {
