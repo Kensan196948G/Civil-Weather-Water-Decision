@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     forecast_refresh_seconds: int = 300  # 予報キャッシュも5分ごとにウォーム
     probe_timeout_seconds: int = 8
 
+    # 運用監視スナップショット（#95）。deploy/scripts/ops-status-json-export.sh が書き出す
+    # secret-free な systemd 状態JSONの読み出し元。鮮度チェックの許容秒数も併せて設定。
+    ops_status_json_path: str = "/var/lib/cwwd/ops-status.json"
+    ops_status_json_max_age_seconds: int = 3600
+
     @model_validator(mode="after")
     def _guard_production(self):
         previous_keys = [

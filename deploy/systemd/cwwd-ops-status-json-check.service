@@ -1,15 +1,13 @@
 [Unit]
-Description=Civil-Weather-Water-Decision Cloudflare Tunnel (cwwd.mirai-dx-platform.com)
+Description=Civil-Weather-Water-Decision operations status JSON snapshot check
 Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
-After=network-online.target cwwd-backend.service cwwd-frontend.service
-Wants=network-online.target cwwd-backend.service cwwd-frontend.service
+OnFailure=cwwd-ops-failure@%n.service
 
 [Service]
-Type=simple
+Type=oneshot
 User=kensan
-Restart=always
-RestartSec=5
-ExecStart=/usr/local/bin/cloudflared tunnel --config /home/kensan/.cloudflared/config-cwwd.yml run cwwd-civil-weather-water
+Group=kensan
+ExecStart=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/ops-status-json-check.sh --path /var/lib/cwwd/ops-status.json --max-age-minutes 60
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -23,15 +21,11 @@ ProtectClock=true
 ProtectHostname=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_UNIX
 LockPersonality=true
 SystemCallArchitectures=native
-MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 KeyringMode=private
 RemoveIPC=true
 UMask=0077
-
-[Install]
-WantedBy=multi-user.target

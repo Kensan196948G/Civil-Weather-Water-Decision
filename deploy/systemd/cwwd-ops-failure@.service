@@ -1,15 +1,15 @@
 [Unit]
-Description=Civil-Weather-Water-Decision Cloudflare Tunnel (cwwd.mirai-dx-platform.com)
+Description=Civil-Weather-Water-Decision ops failure alert for %i
 Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
-After=network-online.target cwwd-backend.service cwwd-frontend.service
-Wants=network-online.target cwwd-backend.service cwwd-frontend.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 User=kensan
-Restart=always
-RestartSec=5
-ExecStart=/usr/local/bin/cloudflared tunnel --config /home/kensan/.cloudflared/config-cwwd.yml run cwwd-civil-weather-water
+Group=kensan
+EnvironmentFile=-/home/kensan/.config/cwwd/ops-alert.env
+ExecStart=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/ops-alert.sh --title "CWWD ops failure: %i" --message "Failed systemd unit: %i. Check: journalctl -u %i -n 120 --no-pager" --severity alert --max-chars 3500
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -26,12 +26,8 @@ RestrictRealtime=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
 SystemCallArchitectures=native
-MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 KeyringMode=private
 RemoveIPC=true
 UMask=0077
-
-[Install]
-WantedBy=multi-user.target

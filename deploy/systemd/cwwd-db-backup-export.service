@@ -1,0 +1,40 @@
+[Unit]
+Description=Civil-Weather-Water-Decision encrypted PostgreSQL backup export
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/backup-restore.md
+After=network-online.target cwwd-db-backup.service
+Wants=network-online.target
+OnFailure=cwwd-db-backup-failure@%n.service
+
+[Service]
+Type=oneshot
+User=kensan
+Group=kensan
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision
+ExecStartPre=/usr/bin/test -f /home/kensan/.config/cwwd/backup-export.passphrase
+ExecStartPre=/usr/bin/test -r /var/backups/cwwd/postgres
+ExecStartPre=/usr/bin/test -w /var/backups/cwwd/exports
+ExecStartPre=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/disk-space-check.sh --path / --path /var/backups/cwwd/postgres --path /var/backups/cwwd/exports --root-min-free-mib 4096 --data-min-free-mib 10240 --min-free-percent 15 --min-inode-free-percent 10 --dump-size-dir /var/backups/cwwd/postgres
+ExecStart=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/db-backup-export.sh --backup-dir /var/backups/cwwd/postgres --output-dir /var/backups/cwwd/exports --passphrase-file /home/kensan/.config/cwwd/backup-export.passphrase --retention-days 30
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+RemoveIPC=true
+UMask=0077
+ReadWritePaths=/var/backups/cwwd/exports
