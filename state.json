@@ -45,7 +45,7 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 117,
+    "backend_tests_total": 167,
     "frontend_tests_total": 40,
     "security_critical": 0,
     "blocker_count": 0,
