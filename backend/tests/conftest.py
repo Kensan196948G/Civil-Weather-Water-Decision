@@ -4,6 +4,14 @@ import pathlib
 
 # app インポート前にテスト用DBへ差し替え（本番DBを汚さない）＋スケジューラ無効化（ネット非依存）
 os.environ["DATABASE_URL"] = "sqlite:///./_test_cw.db"
+# ローカル実行時、稼働中サービスの backend/.env（APP_ENV=production 等）を
+# pydantic-settings が拾ってしまい、デモユーザー未投入・JWT鍵不一致でテストが
+# 総崩れになるのを防ぐ。CI には .env が存在せずコード既定値がそのまま使われるため
+# 元々問題化しなかった（ローカル/CI 差異の解消であり本番設定には影響しない）。
+os.environ["APP_ENV"] = "local"
+# app.core.config._DEFAULT_JWT_SECRET と同じ値。test_settings_api.py の一部テストは
+# 「ログイン時点の jwt_secret がこの既定値である」前提で意図的にこの値へ monkeypatch する。
+os.environ["JWT_SECRET"] = "dev-secret-change-in-production-please-32+"
 os.environ["ENABLE_SCHEDULER"] = "false"
 os.environ["ENABLE_JMA_WARNINGS"] = "false"  # 気象庁XML取得を無効化（ネット非依存）
 # 設定暗号化の専用鍵（#80 high-2）。テストでは適正構成（32バイト以上）を既定にし、
