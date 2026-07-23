@@ -45,8 +45,8 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 117,
-    "frontend_tests_total": 40,
+    "backend_tests_total": 383,
+    "frontend_tests_total": 47,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
@@ -167,5 +167,29 @@
       85
     ],
     "prod_hardening_pending": "#2相当(APP_ENV/JWT_SECRET/SETTINGS_ENCRYPTION_KEY/ADMIN_PASSWORD/CORS)は秘密登録を伴うため人間ゲート。"
+  },
+  "session_2026_07_23_login_hint_fix": {
+    "trigger": "本番(cwwd.mirai-dx-platform.com)のブラウザコンソールログをユーザーが貼付。CSP report-only違反・SVG属性の{{ }}未解決パースエラー・/api/work-types及び/api/auth/loginの401を報告。",
+    "root_cause": "ログイン画面がデモ資格情報ヒント(admin/admin123等)を環境を問わず無条件表示していた。本番はAPP_ENV=production・ADMIN_PASSWORDがseed既定値と異なり得るため、表示されたデモ情報でのログインが401になっていた(認証機構自体は正常)。CSP/SVGパースエラーはPR#104(#99, unpkg.com CDN撤去)が別途対応済みで未マージのため今回は対象外。",
+    "fix": "frontend/design/data-adapter.js の installLoginScreen() を認証不要の GET /health を参照し env==='local' のときだけヒントを表示するよう修正(fail-closedでfetch失敗時は非表示)。",
+    "pr": 105,
+    "merge_commit": "2a73ffae8adb78f0ad801343bb3b70bbe6744d1f",
+    "merged_at": "2026-07-23T13:12:51Z",
+    "human_approval": "ユーザーが「ｙ」でマージ承認(2026-07-23)",
+    "deploy_topology_finding": "cwwd-backend/cwwd-frontend.serviceのWorkingDirectoryは本リポジトリのこのワークツリーそのもの(別ビルド成果物ディレクトリなし)。このディレクトリでのgit操作が直ちに本番へ反映される。",
+    "branch_divergence_finding": "セッション開始時に本番で稼働していたchore/state-sync-0723-test-env-fix(PR#103)は、mainからの分岐点(7b058e8, PR#100直後)以降にmainへ入った19コミット(#90 認証本番ハードニング, #92 Token Exfiltration脆弱性修正, #94 backups/.gitignore, #96 DBバックアップ自動化/ops監視基盤, #101 テスト環境分離)を含んでおらず、単に19コミット分遅れたブランチだった(意図的な機能剥奪ではない)。chore branch独自の変更はstate.json KPI更新1件のみ。",
+    "deploy_action": "ユーザー確認の上、本ディレクトリで git checkout main && git merge --ff-only origin/main を実行(7b058e8→2a73ffa, ff)。cwwd-backend/cwwd-frontendを再起動。",
+    "verification": {
+      "backend_health": "PASS ({\"status\":\"ok\",\"env\":\"production\"})",
+      "backend_readyz": "PASS (database/migrations/tables/config 全てtrue)",
+      "backend_tests": "PASS (383 passed, pytest, ローカル実行)",
+      "frontend_tests": "PASS (47 passed, adapter-contract.cjs)",
+      "live_content_match": "PASS (稼働中のdata-adapter.jsがgit HEADとバイト完全一致・cw-login-hint環境判定ロジック含む)",
+      "systemd_units_sync": "PASS (deploy/systemd/配下の3ユニットファイルは/etc/systemd/system/の実機ファイルと差分なし・再インストール不要)"
+    },
+    "residual_items": [
+      "PR#103(chore/state-sync-0723-test-env-fix)は未マージのまま。独自の差分はstate.json KPI更新のみで、今回の実測(backend 383/frontend 47)がより新しいため、そのままクローズしてよいか要検討。",
+      "PR#104(feature/frontend-static-hardening, Issue#99, CSP/unpkg.com CDN撤去)はCI green・未マージ。本番のCSP report-only違反解消にはこちらのマージが必要(今回のスコープ外)。"
+    ]
   }
 }
