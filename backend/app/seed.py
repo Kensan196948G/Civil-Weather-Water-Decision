@@ -5,8 +5,6 @@ WebUI(ClaudeDesign) のモックと同じ S01〜S06 を用い、見た目を一�
 """
 from __future__ import annotations
 
-import os
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,6 +23,7 @@ USERS = [
     ("U04", "takahashi", "高橋（安全担当）", "safety", "安全衛生", "pass1234"),
     ("U05", "viewer", "閲覧 太郎", "viewer", "経営企画", "pass1234"),
 ]
+DEMO_USER_IDS = {uid for uid, username, *_ in USERS if username != "admin"}
 
 WORK_TYPES = [
     ("river", "河川内作業", "#0e7d8f"), ("concrete", "コンクリート打設", "#7a5cc0"),
@@ -114,8 +113,31 @@ HISTORY = [
 ]
 
 
+def _sync_production_users(db: Session) -> None:
+    """既存DBでも本番管理者を同期し、local専用デモユーザーを無効化する。"""
+    admin = db.get(User, "U01")
+    if admin is None:
+        admin = User(id="U01", username="admin", display_name="システム管理者",
+                     role="admin", department="IT・DX部門", email="admin@example.com")
+        db.add(admin)
+    admin.username = "admin"
+    admin.display_name = "システム管理者"
+    admin.role = "admin"
+    admin.department = "IT・DX部門"
+    admin.email = "admin@example.com"
+    admin.password_hash = hash_password(settings.admin_password)
+    admin.is_active = True
+    for uid in DEMO_USER_IDS:
+        demo = db.get(User, uid)
+        if demo is not None:
+            demo.is_active = False
+
+
 def seed(db: Session) -> None:
+    if settings.app_env != "local":
+        _sync_production_users(db)
     if db.scalar(select(WorkType).limit(1)):
+        db.commit()
         return  # 既に投入済み
     for k, name, color in WORK_TYPES:
         db.add(WorkType(id=k, name=name, color=color))
@@ -137,18 +159,14 @@ def seed(db: Session) -> None:
     for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
         db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
                            action=act, comment=comment, decided_by=by, decided_at=dt))
-    # デモユーザー(admin/admin123 等)は local のみ。本番は環境変数の管理者だけ作成（#2）
+    # デモユーザー(admin/admin123 等)は local のみ。本番管理者は本関数冒頭の
+    # _sync_production_users() で既に同期済み（#90 対抗レビュー critical-1: ここで再度
+    # 呼ぶと同一主キー U01 の User が2件 pending になり commit 時に IntegrityError となる）。
     if settings.app_env == "local":
         for (uid, uname, disp, role, dept, pw) in USERS:
             db.add(User(id=uid, username=uname, display_name=disp, role=role,
                         department=dept, email=f"{uname}@example.com",
                         password_hash=hash_password(pw)))
-    else:
-        admin_pw = os.environ.get("ADMIN_PASSWORD")
-        if admin_pw:
-            db.add(User(id="U01", username="admin", display_name="システム管理者",
-                        role="admin", department="IT・DX部門", email="admin@example.com",
-                        password_hash=hash_password(admin_pw)))
 
     # 固定IDシード後にID採番カウンタを実データのmaxへ同期（#49: カウンタ遅延による採番衝突を防ぐ）
     def _maxnum(ids: list[str], prefix: str) -> int:
@@ -174,6 +192,8 @@ def seed(db: Session) -> None:
 
 def init_db() -> None:
     """Alembic マイグレーションを head まで適用し、サンプルを投入（冪等）。"""
+    import os
+
     from alembic import command
     from alembic.config import Config
 

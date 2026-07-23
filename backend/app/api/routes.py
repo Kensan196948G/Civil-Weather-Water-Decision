@@ -406,7 +406,7 @@ def put_settings(req: SettingsUpdate, db: Session = Depends(get_db),
             # 弱鍵のまま平文同然で保存しない（#80 high-2）。メッセージに秘密値は含めない。
             raise HTTPException(
                 422, "暗号鍵が未設定のため保存できません。"
-                     "JWT_SECRET(32バイト以上) または SETTINGS_ENCRYPTION_KEY を設定してください")
+                     "本番は SETTINGS_ENCRYPTION_KEY(32バイト以上)、local は専用鍵または強い JWT_SECRET を設定してください")
         _upsert_setting(db, _AI_KEY, crypto.encrypt(secret), user.username)
         audit_keys.append(f"{_AI_KEY}(updated)")  # マスク値も載せない（tech_manager露出防止）
     if "data_retention_days" in provided:

@@ -324,9 +324,44 @@
     };
   }
 
+  // ---- API接続先の許可判定（?api= 上書きによる認証情報の外部流出を防ぐ） ----
+  // index.html/serve.py は ?api= の値を無検証で localStorage に永続化し window.__CW_API_BASE__
+  // へ渡す。ここで弾かなければ、悪意あるURL(?api=https://evil.example)を一度開かせるだけで、
+  // 以後のログインPOSTやJWT付きAPIコールが localStorage 永続化のまま外部へ送信され続ける。
+  // LAN内運用を前提に、同一オリジン/localhost/プライベートIPのみ許可する。
+  function isAllowedApiBase(v) {
+    if (!v) return true; // "" = 同一オリジン
+    // 正規表現による手作業パースは "user:pass@host" の userinfo を考慮できず、
+    // 例えば "https://192.168.1.1:@evil.example" のような値を後段の split(":")[0]
+    // に通すと "192.168.1.1" を抽出してしまい許可判定を誤る（実際に fetch/ブラウザが
+    // 接続する先は @ 以降の evil.example）。実リクエストと同じ URL パーサーに判定を
+    // 委譲し、userinfo が付与されている時点で拒否する（対抗レビュー起点 #91 派生）。
+    var u;
+    try {
+      u = new URL(v);
+    } catch (e) {
+      return false;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    if (u.username || u.password) return false;
+    if (u.pathname !== "/" && u.pathname !== "") return false;
+    if (u.search || u.hash) return false;
+    var host = u.hostname;
+    if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return true;
+    var ipv4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
+    if (!ipv4) return false;
+    var a = +ipv4[1], b = +ipv4[2];
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+
   // ---- ブラウザ自動起動 ----
   if (typeof window !== "undefined" && window.document) {
     var apiBase = window.__CW_API_BASE__ != null ? window.__CW_API_BASE__ : "";
+    if (!isAllowedApiBase(apiBase)) {
+      console.warn("[CW] 許可されない API 接続先のため同一オリジンへフォールバックしました: " + apiBase);
+      try { localStorage.removeItem("cw_api"); } catch (e) {}
+      apiBase = "";
+    }
     var cwUser = null; // ログイン中ユーザー（ロールでナビ表示・編集可否を出し分け）
     // ナビへ「現場登録」等を追加し、該当画面のときだけ注入パネルを表示する
     var regInst = null;
@@ -1655,7 +1690,7 @@
 
   // ---- Node からのテスト用 export ----
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { createAdapter: createAdapter };
+    module.exports = { createAdapter: createAdapter, isAllowedApiBase: isAllowedApiBase };
   }
   global.__cwCreateAdapter = createAdapter;
 })(typeof globalThis !== "undefined" ? globalThis : this);
