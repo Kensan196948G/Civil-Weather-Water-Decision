@@ -20,6 +20,30 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    bind = op.get_bind()
+    if bind.dialect.has_table(bind, "notification_deliveries"):
+        # 本番では create_all（init_db）由来で既に存在し得る（2026-08-01 実機確認）。
+        # alembic は upgrade 成功後に revision を記録するため、スキップでも履歴は整合する。
+        # スキーマ整合の最低担保として一意制約だけ確認・補完する。
+        inspector = sa.inspect(bind)
+        # SQLite は名前付きテーブル制約を inspector に返さないため、
+        # 一意制約（constraint）と一意インデックスの両方を検出対象にする。
+        unique_names = {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints("notification_deliveries")
+        }
+        unique_names.update(
+            index["name"]
+            for index in inspector.get_indexes("notification_deliveries")
+            if index.get("unique")
+        )
+        if "uq_notification_delivery_channel_fingerprint" not in unique_names:
+            op.create_unique_constraint(
+                "uq_notification_delivery_channel_fingerprint",
+                "notification_deliveries",
+                ["channel", "fingerprint"],
+            )
+        return
     op.create_table(
         'notification_deliveries',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -41,4 +65,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_table('notification_deliveries')
+    if op.get_bind().dialect.has_table(op.get_bind(), "notification_deliveries"):
+        op.drop_table('notification_deliveries')

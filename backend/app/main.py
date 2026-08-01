@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from .api.auth import router as auth_router
 from .api.routes import router
+from .core import readiness
 from .core.config import settings
 from .seed import init_db
 
@@ -65,6 +66,13 @@ async def _validation_error(request: Request, exc: RequestValidationError):
 @app.get("/health")
 def health():
     return {"status": "ok", "app": settings.app_name, "env": settings.app_env}
+
+
+@app.get("/readyz")
+def readyz():
+    payload = readiness.check_readiness()
+    status_code = 200 if payload["status"] == "ok" else 503
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 app.include_router(auth_router, prefix="/api")  # /api/auth/* は公開（ログイン）

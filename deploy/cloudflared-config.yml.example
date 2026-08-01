@@ -26,8 +26,32 @@ credentials-file: /home/<service-user>/.cloudflared/<TUNNEL_ID>.json
 ingress:
   # 例: バックエンドAPIを /api/* にパス分割する場合（先着マッチのため上に置く）
   - hostname: cwwd.mirai-dx-platform.com
-    path: /api/*
+    path: ^/api(/.*)?$
     service: http://localhost:<BACKEND_PORT>
+
+  # /health は /api 外のバックエンドプロセス応答確認用
+  - hostname: cwwd.mirai-dx-platform.com
+    path: ^/health$
+    service: http://localhost:<BACKEND_PORT>
+
+  # /readyz は DB/Alembic/主要テーブル確認用（/api 外のため個別ルール）
+  - hostname: cwwd.mirai-dx-platform.com
+    path: ^/readyz$
+    service: http://localhost:<BACKEND_PORT>
+
+  # 本番では FastAPI docs/OpenAPI を無効化し、frontend fallback / backend origin に流さず edge 404 にする
+  - hostname: cwwd.mirai-dx-platform.com
+    path: ^/docs$
+    service: http_status:404
+  - hostname: cwwd.mirai-dx-platform.com
+    path: ^/docs/.*$
+    service: http_status:404
+  - hostname: cwwd.mirai-dx-platform.com
+    path: ^/redoc$
+    service: http_status:404
+  - hostname: cwwd.mirai-dx-platform.com
+    path: ^/openapi\.json$
+    service: http_status:404
 
   # フロントエンド（それ以外の全パス）
   - hostname: cwwd.mirai-dx-platform.com

@@ -1,11 +1,36 @@
 """認証・RBAC・監査ログのテスト（設計§12/§13）。"""
+from datetime import datetime, timedelta, timezone
+import time
+
+import jwt
+from sqlalchemy import select
 from conftest import login_token
+from app.api import auth as auth_api
+from app.core.config import settings
+from app.core.db import SessionLocal
+from app.core.security import decode_token
+from app.models import AuditLog, LoginAttempt, RevokedToken
+
+
+def _attempt_key(username: str, ip: str = "testclient") -> str:
+    return auth_api._login_attempt_key(username, ip)[0]
 
 
 def test_login_ok(client):
     r = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
     assert r.status_code == 200
     assert r.json()["user"]["role"] == "admin" and r.json()["token"]
+    assert decode_token(r.json()["token"])["jti"]
+
+
+def test_login_token_contains_unique_jti(client):
+    a = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"}).json()["token"]
+    b = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"}).json()["token"]
+    pa, pb = decode_token(a), decode_token(b)
+
+    assert pa["sub"] == pb["sub"] == "U05"
+    assert pa["jti"] and pb["jti"] and pa["jti"] != pb["jti"]
+    assert pa["exp"] and pb["exp"]
 
 
 def test_login_bad_password(client):
@@ -79,3 +104,161 @@ def test_login_lockout(client):
         client.post("/api/auth/login", json={"username": "attacker", "password": "x"})
     r = client.post("/api/auth/login", json={"username": "attacker", "password": "x"})
     assert r.status_code == 429
+    with SessionLocal() as db:
+        row = db.get(LoginAttempt, _attempt_key("attacker"))
+        assert row.fail_count == 5
+        assert row.locked_until and row.locked_until > time.time()
+
+
+def test_login_lockout_is_per_client_ip(client):
+    headers_a = {"CF-Connecting-IP": "203.0.113.10"}
+    headers_b = {"CF-Connecting-IP": "203.0.113.11"}
+    for _ in range(5):
+        client.post("/api/auth/login", json={"username": "admin", "password": "wrong"},
+                    headers=headers_a)
+
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "admin123"},
+                       headers=headers_a).status_code == 429
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "admin123"},
+                       headers=headers_b).status_code == 200
+
+
+def test_successful_login_clears_login_attempt_row(client):
+    headers = {"CF-Connecting-IP": "203.0.113.20"}
+    for _ in range(2):
+        client.post("/api/auth/login", json={"username": "viewer", "password": "wrong"},
+                    headers=headers)
+
+    key = _attempt_key("viewer", "203.0.113.20")
+    with SessionLocal() as db:
+        assert db.get(LoginAttempt, key).fail_count == 2
+
+    r = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"},
+                    headers=headers)
+    assert r.status_code == 200
+    with SessionLocal() as db:
+        assert db.get(LoginAttempt, key) is None
+
+
+def test_expired_login_lock_resets_failure_window(client, monkeypatch):
+    base = 1_783_900_000.0
+    key, username, ip_hash = auth_api._login_attempt_key("expired-lock", "203.0.113.30")
+    with SessionLocal() as db:
+        db.add(LoginAttempt(key=key, username=username, ip_hash=ip_hash, fail_count=5,
+                            first_failed_at=base, last_failed_at=base,
+                            locked_until=base + auth_api._LOCK_SECONDS,
+                            updated_at=base))
+        db.commit()
+
+    monkeypatch.setattr(auth_api, "_now_ts", lambda: base + auth_api._LOCK_SECONDS + 1)
+    r = client.post("/api/auth/login", json={"username": "expired-lock", "password": "wrong"},
+                    headers={"CF-Connecting-IP": "203.0.113.30"})
+    assert r.status_code == 401
+    with SessionLocal() as db:
+        row = db.get(LoginAttempt, key)
+        assert row.fail_count == 1
+        assert row.locked_until is None
+
+
+def test_login_failure_survives_concurrent_insert_conflict(client, monkeypatch):
+    """並行リクエストで _attempt_row が既存行を検出できず INSERT が競合しても、
+    500 にならず確実に 401 を返すことを確認する（#90 対抗レビュー high-2）。
+
+    3並行以上での初回失敗時、_attempt_row が揃って「行なし」と判定してから
+    INSERT すると UNIQUE 制約違反 (IntegrityError) になり得る。1回のリトライ
+    だけでは再度競合し得るため、_attempt_row を常に None を返すよう固定し
+    （＝毎回「行なし」と誤認する状況を再現）、事前に同一 key の行を DB に
+    入れておくことで INSERT が必ず競合するようにし、最大2回試行後も
+    確実に 401 を返す（例外を伝播させない）ことを検証する。
+    """
+    key, username, ip_hash = auth_api._login_attempt_key("race-user", "testclient")
+    with SessionLocal() as db:
+        db.add(LoginAttempt(key=key, username=username, ip_hash=ip_hash, fail_count=1,
+                            first_failed_at=time.time(), last_failed_at=time.time(),
+                            locked_until=None, updated_at=time.time()))
+        db.commit()
+
+    monkeypatch.setattr(auth_api, "_attempt_row", lambda db, k: None)
+
+    r = client.post("/api/auth/login", json={"username": "race-user", "password": "wrong"})
+    assert r.status_code == 401
+
+
+def test_login_failure_attempt_and_audit_persist_together(client):
+    before = time.time()
+    r = client.post("/api/auth/login", json={"username": "audit-lock", "password": "wrong"})
+    assert r.status_code == 401
+    with SessionLocal() as db:
+        row = db.get(LoginAttempt, _attempt_key("audit-lock"))
+        audit = db.scalar(select(AuditLog)
+                          .where(AuditLog.action == "login_failed")
+                          .where(AuditLog.message == "username=audit-lock")
+                          .order_by(AuditLog.id.desc()))
+        assert row and row.fail_count == 1 and row.updated_at >= before
+        assert audit is not None
+
+
+def test_logout_revokes_current_token(client):
+    r = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+    tok = r.json()["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+
+    assert client.get("/api/auth/me", headers=h).status_code == 200
+    out = client.post("/api/auth/logout", headers=h)
+    assert out.status_code == 200 and out.json()["revoked"] is True
+    assert client.get("/api/auth/me", headers=h).status_code == 401
+
+
+def test_logout_does_not_revoke_other_sessions(client):
+    a = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"}).json()["token"]
+    b = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"}).json()["token"]
+
+    assert client.post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"}).status_code == 200
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {a}"}).status_code == 401
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {b}"}).status_code == 200
+
+
+def test_logout_persists_revocation_row(client):
+    tok = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"}).json()["token"]
+    payload = decode_token(tok)
+
+    assert client.post("/api/auth/logout",
+                       headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+
+    with SessionLocal() as db:
+        row = db.get(RevokedToken, payload["jti"])
+        assert row.user_id == payload["sub"]
+        assert row.reason == "logout"
+        assert row.expires_at == payload["exp"]
+
+
+def test_revoked_jti_is_rejected_by_dependency(client):
+    tok = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"}).json()["token"]
+    payload = decode_token(tok)
+    with SessionLocal() as db:
+        db.add(RevokedToken(jti=payload["jti"], user_id=payload["sub"],
+                            revoked_at=time.time(), expires_at=payload["exp"],
+                            reason="test"))
+        db.commit()
+
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
+
+
+def test_token_without_jti_is_rejected(client):
+    now = datetime.now(timezone.utc)
+    token = jwt.encode({
+        "sub": "U05",
+        "role": "viewer",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+    }, settings.jwt_secret, algorithm="HS256")
+
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+
+def test_logout_is_idempotent_for_already_revoked_token(client):
+    tok = client.post("/api/auth/login", json={"username": "viewer", "password": "pass1234"}).json()["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+
+    assert client.post("/api/auth/logout", headers=h).status_code == 200
+    assert client.post("/api/auth/logout", headers=h).status_code == 200

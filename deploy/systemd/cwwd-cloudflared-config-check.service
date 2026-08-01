@@ -1,0 +1,32 @@
+[Unit]
+Description=Civil-Weather-Water-Decision Cloudflare Tunnel config check
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+OnFailure=cwwd-ops-failure@%n.service
+
+[Service]
+Type=oneshot
+User=kensan
+Group=kensan
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision
+ExecStart=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/cloudflared-config-check.sh --config /home/kensan/.cloudflared/config-cwwd.yml --hostname cwwd.mirai-dx-platform.com --tunnel-id 07c9bda3-b4ad-46ae-8401-4b677de3c8a4 --backend-port 55019 --frontend-port 34979
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
