@@ -245,11 +245,14 @@
       "pr_104": "PR #108マージ時に自動クローズ（内容包含済み）",
       "closed_issues": [
         "#56 branch protection",
-        "#80 設定API（PR #82実装を実機確認）",
+        "#80 設定API",
         "#87 陳腐化",
-        "#99 フロント静的ハードニング（#108で解決）"
+        "#97 通知配信ハードニング",
+        "#99 フロント静的ハードニング"
       ],
-      "production_head": "main 2f6128e917120e06a3a54bdb427a080869f30cc2（ワーキングツリー=本番、ファイル一致確認済み）"
+      "production_head": "main e8ef091fa6621688f00de856101d330f3d5e538e（#98マージ後・backend再起動済み）",
+      "merged_110": "PR #110 MERGED (merge commit e5236833e148057a045b596aff0b27beee222fad)",
+      "merged_98": "PR #98 MERGED (merge commit e8ef091fa6621688f00de856101d330f3d5e538e)"
     },
     "residual": [
       "PR #98 は#108マージ後にmainを再取り込みしCI green確認後にマージ（migration冪等化fix済み）",
@@ -257,6 +260,13 @@
       "通知の外部dispatchはPR #98で実装済み・マージ待ち。ops-alert webhook URLは未設定（journaldのみ）",
       "水防災オープンデータは契約制のため未接続（設計どおり明示中）",
       "16:37-16:56 JSTの一時的なNeon/tunnel接続タイムアウトは以降再発なし（継続監視）"
-    ]
+    ],
+    "post_merge_verification": {
+      "migration": "PASS (alembic upgrade g7c8d9e0f1a2 -> f2a4d6c8e9b1 適用済み、notification_deliveries既存26行保持)",
+      "notification_dispatch": "PASS (再起動直後にseverity>=2の8件を配送台帳へlog記録、latest 20:32:40、重複抑止TTL 1h動作)",
+      "readyz": "PASS (database/migrations/tables/config true)",
+      "main_ci": "PASS (#110/#98マージ後のmain CI green)",
+      "ops": "PASS (failed units 0, ops-status ok, edge 302)"
+    }
   }
 }
