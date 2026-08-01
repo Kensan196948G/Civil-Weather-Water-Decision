@@ -223,18 +223,33 @@
       "ci_main": "PASS (直近CI all green)",
       "real_restore_drill": "PASS (本番dumpをPG18一時クラスタへdb-restore.shで復元: 全18テーブル・行数・alembic_version一致, PG16ではtransaction_timeout非対応のため不可→PG17+要件を文書化)",
       "ci_pr_108": "PASS (全6チェック, head aac584e)",
-      "ci_pr_109": "PASS (全6チェック, head dcb393b)"
+      "ci_pr_109": "PASS (全6チェック, head dcb393b)",
+      "export_decrypt_check": "PASS (cwwd-db-backup-export-check: checksum+decrypt_list ok, age 2186s)",
+      "settings_api": "PASS (GET /api/admin/settings 200: ai/data_retention_days/notify/user_prefs)",
+      "latency": "health p95=2ms / api-sites med=1000ms / readyz med=1790ms / Neon RTT pooler=181ms direct=229ms (us-east-2地理的要因・許容範囲)",
+      "capacity": "Neon DB合計8.2MB（最大テーブルlogin_attempts 56kB）・容量余裕",
+      "ci_main_after_merges": "PASS (#108/#109マージ後のmain CI green)"
     },
     "github_actions": {
       "branch": "fix/ops-stabilization-20260801",
       "absorbs_pr": "PR #104 (feature/frontend-static-hardening) のコミットを包含。マージ後に#104はclose予定",
       "pr_87": "chore/state-sync-0712-deployed は#106等で陳腐化のためclose予定",
-      "pr_98": "notification hardening は別PRのまま維持（本PRでは取り込まない）",
+      "pr_98": "main再取り込み済み(head 9e0ffc1)・CI全5チェックPASS・Ready for Review・マージ判定待ち",
       "branch_protection": "有効化済み (PR必須/5 CI checks strict/enforce_admins/force push・削除禁止)",
       "pr": "PR #108 (fix/ops-stabilization-20260801) CI全6チェックPASS・mergeable",
       "pr_109": "ci/node20-actions-update: checkout v5 / setup-python v6 / setup-node v5 / node 22 LTS。ops-stabilization(#108)をマージ済みで必須チェック5種+e2eを満たし、CI全PASS・mergeable CLEAN",
       "pr_98_review": "対抗レビュー実施: notification_deliveries migrationは本番既存テーブル(create_all由来26行)で失敗するため冪等化fixをcommit 24dfec9で反映(回帰テスト3件追加、ブランチ391テストPASS)。#108マージ後にmain再取り込みしてからマージする方針",
-      "project_41": "開発司令盤にPR #108/#109の項目を追加"
+      "project_41": "開発司令盤にPR #108/#109の項目を追加",
+      "merged_108": "PR #108 MERGED (merge commit 1ef671707f2283e511397cd6d021ac6ec9865ede, 2026-08-01, ユーザーY承認)",
+      "merged_109": "PR #109 MERGED (merge commit 2f6128e917120e06a3a54bdb427a080869f30cc2, 2026-08-01)",
+      "pr_104": "PR #108マージ時に自動クローズ（内容包含済み）",
+      "closed_issues": [
+        "#56 branch protection",
+        "#80 設定API（PR #82実装を実機確認）",
+        "#87 陳腐化",
+        "#99 フロント静的ハードニング（#108で解決）"
+      ],
+      "production_head": "main 2f6128e917120e06a3a54bdb427a080869f30cc2（ワーキングツリー=本番、ファイル一致確認済み）"
     },
     "residual": [
       "PR #98 は#108マージ後にmainを再取り込みしCI green確認後にマージ（migration冪等化fix済み）",
