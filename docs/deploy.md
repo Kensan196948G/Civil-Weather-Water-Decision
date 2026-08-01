@@ -6,8 +6,10 @@
 
 `.github/workflows/ci.yml` が push / PR(main) で実行:
 - **backend**: `ruff check`（重大ルール）＋ `pytest`（スケジューラ/外部XMLは無効・ネット非依存）
-- **frontend**: `node logic-smoke.mjs` / `node adapter-contract.cjs`
-- **docker-build**: backend / frontend イメージのビルド確認
+- **frontend**: `node logic-smoke.mjs` / `node adapter-contract.cjs` / `api-config-policy.cjs` /
+  `cdn-policy.cjs` / `vendor-assets-policy.cjs` / `python serve-proxy-policy.py`
+- **e2e-smoke**: Playwright Firefox で local backend/frontend を起動しログイン〜運用状態表示〜ログアウトを確認
+- **docker-build**: `docker compose config` 検証＋ backend / frontend イメージのビルド確認
 
 ## ローカル / 検証（Docker Compose）
 
@@ -47,29 +49,33 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - [x] Cloudflare Tunnel 作成・DNS ルーティング（`cloudflared tunnel route dns` ― 人間実行、2026-07-12）
 - [x] state.json への `deploy_plan.public_url` 反映
 - [x] backend/frontend/tunnel の systemd 常駐化（2026-07-12 適用済み・Issue #77。
-      `cwwd-backend` 0.0.0.0:55019 / `cwwd-frontend` 0.0.0.0:34979 / `cwwd-tunnel`。
+      `cwwd-backend` 127.0.0.1:55019 / `cwwd-frontend` 127.0.0.1:34979 / `cwwd-tunnel`。
       OS起動時に3点セット自動起動。unit 実体の正本は `deploy/systemd/`）
-- [ ] `CORS_ORIGINS` を `https://cwwd.mirai-dx-platform.com` に更新
+- [x] `CORS_ORIGINS` を `https://cwwd.mirai-dx-platform.com` に更新（backend/.env、2026-07-23 適用済み）
 - [x] エッジ側アクセス制御: Cloudflare Access アプリ `cwwd` / ポリシー `CWWD`
       （allow: `mirai-const.co.jp` ドメイン or 管理者メール、2026-07-12 人間作成・302リダイレクト実測確認済み）
-- [ ] 本番チェックリスト適用（下記）。`APP_ENV=local` のままだがデモ資格情報への第三者到達は
-      Access で遮断済み。多層防御の完成にはチェックリスト適用が引き続き必要
+- [x] 本番チェックリスト適用（下記。`APP_ENV=production` / `JWT_SECRET` / `SETTINGS_ENCRYPTION_KEY` /
+      `ADMIN_PASSWORD` / `CORS_ORIGINS` を backend/.env に設定済み。秘密値は表示しない）
+- [x] フロントエンド静的配信のハードニング（2026-08-01: セキュリティヘッダ / CSP report-only /
+      CDN→vendor self-host / 同一オリジン /api proxy / loopback bind。PR #104 相当を包含）
+- [x] backend API のセキュリティヘッダ付与と本番 docs 無効化（2026-08-01）
+- [x] DBバックアップ自動化の障害復旧（2026-08-01: db-backup.env の認証情報を現行へ同期し、日次ダンプ再開）
 
 ## 本番デプロイ前チェックリスト（必須）
 
 セキュリティ・ハードニングで起動ガードを実装済み。**以下を満たさないと本番(APP_ENV≠local)では起動失敗する**。
 
-- [ ] `APP_ENV=production`
-- [ ] `JWT_SECRET` を 32バイト以上のランダム値で設定（未設定/既定値は起動失敗）
-- [ ] `SETTINGS_ENCRYPTION_KEY`（AI APIキー等の設定値暗号化専用鍵、32バイト以上）を推奨設定。
+- [x] `APP_ENV=production`
+- [x] `JWT_SECRET` を 32バイト以上のランダム値で設定（未設定/既定値は起動失敗）
+- [x] `SETTINGS_ENCRYPTION_KEY`（AI APIキー等の設定値暗号化専用鍵、32バイト以上）を推奨設定。
       未設定でも `JWT_SECRET`（32バイト以上）から鍵導出するが、専用鍵の方が鍵ローテーションを
       認証トークンと分離できる。**専用鍵も `JWT_SECRET` も実用強度に満たない場合、設定画面からの
       AI APIキー保存は 422 で拒否される**（`crypto.encryption_is_strong` / #80 high-2）
-- [ ] `ENABLE_AUTH=true`（false は起動失敗）
-- [ ] `ADMIN_PASSWORD` を設定（本番は初期管理者のみ作成。デモユーザーは local 限定）
-- [ ] `DATABASE_URL` を PostgreSQL に（`alembic upgrade head` は起動時自動）
-- [ ] `CORS_ORIGINS` を本番フロントのオリジンに限定（`*` をやめる）
-- [ ] HTTPS 終端（リバースプロキシ / マネージド）
+- [x] `ENABLE_AUTH=true`（false は起動失敗）
+- [x] `ADMIN_PASSWORD` を設定（本番は初期管理者のみ作成。デモユーザーは local 限定）
+- [x] `DATABASE_URL` を PostgreSQL（Neon）に（`alembic upgrade head` は起動時自動）
+- [x] `CORS_ORIGINS` を本番フロントのオリジンに限定（`*` をやめる）
+- [x] HTTPS 終端（Cloudflare Tunnel / Access）
 - [ ] `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL`（通知を外部送信する場合）
 - [ ] Codex 対抗レビュー（認証/認可・DBスキーマ。CLAUDE.md 必須）
 
@@ -78,5 +84,4 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - Entra ID OIDC（簡易認証からの差し替え, §12）
 - 通知の定期ディスパッチ（スケジューラから `notifications.dispatch`）
 - トークン失効リスト、ログイン試行のRedis集約
-- バックアップ/リストア手順（DBダンプ, §17）、E2Eテスト
-- CDN（React/Leaflet/Fonts）の self-host（オフライン/プロキシ環境）
+- GitHub branch protection（main への直接push防止。Issue #56 で対応中）

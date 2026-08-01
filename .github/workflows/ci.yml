@@ -60,12 +60,38 @@ jobs:
         run: node frontend/test/logic-smoke.mjs
       - name: Adapter contract test
         run: node frontend/test/adapter-contract.cjs
+      - name: API config policy test
+        run: node frontend/test/api-config-policy.cjs
+      - name: Serve proxy policy test
+        run: python3 frontend/test/serve-proxy-policy.py
+      - name: CDN policy test
+        run: node frontend/test/cdn-policy.cjs
+      - name: Vendor asset policy test
+        run: node frontend/test/vendor-assets-policy.cjs
 
-  docker-build:
-    name: docker build (smoke)
+  e2e-smoke:
+    name: e2e smoke (browser login)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install backend/test deps
+        run: pip install -r backend/requirements.txt playwright
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps firefox
+      - name: Browser E2E smoke
+        run: python frontend/test/e2e_smoke.py
+
+  docker-build:
+    name: docker compose + build (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate compose config
+        run: POSTGRES_PASSWORD=ci-local-only docker compose config --quiet
       - name: Build backend image
         run: docker build -t cwwd-backend ./backend
       - name: Build frontend image
