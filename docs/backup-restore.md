@@ -125,6 +125,27 @@ journalctl -u cwwd-db-backup.service -n 100 --no-pager
 sudo systemctl start cwwd-db-backup.service
 ```
 
+#### 障害例: `password authentication failed` で日次ダンプが失敗し続ける
+
+`db-backup.env` の `DATABASE_URL_DIRECT` に古いパスワードが残っていると、バックエンド（`backend/.env`）は
+正常でもバックアップだけ失敗し続けます（2026-07-23〜08-01 に実機で発生。7/13 以降 19 日間ダンプなし）。
+
+対処（秘密値は画面やログへ出力しないこと）:
+
+```bash
+# 1) backend/.env の現行 DATABASE_URL_DIRECT を同期（同一ホスト・ユーザー・DB であることを確認してから）
+#    python3 等でパスワード文字列を表示せずに db-backup.env へ書き換える
+chmod 600 /home/kensan/.config/cwwd/db-backup.env
+# 2) 即時実行して確認
+sudo systemctl start cwwd-db-backup.service
+sudo systemctl start cwwd-db-backup-export.service
+sudo systemctl start cwwd-db-backup-check.service
+sudo systemctl start cwwd-db-backup-restore-drill.service
+systemctl show cwwd-db-backup.service -p Result
+```
+
+`Result=success` になり、`/var/backups/cwwd/postgres/cwwd-*.dump` のタイムスタンプが更新されれば復旧完了です。
+
 ### 暗号化 Export
 
 `cwwd-db-backup-export.timer` が日次 backup window 後に最新 valid dump と `.sha256` を 1つの tar にまとめ、
