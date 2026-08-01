@@ -4,7 +4,7 @@ PoC 簡素化: stations は site に直結（設計の site_stations 多対多�
 """
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .core.db import Base
@@ -235,3 +235,25 @@ class LoginAttempt(Base):
     last_failed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     locked_until: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class NotificationDelivery(Base):
+    """外部通知/ログ通知の配送台帳。
+
+    channel+fingerprint で同一ハザードの再送を抑止する。fingerprint は通知時刻を含めない安定キー。
+    """
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (UniqueConstraint("channel", "fingerprint",
+                                       name="uq_notification_delivery_channel_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel: Mapped[str] = mapped_column(String(30), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(255), nullable=False)
+    notification_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    severity: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+    last_sent_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_attempt_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")

@@ -2,6 +2,7 @@
 
 - probe_sources: データソース実プローブ（status を動的更新）
 - refresh_forecasts: Open-Meteo 予報キャッシュをウォーム（ダッシュボードを最新化）
+- dispatch_notifications: 高severity通知を外部Webhook/ログへ送信（重複抑止あり）
 
 テストでは settings.enable_scheduler=false により起動しない。
 """
@@ -17,6 +18,7 @@ from .core.db import SessionLocal
 from .models import Site
 from .services import assessment
 from .services.data_collectors.source_probe import probe_all
+from .services.notifications import build_current_notifications, dispatch
 
 _scheduler = None
 _client: httpx.AsyncClient | None = None
@@ -34,6 +36,12 @@ async def _forecast_job() -> None:
         await assessment.assess_all(list(sites))
 
 
+async def _notification_job() -> None:
+    with SessionLocal() as db:
+        notifs = await build_current_notifications(db)
+        await dispatch(db, notifs, client=_client)
+
+
 def start():
     """AsyncIOScheduler を起動（イベントループ実行中に呼ぶ）。"""
     global _scheduler, _client
@@ -48,6 +56,8 @@ def start():
                 next_run_time=soon, id="probe_sources", max_instances=1, coalesce=True)
     sch.add_job(_forecast_job, "interval", seconds=settings.forecast_refresh_seconds,
                 id="refresh_forecasts", max_instances=1, coalesce=True)
+    sch.add_job(_notification_job, "interval", seconds=settings.notification_dispatch_seconds,
+                next_run_time=soon, id="dispatch_notifications", max_instances=1, coalesce=True)
     sch.start()
     _scheduler = sch
     return sch

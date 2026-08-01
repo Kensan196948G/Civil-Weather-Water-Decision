@@ -1,4 +1,12 @@
-"""通知導出のテスト（設計§14）。"""
+"""通知導出・ディスパッチのテスト（設計§14）。"""
+import json
+
+import pytest
+from sqlalchemy import select
+
+from app.core.db import SessionLocal
+from app.models import AppSetting, NotificationDelivery
+from app.services import notifications
 from app.services.notifications import build_notifications
 
 
@@ -26,3 +34,142 @@ def test_build_notifications_derives_from_cards_and_sources():
     assert all(n.get("disclaimer") for n in ns)
     # OK ソース・通常現場は通知を生まない
     assert not any(n["id"] == "src-DS-Z" for n in ns)
+
+
+def _notif(time="08:00", severity=2):
+    return {"id": "risk-S01", "kind": "risk", "siteId": "S01", "severity": severity,
+            "title": "中止検討", "message": "現場A：洪水情報", "time": time}
+
+
+def _clear_notification_state(db):
+    db.query(NotificationDelivery).delete()
+    db.query(AppSetting).filter(AppSetting.key == "notify").delete()
+    db.commit()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_logs_high_severity_and_suppresses_duplicates(client, monkeypatch):
+    monkeypatch.setattr(notifications.settings, "slack_webhook_url", "")
+    monkeypatch.setattr(notifications.settings, "teams_webhook_url", "")
+    monkeypatch.setattr(notifications.settings, "notification_dedup_seconds", 3600)
+
+    with SessionLocal() as db:
+        _clear_notification_state(db)
+        first = await notifications.dispatch(db, [_notif(), _notif(severity=1)], now=100.0)
+        second = await notifications.dispatch(db, [_notif(time="08:05")], now=200.0)
+
+        rows = db.scalars(select(NotificationDelivery)).all()
+
+    assert first == {"sent": 0, "logged": 1, "suppressed": 0, "failed": 0}
+    assert second == {"sent": 0, "logged": 0, "suppressed": 1, "failed": 0}
+    assert len(rows) == 1 and rows[0].channel == "log"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_ttl_expiry_allows_repeat(client, monkeypatch):
+    monkeypatch.setattr(notifications.settings, "notification_dedup_seconds", 10)
+
+    with SessionLocal() as db:
+        _clear_notification_state(db)
+        first = await notifications.dispatch(db, [_notif()], now=100.0)
+        second = await notifications.dispatch(db, [_notif()], now=105.0)
+        third = await notifications.dispatch(db, [_notif()], now=111.0)
+
+    assert first["logged"] == 1
+    assert second["suppressed"] == 1
+    assert third["logged"] == 1
+
+
+class _Resp:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+
+class _FailingClient:
+    def __init__(self):
+        self.calls = 0
+
+    async def post(self, url, json):
+        self.calls += 1
+        return _Resp(500)
+
+
+@pytest.mark.asyncio
+async def test_failed_webhook_is_not_marked_sent_and_retries(client, monkeypatch):
+    monkeypatch.setattr(notifications.settings, "slack_webhook_url", "https://hooks.example/slack")
+    monkeypatch.setattr(notifications.settings, "teams_webhook_url", "")
+    monkeypatch.setattr(notifications.settings, "notification_dedup_seconds", 3600)
+
+    with SessionLocal() as db:
+        _clear_notification_state(db)
+        db.add(AppSetting(key="notify", value=json.dumps({"slack_enabled": True,
+                                                          "teams_enabled": False}),
+                          updated_at="now", updated_by="test"))
+        db.commit()
+        fake = _FailingClient()
+        first = await notifications.dispatch(db, [_notif()], client=fake, now=100.0)
+        second = await notifications.dispatch(db, [_notif()], client=fake, now=101.0)
+        row = db.scalar(select(NotificationDelivery).where(NotificationDelivery.channel == "slack"))
+
+    assert first["failed"] == 1 and first["suppressed"] == 0
+    assert second["failed"] == 1 and second["suppressed"] == 0
+    assert fake.calls == 2
+    assert row.status == "failed" and row.last_sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_notify_settings_gate_external_targets(client, monkeypatch):
+    monkeypatch.setattr(notifications.settings, "slack_webhook_url", "https://hooks.example/slack")
+    monkeypatch.setattr(notifications.settings, "teams_webhook_url", "")
+
+    with SessionLocal() as db:
+        _clear_notification_state(db)
+        # UI設定(AppSettings.notify)が未初期化の間は、環境変数URLの有無をそのまま
+        # 既定値として使う（Track C以前は環境変数のみで送信していたための後方互換）。
+        assert notifications.enabled_targets(db) == [("slack", "https://hooks.example/slack")]
+        # UIで明示的にオフへ切り替えたら、それを優先して外部送信を止められる。
+        db.add(AppSetting(key="notify", value=json.dumps({"slack_enabled": False,
+                                                          "teams_enabled": False}),
+                          updated_at="now", updated_by="test"))
+        db.commit()
+        assert notifications.enabled_targets(db) == [("log", "")]
+        # UIで明示的にオンへ戻せば送信対象に復帰する。
+        row = db.get(AppSetting, "notify")
+        row.value = json.dumps({"slack_enabled": True, "teams_enabled": False})
+        db.commit()
+        assert notifications.enabled_targets(db) == [("slack", "https://hooks.example/slack")]
+
+
+@pytest.mark.asyncio
+async def test_delivery_row_recovers_from_integrity_error(client, monkeypatch):
+    """_delivery_row の SELECT 直後、flush 前に別セッションが同じ行を commit するレースを再現する。
+
+    一意制約違反 (IntegrityError) を実際に起こし、それを catch して自分の挿入を
+    諦め、既存行へ乗り換えることを検証する（dispatch 全体を止めないための対応）。
+    """
+    with SessionLocal() as db:
+        _clear_notification_state(db)
+        n = _notif()
+        fp = notifications._signature(n)
+        original_flush = db.flush
+        raced = {"done": False}
+
+        def racing_flush(*args, **kwargs):
+            if not raced["done"]:
+                raced["done"] = True
+                with SessionLocal() as winner_db:
+                    winner_db.add(NotificationDelivery(
+                        channel="log", fingerprint=fp, notification_id=n["id"],
+                        severity=n["severity"], status="pending", last_error="",
+                        created_at="now", updated_at="now"))
+                    winner_db.commit()
+            return original_flush(*args, **kwargs)
+
+        monkeypatch.setattr(db, "flush", racing_flush)
+        row = notifications._delivery_row(db, "log", n, 100.0)
+
+        all_rows = db.scalars(select(NotificationDelivery).where(
+            NotificationDelivery.channel == "log", NotificationDelivery.fingerprint == fp)).all()
+
+    assert row.fingerprint == fp
+    assert len(all_rows) == 1  # 自分の挿入は破棄され、他方が commit した行に統一される
