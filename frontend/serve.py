@@ -8,23 +8,105 @@
 通常の parser script として読み込まれ、Chrome の parser-blocking 警告が出ない。
 
   python3 frontend/serve.py
-  → 表示された URL を ?api=http://<host>:<backend-port> 付きで開く
+  → 表示された URL を開く。CW_BACKEND_PROXY_BASE を設定すると /api 等を同一オリジンで backend へ proxy する。
 """
 import http.server
+import json
 import os
 import socket
 import socketserver
+import urllib.error
+import urllib.request
 from urllib.parse import unquote, urlparse
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "design")
 os.chdir(ROOT)
 DC = "気象河川施工判断支援.dc.html"
+BACKEND_PROXY_BASE = os.environ.get("CW_BACKEND_PROXY_BASE", "").rstrip("/")
+BACKEND_PROXY_ALLOWED_HOSTS = {
+    host.strip()
+    for host in os.environ.get("CW_BACKEND_PROXY_ALLOWED_HOSTS", "127.0.0.1,localhost,::1").split(",")
+    if host.strip()
+}
 
-CFG = ("<script>(function(){var p=new URLSearchParams(location.search);"
-       "var a=p.get('api');try{if(a!==null)localStorage.setItem('cw_api',a);"
-       "else a=localStorage.getItem('cw_api');}catch(e){}"
-       "window.__CW_API_BASE__=a||'';})();</script>")
+CFG_TEMPLATE = """<script>(function(){
+function d(h){return h==='localhost'||h==='127.0.0.1'||h==='::1'||/^10\\./.test(h)||/^192\\.168\\./.test(h)||/^172\\.(1[6-9]|2[0-9]|3[0-1])\\./.test(h);}
+function s(v){if(!v)return'';try{var u=new URL(v,location.origin);if(u.origin===location.origin)return u.origin;if(d(location.hostname)&&(d(u.hostname)||u.hostname===location.hostname))return u.origin;}catch(e){}return'';}
+var p=new URLSearchParams(location.search);var a=p.get('api');try{if(a!==null){a=s(a);if(a)localStorage.setItem('cw_api',a);else localStorage.removeItem('cw_api');}else a=s(localStorage.getItem('cw_api'));}catch(e){}
+window.__CW_API_BASE__=a||'';%s})();</script>"""
 ADP = '<script src="./data-adapter.js"></script>'
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    "Strict-Transport-Security": "max-age=31536000",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-site",
+    "X-Permitted-Cross-Domain-Policies": "none",
+    "X-Download-Options": "noopen",
+}
+CSP_REPORT_ONLY = (
+    "default-src 'self'; "
+    "base-uri 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data:; "
+    "connect-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*; "
+    "frame-src 'none'; "
+    "worker-src 'none'; "
+    "manifest-src 'self'"
+)
+
+
+def _tile_url_setting():
+    raw = os.environ.get("CW_TILE_URL")
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if raw.lower() in {"", "none", "off", "disabled"}:
+        return ""
+    return raw
+
+
+def _tile_attribution_setting():
+    raw = os.environ.get("CW_TILE_ATTRIBUTION")
+    if raw is None:
+        return None
+    return raw.strip()
+
+
+def config_script():
+    tile = _tile_url_setting()
+    tile_attr = _tile_attribution_setting()
+    tile_js = "" if tile is None else "window.__CW_TILE_URL__=" + json.dumps(tile) + ";"
+    if tile_attr is not None:
+        tile_js += "window.__CW_TILE_ATTRIBUTION__=" + json.dumps(tile_attr) + ";"
+    return CFG_TEMPLATE % tile_js
+
+
+def _is_proxy_path(path):
+    return path.startswith("/api/") or path == "/api" or path in {"/health", "/readyz"}
+
+
+def _safe_backend_base():
+    if not BACKEND_PROXY_BASE:
+        return ""
+    try:
+        parsed = urlparse(BACKEND_PROXY_BASE)
+    except Exception:
+        return ""
+    if parsed.scheme != "http":
+        return ""
+    if parsed.hostname not in BACKEND_PROXY_ALLOWED_HOSTS:
+        return ""
+    if not parsed.port:
+        return ""
+    return BACKEND_PROXY_BASE
 
 
 def lan_ip():
@@ -49,7 +131,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             self.send_error(404)
             return
-        html = html.replace("</head>", CFG + "</head>", 1) if "</head>" in html else CFG + html
+        cfg = config_script()
+        html = html.replace("</head>", cfg + "</head>", 1) if "</head>" in html else cfg + html
         html = html.replace("</body>", ADP + "</body>", 1) if "</body>" in html else html + ADP
         body = html.encode("utf-8")
         self.send_response(200)
@@ -59,7 +142,61 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _proxy_to_backend(self):
+        base = _safe_backend_base()
+        if not base:
+            self.send_error(502, "backend proxy is not configured")
+            return
+        parsed = urlparse(self.path)
+        target = base + parsed.path + (("?" + parsed.query) if parsed.query else "")
+        length = int(self.headers.get("Content-Length") or "0")
+        body = self.rfile.read(length) if length else None
+        headers = {}
+        hop_by_hop = {
+            "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+            "te", "trailers", "transfer-encoding", "upgrade", "host",
+            "content-length", "accept-encoding",
+        }
+        for key, value in self.headers.items():
+            if key.lower() not in hop_by_hop:
+                headers[key] = value
+        headers["Accept-Encoding"] = "identity"
+        headers["X-Forwarded-Host"] = self.headers.get("Host", "")
+        headers["X-Forwarded-Proto"] = "http"
+        req = urllib.request.Request(target, data=body, headers=headers, method=self.command)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as res:
+                self._send_proxy_response(res.status, res.headers, res.read())
+        except urllib.error.HTTPError as exc:
+            self._send_proxy_response(exc.code, exc.headers, exc.read())
+        except Exception:
+            self.send_error(502, "backend proxy request failed")
+
+    def _send_proxy_response(self, status, headers, body):
+        self.send_response(status)
+        passthrough = {
+            "content-type", "content-disposition", "cache-control",
+            "www-authenticate", "location",
+        }
+        has_cache_control = False
+        for key, value in headers.items():
+            if key.lower() in passthrough:
+                self.send_header(key, value)
+                if key.lower() == "cache-control":
+                    has_cache_control = True
+        if not has_cache_control:
+            # バックエンドが Cache-Control を返さない場合でも、認証情報を含む
+            # API 応答がブラウザ/中間キャッシュに保存されないよう既定で no-store を強制する。
+            self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
     def end_headers(self):
+        for key, value in SECURITY_HEADERS.items():
+            self.send_header(key, value)
+        self.send_header("Content-Security-Policy-Report-Only", CSP_REPORT_ONLY)
         # data-adapter.js 等のスクリプトはデプロイのたびに更新されるため、ブラウザに
         # 古い版をキャッシュさせない（no-store）。これが無いと更新後もブラウザが旧UIを
         # 表示し続ける（メニュー変更が「反映されない」ように見える原因になる）。
@@ -69,6 +206,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlparse(self.path).path)
+        if _is_proxy_path(path):
+            self._proxy_to_backend()
+            return
         if path == "/favicon.ico":  # 404ノイズ抑制（空アイコン）
             self.send_response(204)
             self.send_header("Content-Length", "0")
@@ -79,6 +219,41 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def do_HEAD(self):
+        path = unquote(urlparse(self.path).path)
+        if _is_proxy_path(path):
+            self._proxy_to_backend()
+            return
+        super().do_HEAD()
+
+    def do_POST(self):
+        path = unquote(urlparse(self.path).path)
+        if _is_proxy_path(path):
+            self._proxy_to_backend()
+            return
+        self.send_error(404)
+
+    def do_PUT(self):
+        path = unquote(urlparse(self.path).path)
+        if _is_proxy_path(path):
+            self._proxy_to_backend()
+            return
+        self.send_error(404)
+
+    def do_PATCH(self):
+        path = unquote(urlparse(self.path).path)
+        if _is_proxy_path(path):
+            self._proxy_to_backend()
+            return
+        self.send_error(404)
+
+    def do_DELETE(self):
+        path = unquote(urlparse(self.path).path)
+        if _is_proxy_path(path):
+            self._proxy_to_backend()
+            return
+        self.send_error(404)
+
 
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
@@ -88,10 +263,12 @@ class Server(socketserver.ThreadingTCPServer):
 if __name__ == "__main__":
     ip = lan_ip()
     _port = int(os.environ["PORT"]) if os.environ.get("PORT") else 0  # 0=空きポート自動
-    httpd = Server(("0.0.0.0", _port), Handler)
+    host = os.environ.get("HOST", "0.0.0.0")
+    httpd = Server((host, _port), Handler)
     port = httpd.server_address[1]
     print(f"IP={ip}")
     print(f"PORT={port}")
+    print(f"BIND={host}")
     print(f"URL=http://{ip}:{port}/")
     print(f"LOOPBACK=http://127.0.0.1:{port}/", flush=True)
     httpd.serve_forever()

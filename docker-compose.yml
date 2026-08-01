@@ -3,16 +3,16 @@ services:
     image: postgres:16
     container_name: civil-weather-water-postgres
     environment:
-      POSTGRES_DB: civil_weather_water
-      POSTGRES_USER: cw_user
-      POSTGRES_PASSWORD: cw_password
+      POSTGRES_DB: ${POSTGRES_DB:-civil_weather_water}
+      POSTGRES_USER: ${POSTGRES_USER:-cw_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env for local compose}
     ports:
-      # ホスト側ポートは PG_HOST_PORT で上書き可（既存 Postgres と衝突する環境向け）
-      - "${PG_HOST_PORT:-5432}:5432"
+      # local only. 共有環境でDBをLAN公開しない。
+      - "127.0.0.1:${PG_HOST_PORT:-5432}:5432"
     volumes:
       - cw_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cw_user -d civil_weather_water"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -20,11 +20,19 @@ services:
   backend:
     build: ./backend
     container_name: civil-weather-water-backend
-    env_file: [.env]
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgresql+psycopg2://cw_user:cw_password@postgres:5432/civil_weather_water
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-cw_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env for local compose}@postgres:5432/${POSTGRES_DB:-civil_weather_water}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3); raise SystemExit(0 if r.status == 200 else 1)\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,11 +42,16 @@ services:
     container_name: civil-weather-water-frontend
     environment:
       PORT: "3000"
+      HOST: "0.0.0.0"
+      CW_TILE_URL: "none"
+      CW_BACKEND_PROXY_BASE: "http://backend:8000"
+      CW_BACKEND_PROXY_ALLOWED_HOSTS: "backend"
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3000}:3000"
     depends_on:
-      - backend
-    # ブラウザで http://localhost:3000/?api=http://localhost:8000 を開く
+      backend:
+        condition: service_healthy
+    # ブラウザで http://localhost:${FRONTEND_HOST_PORT:-3000}/ を開く（frontend が /api を backend へ proxy）
 
 volumes:
   cw_pgdata:

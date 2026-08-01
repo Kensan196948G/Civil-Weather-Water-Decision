@@ -27,6 +27,7 @@
     function setToken(t) {
       try { if (t) localStorage.setItem("cw_token", t); else localStorage.removeItem("cw_token"); } catch (e) {}
     }
+    function clearToken() { setToken(null); }
     function authHeaders() {
       var t = getToken();
       return t ? { Authorization: "Bearer " + t } : {};
@@ -52,7 +53,14 @@
         });
       });
     }
-    function logout() { setToken(null); }
+    function logout() {
+      var t = getToken();
+      if (!t) { clearToken(); return Promise.resolve({ ok: true, skipped: true }); }
+      return _fetch(url("/api/auth/logout"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }
+      }).catch(function () {}).then(function () { clearToken(); return { ok: true }; });
+    }
 
     // ---- マッピング（API形 → dc が期待する形）----
     function mapReasons(rs) {
@@ -268,7 +276,7 @@
       patch: patch, loadAll: loadAll, loadDashboard: loadDashboard, loadSources: loadSources,
       loadHistory: loadHistory, loadSeries: loadSeries, ensureSiteDetail: ensureSiteDetail,
       workTypes: workTypes, createSite: createSite,
-      login: login, logout: logout, getToken: getToken,
+      login: login, logout: logout, getToken: getToken, clearToken: clearToken,
       me: function () { return j("/api/auth/me"); },
       notifications: function () { return j("/api/notifications"); },
       rules: function () { return j("/api/admin/rules"); },
@@ -286,6 +294,7 @@
       auditLogs: function (limit) {
         return j("/api/admin/audit-logs" + (limit ? "?limit=" + limit : ""));
       },
+      opsStatusSnapshot: function () { return j("/api/admin/ops/status-snapshot"); },
       appSettings: function () { return j("/api/admin/settings"); },
       saveAppSettings: function (updates) {
         // saveRules と同様、エラー詳細表示のため status も返す（bodyはフラットなwhitelistキー）
@@ -400,6 +409,7 @@
       { title: "管理", items: [
         { key: "settings", label: "閾値管理", roles: ["admin", "tech_manager"] },
         { key: "source", label: "データ取得状況", native: true },
+        { key: "ops-status", label: "運用状態", roles: ["admin", "tech_manager"] },
         { key: "reports", label: "レポート出力" },
         { key: "audit", label: "監査ログ", roles: ["admin", "tech_manager"] },
         { key: "app-settings", label: "設定", roles: ["admin"] }] },
@@ -454,7 +464,7 @@
       open: function (u) { cwAuthedDownload(u); },
       // 401: トークン破棄＋機微画面(監査ログ/設定)の残留データを消してからログイン画面へ
       // （前ユーザーの表示が次ユーザーへ漏れない。#83 対抗レビュー[high]）
-      onUnauthorized: function () { adapter.logout(); cwResetSensitiveUi(); showLogin(); },
+      onUnauthorized: function () { adapter.clearToken(); cwResetSensitiveUi(); showLogin(); },
       hideNav: ["現場詳細"], // 現場詳細はナビタブを廃し、現場クリックのドリルダウン専用にする
       bump: function () {
         try {
@@ -525,9 +535,21 @@
       document.body.appendChild(screen);
 
       var sel = screen.querySelector("#cw-reg-wt");
-      adapter.workTypes().then(function (wts) {
-        sel.innerHTML = wts.map(function (w) { return '<option value="' + w.id + '">' + w.name + "</option>"; }).join("");
-      }).catch(function () { sel.innerHTML = '<option value="river">河川内作業</option>'; });
+      // 未ログイン時は /api/work-types が401になることが確定しているため取得自体を省略する
+      // （ログイン成功時は location.reload() で全体を再初期化するため、認証後は必ず再取得される）
+      if (adapter.getToken()) {
+        adapter.workTypes().then(function (wts) {
+          sel.innerHTML = "";
+          wts.forEach(function (w) {
+            var opt = document.createElement("option");
+            opt.value = w.id;
+            opt.textContent = w.name;
+            sel.appendChild(opt);
+          });
+        }).catch(function () { sel.innerHTML = '<option value="river">河川内作業</option>'; });
+      } else {
+        sel.innerHTML = '<option value="river">河川内作業</option>';
+      }
 
       var chk = screen.querySelector('[name=river_work_flag]');
       var riverRow = screen.querySelector("#cw-reg-river");
@@ -686,7 +708,7 @@
       if (el) el.style.display = show ? "block" : "none";
     }
 
-    // ---- 熱中症/WBGT 画面: 全国地図（OpenStreetMap）＋スケール＋ランキング ----
+    // ---- 熱中症/WBGT 画面: 全国地図＋スケール＋ランキング ----
     function wbgtMeta(v) {
       if (v == null) return { label: "欠測", color: "#5a6b7b" };
       if (v < 21) return { label: "ほぼ安全", color: "#2e7d32" };
@@ -746,6 +768,12 @@
           + '<span class="cw-wbgt-name">' + esc(s.name) + '</span><span class="cw-wbgt-loc">' + esc(s.loc || "") + "</span></div>";
       }).join("");
     }
+    function cwTileUrl() {
+      return window.__CW_TILE_URL__ || "";
+    }
+    function cwTileAttribution() {
+      return window.__CW_TILE_ATTRIBUTION__ || "";
+    }
     function buildWbgtScreen() {
       var CW = adapter._state; // 外からは _state 経由で参照
       if (!CW.sites) return;
@@ -759,8 +787,9 @@
       var L = window.L;
       if (!wbgtMap) {
         wbgtMap = L.map(mapEl, { scrollWheelZoom: false }).setView([37.5, 137.0], 4);
-        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-          { maxZoom: 18, attribution: "&copy; OpenStreetMap contributors" }).addTo(wbgtMap);
+        var tileUrl = cwTileUrl();
+        if (tileUrl) L.tileLayer(tileUrl,
+          { maxZoom: 18, attribution: cwTileAttribution() }).addTo(wbgtMap);
         wbgtMarkers = L.layerGroup().addTo(wbgtMap);
       }
       wbgtMap.invalidateSize(); // パネル表示後の実コンテナサイズを反映（非表示時に作ると0px化するため）
@@ -901,6 +930,8 @@
       cwScreenVer = {};   // 次回表示時に必ず再読込させる
       var audit = document.getElementById("cw-audit-body");
       if (audit) audit.innerHTML = "";
+      var ops = document.getElementById("cw-ops-body");
+      if (ops) ops.innerHTML = "";
       var q = document.getElementById("cw-audit-q");
       if (q) q.value = "";
       var key = document.getElementById("cw-as-ai-key");
@@ -1174,6 +1205,104 @@
         + '<div class="cw-msg" id="cw-rep-msg"></div>';
     }
 
+    // ---- 運用状態（管理） ----
+    function installOpsScreen() {
+      var el = cwMakeScreen("cw-ops-screen",
+        '<div class="cw-pg"><h2>運用状態</h2>'
+        + '<p class="sub">本番 systemd service / timer と failed unit の snapshot。表示値はサーバ側 allowlist 済み。</p>'
+        + '<div class="cw-pg-bar"><button type="button" class="cw-btn" id="cw-ops-reload">再読込</button>'
+        + '<span class="cw-msg" id="cw-ops-msg"></span></div>'
+        + '<div id="cw-ops-body"></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-ops-reload").addEventListener("click", cwLoadOpsStatus);
+    }
+    function cwOpsBadge(value) {
+      var v = String(value == null ? "" : value);
+      var ok = /^(ok|active|success|enabled|0)$/i.test(v);
+      var warn = /^(warning|inactive|disabled|skipped|unknown)$/i.test(v);
+      var color = ok ? "#2e7d32" : warn ? "#c2920a" : "#c62828";
+      var bg = ok ? "#e7f3e9" : warn ? "#fdf6e0" : "#fbe8e8";
+      return '<span class="cw-badge" style="background:' + bg + ';color:' + color + '">' + esc(v || "-") + "</span>";
+    }
+    function cwOpsText(value) {
+      return esc(value == null || value === "" ? "-" : value);
+    }
+    function cwOpsMetric(label, value, badge) {
+      return '<div class="cw-pg-card" style="flex:1;min-width:170px;margin-bottom:0">'
+        + '<div style="font-size:11px;color:#7e8c99;font-weight:700">' + esc(label) + "</div>"
+        + '<div style="margin-top:6px;font-size:18px;font-weight:800;color:#13344f">'
+        + (badge ? cwOpsBadge(value) : cwOpsText(value)) + "</div></div>";
+    }
+    function cwLoadOpsStatus() {
+      var box = document.getElementById("cw-ops-body");
+      var msg = document.getElementById("cw-ops-msg");
+      if (!box) return;
+      box.innerHTML = '<div class="cw-empty">読込中…</div>';
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "取得中…"; }
+      adapter.opsStatusSnapshot().then(function (d) {
+        if (!d || d.detail || d.status !== "ok") {
+          var detail = (d && d.detail) || "権限/デプロイ状況を確認";
+          box.innerHTML = '<div class="cw-empty">運用状態を取得できませんでした（' + esc(detail) + "）</div>";
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "取得失敗"; }
+          return;
+        }
+        cwRenderOpsStatus(d);
+        if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "更新しました"; }
+      }).catch(function () {
+        box.innerHTML = '<div class="cw-empty">取得に失敗しました（通信エラー）</div>';
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラー"; }
+      });
+    }
+    function cwRenderOpsStatus(data) {
+      var box = document.getElementById("cw-ops-body");
+      if (!box) return;
+      var snap = data.snapshot || {};
+      var meta = data.metadata || {};
+      var services = snap.services || [];
+      var timers = snap.timers || [];
+      var failed = snap.failed_units || [];
+      var failedCount = snap.failed_units_count != null ? snap.failed_units_count : failed.length;
+      var serviceRows = services.length ? services.map(function (s) {
+        return "<tr><td>" + cwOpsText(s.unit) + "</td><td>" + cwOpsBadge(s.active_state)
+          + "</td><td>" + cwOpsBadge(s.result) + '</td><td class="cw-num">' + cwOpsText(s.n_restarts) + "</td></tr>";
+      }).join("") : '<tr><td colspan="4"><div class="cw-empty">service snapshot がありません</div></td></tr>';
+      var timerRows = timers.length ? timers.map(function (t) {
+        return "<tr><td>" + cwOpsText(t.unit) + "</td><td>" + cwOpsBadge(t.active_state)
+          + "</td><td>" + cwOpsBadge(t.unit_file_state) + "</td><td>" + cwOpsBadge(t.service_result)
+          + "</td><td>" + cwOpsText(t.last_trigger) + "</td><td>" + cwOpsText(t.next_elapse) + "</td></tr>";
+      }).join("") : '<tr><td colspan="6"><div class="cw-empty">timer snapshot がありません</div></td></tr>';
+      var failedHtml = failedCount > 0
+        ? '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#c62828">Failed units</h3>'
+          + '<div style="font-size:12.5px;line-height:1.9;color:#3a4854">'
+          + failed.map(function (u) { return '<span class="cw-badge" style="background:#fbe8e8;color:#c62828;margin:0 6px 6px 0">' + esc(u) + "</span>"; }).join("")
+          + "</div></div>"
+        : '<div class="cw-pg-card"><div class="cw-empty">failed cwwd unit はありません</div></div>';
+      if (snap.error) {
+        failedHtml += '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#c62828">Snapshot error</h3>'
+          + '<table class="cw-tbl"><tbody>'
+          + "<tr><th>message</th><td>" + cwOpsText(snap.error.message) + "</td></tr>"
+          + "<tr><th>unit</th><td>" + cwOpsText(snap.error.unit) + "</td></tr>"
+          + "<tr><th>property</th><td>" + cwOpsText(snap.error.property) + "</td></tr>"
+          + "<tr><th>actual</th><td>" + cwOpsText(snap.error.actual) + "</td></tr>"
+          + "<tr><th>expected</th><td>" + cwOpsText(snap.error.expected) + "</td></tr>"
+          + "</tbody></table></div>";
+      }
+      box.innerHTML =
+        '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">'
+        + cwOpsMetric("snapshot status", snap.status || data.status, true)
+        + cwOpsMetric("failed units", failedCount, true)
+        + cwOpsMetric("snapshot age", meta.age_seconds != null ? meta.age_seconds + " sec" : "-", false)
+        + cwOpsMetric("snapshot utc", snap.snapshot_utc || meta.mtime || "-", false)
+        + "</div>"
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(50vh - 90px)">'
+        + '<table class="cw-tbl"><thead><tr><th>Service</th><th>Active</th><th>Result</th><th>Restarts</th></tr></thead><tbody>'
+        + serviceRows + "</tbody></table></div>"
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(50vh - 70px)">'
+        + '<table class="cw-tbl"><thead><tr><th>Timer</th><th>Active</th><th>Enabled</th><th>Service</th><th>Last</th><th>Next</th></tr></thead><tbody>'
+        + timerRows + "</tbody></table></div>"
+        + failedHtml;
+    }
+
     // ---- 監査ログ（管理） ----
     var cwAuditRows = null;
     function installAuditScreen() {
@@ -1425,6 +1554,7 @@
     CW_SCREENS["analytics"] = { id: "cw-analytics-screen", show: cwRenderAnalytics, live: true };
     CW_SCREENS["wave50"] = { id: "cw-wave50-screen" };
     CW_SCREENS["reports"] = { id: "cw-reports-screen", show: cwRenderReports };
+    CW_SCREENS["ops-status"] = { id: "cw-ops-screen", show: cwLoadOpsStatus };
     CW_SCREENS["audit"] = { id: "cw-audit-screen", show: cwLoadAudit };
     CW_SCREENS["app-settings"] = { id: "cw-appset-screen", show: cwLoadAppSettings };
 
@@ -1570,9 +1700,18 @@
         + '<label>パスワード</label><input name="password" type="password" autocomplete="current-password" required>'
         + '<button type="submit">ログイン</button>'
         + '<div class="cw-login-msg" id="cw-login-msg"></div>'
-        + '<div class="cw-login-hint">デモ: admin / admin123（管理者） ・ yamada / pass1234（現場管理者） ・ viewer / pass1234（閲覧）</div>'
+        + '<div class="cw-login-hint" id="cw-login-hint"></div>'
         + "</form>";
       document.body.appendChild(ov);
+      // デモ資格情報のヒントは env=local（seed.py がデモユーザーを作成する環境）でのみ表示する。
+      // 本番はデモ資格情報が存在しない/パスワードが異なり得るため、無条件表示は誤情報になる。
+      // /health は認証不要・同一オリジンで安全に参照可能。取得失敗時は表示しない（fail-closed）。
+      fetch(apiBase + "/health").then(function (r) { return r.json(); }).then(function (h) {
+        if (h && h.env === "local") {
+          var hint = ov.querySelector("#cw-login-hint");
+          if (hint) hint.textContent = "デモ: admin / admin123（管理者） ・ yamada / pass1234（現場管理者） ・ viewer / pass1234（閲覧）";
+        }
+      }).catch(function () {});
       var pill = document.createElement("div"); pill.id = "cw-user";
       pill.innerHTML = '<span id="cw-user-name"></span><button id="cw-logout">ログアウト</button>';
       (document.getElementById("cw-hdr-tools") || document.body).appendChild(pill);
@@ -1589,7 +1728,9 @@
           } else { msg.textContent = (res.body && res.body.detail) || "ログインに失敗しました"; }
         }).catch(function () { msg.textContent = "通信エラー（バックエンド未起動の可能性）"; });
       });
-      pill.querySelector("#cw-logout").addEventListener("click", function () { adapter.logout(); location.reload(); });
+      pill.querySelector("#cw-logout").addEventListener("click", function () {
+        adapter.logout().then(function () { location.reload(); });
+      });
     }
 
     // ---- 通知ベル（設計§14。注入） ----
@@ -1665,6 +1806,7 @@
           installWxScreen();
           installAnalyticsScreen();
           installReportsScreen();
+          installOpsScreen();
           installAuditScreen();
           installAppSettingsScreen();
           installSoonScreens();
