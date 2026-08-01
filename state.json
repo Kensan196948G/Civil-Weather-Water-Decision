@@ -220,7 +220,10 @@
       "public_edge_check": "PASS (302 Access)",
       "db_backup_services": "PASS (backup/export/check/restore-drill Result=success)",
       "ruff": "PASS (check clean; formatは変更ファイルのみ整形)",
-      "ci_main": "PASS (直近CI all green)"
+      "ci_main": "PASS (直近CI all green)",
+      "real_restore_drill": "PASS (本番dumpをPG18一時クラスタへdb-restore.shで復元: 全18テーブル・行数・alembic_version一致, PG16ではtransaction_timeout非対応のため不可→PG17+要件を文書化)",
+      "ci_pr_108": "PASS (全6チェック, head aac584e)",
+      "ci_pr_109": "PASS (全6チェック, head dcb393b)"
     },
     "github_actions": {
       "branch": "fix/ops-stabilization-20260801",
@@ -228,13 +231,17 @@
       "pr_87": "chore/state-sync-0712-deployed は#106等で陳腐化のためclose予定",
       "pr_98": "notification hardening は別PRのまま維持（本PRでは取り込まない）",
       "branch_protection": "有効化済み (PR必須/5 CI checks strict/enforce_admins/force push・削除禁止)",
-      "pr": "PR #108 (fix/ops-stabilization-20260801) CI全6チェックPASS・mergeable"
+      "pr": "PR #108 (fix/ops-stabilization-20260801) CI全6チェックPASS・mergeable",
+      "pr_109": "ci/node20-actions-update: checkout v5 / setup-python v6 / setup-node v5 / node 22 LTS。ops-stabilization(#108)をマージ済みで必須チェック5種+e2eを満たし、CI全PASS・mergeable CLEAN",
+      "pr_98_review": "対抗レビュー実施: notification_deliveries migrationは本番既存テーブル(create_all由来26行)で失敗するため冪等化fixをcommit 24dfec9で反映(回帰テスト3件追加、ブランチ391テストPASS)。#108マージ後にmain再取り込みしてからマージする方針",
+      "project_41": "開発司令盤にPR #108/#109の項目を追加"
     },
     "residual": [
-      "PR #98 通知配信ハードニング（CI green・DRAFT）は次サイクルでレビュー・マージ判断",
-      "OIDC (Entra ID) 切替は未着手",
-      "通知の外部dispatch定期実行は未着手",
-      "ops-alert.env の webhook URL は未設定（journaldのみ）"
+      "PR #98 は#108マージ後にmainを再取り込みしCI green確認後にマージ（migration冪等化fix済み）",
+      "OIDC (Entra ID) 切替は未着手（backlog）",
+      "通知の外部dispatchはPR #98で実装済み・マージ待ち。ops-alert webhook URLは未設定（journaldのみ）",
+      "水防災オープンデータは契約制のため未接続（設計どおり明示中）",
+      "16:37-16:56 JSTの一時的なNeon/tunnel接続タイムアウトは以降再発なし（継続監視）"
     ]
   }
 }
