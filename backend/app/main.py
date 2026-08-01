@@ -1,4 +1,5 @@
 """FastAPI エントリポイント（詳細設計 §3 / §7）。"""
+
 from __future__ import annotations
 
 import logging
@@ -8,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .api.auth import router as auth_router
 from .api.routes import router
@@ -17,24 +19,63 @@ from .seed import init_db
 
 logger = logging.getLogger("cwwd")
 
+# 本番API共通のセキュリティヘッダ（deploy/scripts/security-surface-check.sh と
+# deploy/scripts/app-health-check.sh が期待する値と一致させること）。
+# JSON API 応答は認証情報を含む可能性があるため、全応答に no-store を強制する。
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    "Strict-Transport-Security": "max-age=31536000",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-site",
+    "X-Permitted-Cross-Domain-Policies": "none",
+    "X-Download-Options": "noopen",
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": "default-src 'none'",
+}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """全レスポンスへセキュリティヘッダを付与する。"""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        for key, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(key, value)
+        return response
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()  # テーブル作成＋サンプル投入（冪等）
     if settings.enable_scheduler:
         from .scheduler import start
+
         start()  # 定期プローブ＋予報リフレッシュ
     yield
     if settings.enable_scheduler:
         from .scheduler import stop
+
         await stop()
 
 
-app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+docs_enabled = settings.app_env != "production"
+app = FastAPI(
+    title=settings.app_name,
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if docs_enabled else None,
+    redoc_url="/redoc" if docs_enabled else None,
+    openapi_url="/openapi.json" if docs_enabled else None,
+)
 
-_origins = ["*"] if settings.cors_origins.strip() == "*" else [
-    o.strip() for o in settings.cors_origins.split(",") if o.strip()
-]
+_origins = (
+    ["*"]
+    if settings.cors_origins.strip() == "*"
+    else [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -42,15 +83,20 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,
 )
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # 例外を握って 500 でも CORS ヘッダが付く応答にする（CORSMiddleware を通すため）。設計§15
 # 内部情報を漏らさないため、詳細はサーバ側ログのみ・クライアントへは汎用メッセージ。
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception):
-    logger.exception("Unhandled error: %s %s", request.method, request.url.path, exc_info=exc)
-    return JSONResponse(status_code=500,
-                        content={"code": "INTERNAL_ERROR", "message": "Internal server error"})
+    logger.exception(
+        "Unhandled error: %s %s", request.method, request.url.path, exc_info=exc
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"code": "INTERNAL_ERROR", "message": "Internal server error"},
+    )
 
 
 # 検証エラー(422)の既定応答は投入値(input)と ctx を反射する。誤ったキー名で送られた
@@ -58,8 +104,10 @@ async def _unhandled(request: Request, exc: Exception):
 # frontend は detail[].msg を参照するため、この3項目は維持する。
 @app.exception_handler(RequestValidationError)
 async def _validation_error(request: Request, exc: RequestValidationError):
-    safe = [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")}
-            for e in exc.errors()]
+    safe = [
+        {"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")}
+        for e in exc.errors()
+    ]
     return JSONResponse(status_code=422, content={"detail": safe})
 
 
@@ -76,4 +124,4 @@ def readyz():
 
 
 app.include_router(auth_router, prefix="/api")  # /api/auth/* は公開（ログイン）
-app.include_router(router, prefix="/api")        # その他は認証必須
+app.include_router(router, prefix="/api")  # その他は認証必須

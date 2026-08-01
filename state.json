@@ -41,12 +41,12 @@
     }
   },
   "goal": "Release Ready / Production Ready へ向けたCTO主導自律開発（2026-07-12セッション）",
-  "phase": "Verify",
+  "phase": "Stabilization (post-release)",
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 383,
-    "frontend_tests_total": 47,
+    "backend_tests_total": 389,
+    "frontend_tests_total": 74,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
@@ -190,6 +190,58 @@
     "residual_items": [
       "PR#103(chore/state-sync-0723-test-env-fix)は未マージのまま。独自の差分はstate.json KPI更新のみで、今回の実測(backend 383/frontend 47)がより新しいため、そのままクローズしてよいか要検討。",
       "PR#104(feature/frontend-static-hardening, Issue#99, CSP/unpkg.com CDN撤去)はCI green・未マージ。本番のCSP report-only違反解消にはこちらのマージが必要(今回のスコープ外)。"
+    ]
+  },
+  "session_2026_08_01_stabilization": {
+    "trigger": "/goal リリース後安定化（リポジトリ・本番・監視・バックアップ・セキュリティの精査と改善）",
+    "production": {
+      "url": "https://cwwd.mirai-dx-platform.com/",
+      "health": "PASS (env=production)",
+      "readyz": "PASS (database/migrations/tables/config)",
+      "edge": "PASS (Cloudflare Access 302 on all paths)",
+      "backend": "active (127.0.0.1:55019)",
+      "frontend": "active (127.0.0.1:34979)",
+      "tunnel": "active (cwwd-civil-weather-water)"
+    },
+    "findings_fixed": [
+      "DBバックアップ: db-backup.env の認証情報が現行と不一致(16B vs 32B)で7/13以降19日間ダンプ失敗。現行の有効なDATABASE_URL_DIRECTへ同期し、手動+systemd実行で復旧を確認(Result=success, freshness/restore drill/export PASS)。",
+      "backend: セキュリティヘッダ欠如(X-Content-Type-Options等11項目)と本番docs/OpenAPI公開(200)を修正。ミドルウェアで全応答に付与、productionではdocs/redoc/openapi無効化。",
+      "frontend: serve.pyがHOST envを無視し0.0.0.0 bind(unitは127.0.0.1意図)。PR #104取り込みでHOST bind対応+セキュリティヘッダ+CSP report-only+同一オリジン/api proxy+vendor化を適用しloopbackのみに。",
+      "opsアラート: ops-failure@/db-backup-failure@ の旧203/EXECはスクリプト実行属性付与済みで復旧。reset-failed後に全監視ユニットResult=success。",
+      "ops-status系: 依存順序(ops-status→export→json-check)で全て成功。failed_units_count=0。"
+    ],
+    "verification": {
+      "backend_pytest": "PASS (389 passed)",
+      "frontend_tests": "PASS (logic 21 + adapter 47 + api-config 3 + cdn/vendor/serve-proxy policy)",
+      "e2e_smoke": "PASS (Playwright Firefox: login→dashboard→ops status→logout, CSP violations 0)",
+      "app_health_check": "PASS",
+      "security_surface_check": "PASS (headers/auth-guard/docs-disabled/frontend)",
+      "network_exposure_check": "PASS (55019/34979 both loopback-only)",
+      "public_edge_check": "PASS (302 Access)",
+      "db_backup_services": "PASS (backup/export/check/restore-drill Result=success)",
+      "ruff": "PASS (check clean; formatは変更ファイルのみ整形)",
+      "ci_main": "PASS (直近CI all green)",
+      "real_restore_drill": "PASS (本番dumpをPG18一時クラスタへdb-restore.shで復元: 全18テーブル・行数・alembic_version一致, PG16ではtransaction_timeout非対応のため不可→PG17+要件を文書化)",
+      "ci_pr_108": "PASS (全6チェック, head aac584e)",
+      "ci_pr_109": "PASS (全6チェック, head dcb393b)"
+    },
+    "github_actions": {
+      "branch": "fix/ops-stabilization-20260801",
+      "absorbs_pr": "PR #104 (feature/frontend-static-hardening) のコミットを包含。マージ後に#104はclose予定",
+      "pr_87": "chore/state-sync-0712-deployed は#106等で陳腐化のためclose予定",
+      "pr_98": "notification hardening は別PRのまま維持（本PRでは取り込まない）",
+      "branch_protection": "有効化済み (PR必須/5 CI checks strict/enforce_admins/force push・削除禁止)",
+      "pr": "PR #108 (fix/ops-stabilization-20260801) CI全6チェックPASS・mergeable",
+      "pr_109": "ci/node20-actions-update: checkout v5 / setup-python v6 / setup-node v5 / node 22 LTS。ops-stabilization(#108)をマージ済みで必須チェック5種+e2eを満たし、CI全PASS・mergeable CLEAN",
+      "pr_98_review": "対抗レビュー実施: notification_deliveries migrationは本番既存テーブル(create_all由来26行)で失敗するため冪等化fixをcommit 24dfec9で反映(回帰テスト3件追加、ブランチ391テストPASS)。#108マージ後にmain再取り込みしてからマージする方針",
+      "project_41": "開発司令盤にPR #108/#109の項目を追加"
+    },
+    "residual": [
+      "PR #98 は#108マージ後にmainを再取り込みしCI green確認後にマージ（migration冪等化fix済み）",
+      "OIDC (Entra ID) 切替は未着手（backlog）",
+      "通知の外部dispatchはPR #98で実装済み・マージ待ち。ops-alert webhook URLは未設定（journaldのみ）",
+      "水防災オープンデータは契約制のため未接続（設計どおり明示中）",
+      "16:37-16:56 JSTの一時的なNeon/tunnel接続タイムアウトは以降再発なし（継続監視）"
     ]
   }
 }

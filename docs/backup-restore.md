@@ -125,6 +125,27 @@ journalctl -u cwwd-db-backup.service -n 100 --no-pager
 sudo systemctl start cwwd-db-backup.service
 ```
 
+#### 障害例: `password authentication failed` で日次ダンプが失敗し続ける
+
+`db-backup.env` の `DATABASE_URL_DIRECT` に古いパスワードが残っていると、バックエンド（`backend/.env`）は
+正常でもバックアップだけ失敗し続けます（2026-07-23〜08-01 に実機で発生。7/13 以降 19 日間ダンプなし）。
+
+対処（秘密値は画面やログへ出力しないこと）:
+
+```bash
+# 1) backend/.env の現行 DATABASE_URL_DIRECT を同期（同一ホスト・ユーザー・DB であることを確認してから）
+#    python3 等でパスワード文字列を表示せずに db-backup.env へ書き換える
+chmod 600 /home/kensan/.config/cwwd/db-backup.env
+# 2) 即時実行して確認
+sudo systemctl start cwwd-db-backup.service
+sudo systemctl start cwwd-db-backup-export.service
+sudo systemctl start cwwd-db-backup-check.service
+sudo systemctl start cwwd-db-backup-restore-drill.service
+systemctl show cwwd-db-backup.service -p Result
+```
+
+`Result=success` になり、`/var/backups/cwwd/postgres/cwwd-*.dump` のタイムスタンプが更新されれば復旧完了です。
+
 ### 暗号化 Export
 
 `cwwd-db-backup-export.timer` が日次 backup window 後に最新 valid dump と `.sha256` を 1つの tar にまとめ、
@@ -374,6 +395,13 @@ production への直接リストアは CTO / 現場責任者 / DB管理者の明
 本番DBへ直接戻す前に、Neon のブランチまたは一時DBへ復元し、`/health`、ログイン、代表APIを確認します。
 `<dump>.sha256` が無いダンプは既定で復元できません。緊急時に CTO / DB 管理者が明示承認した場合のみ
 `--allow-missing-checksum` を付け、承認理由と代替検証を運用記録へ残します。
+
+> **復元先は PostgreSQL 17 以上が必要**（2026-08-01 実機検証で確認）。本番 dump には
+> `SET transaction_timeout = 0`（PG17 で追加）が含まれるため、PostgreSQL 16 以前の一時DBへは
+> 復元できません。復元ドリルは Neon branch または PG17+ の一時インスタンスで行ってください。
+> 検証実績: PG18 一時クラスタへ `db-restore.sh` で復元し、全18テーブル・行数・
+> `alembic_version` が本番と一致することを確認済み（2026-08-01）。
+
 実行時の `pg_restore` は `--single-transaction --exit-on-error --clean --if-exists` を使い、
 復元エラー時に部分的な drop/restore が残るリスクを抑えます。
 
