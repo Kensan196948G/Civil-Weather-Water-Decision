@@ -50,6 +50,48 @@ Construction Weather & Water Decision Support
 - [要件定義書](./Civil-Weather-Water-Decision_Requirements.md)
 - [詳細仕様設計書](./Civil-Weather-Water-Decision_Detailed_Design.md)
 - [実装計画書（ロードマップ・WBS・リスク）](./docs/implementation-plan.md)
+- [デプロイ手順 / 運用チェック](./docs/deploy.md)
+- [バックアップ・リストア手順](./docs/backup-restore.md)
+- [リリースノート](./docs/release-notes.md)
+
+## システム構成 / Architecture
+
+```mermaid
+flowchart LR
+    U[利用者ブラウザ<br/>https://cwwd.mirai-dx-platform.com] -->|HTTPS| A[Cloudflare Access<br/>エッジ認証 302]
+    A --> T[Cloudflare Tunnel<br/>cwwd-civil-weather-water]
+    T -->|^/api /health /readyz| B[backend FastAPI<br/>127.0.0.1:55019]
+    T -->|^/docs 等| E404[http_status:404]
+    T -->|その他| F[frontend serve.py<br/>127.0.0.1:34979]
+    F -->|同一オリジン /api proxy<br/>開発時のみ| B
+    B --> N[(Neon PostgreSQL<br/>本番データの正本)]
+    B --> J[気象庁 防災情報XML]
+    B --> M[Open-Meteo 予報]
+    B --> W[環境省 WBGT]
+    B --> R[川の防災情報]
+    N --> BK[日次バックアップ<br/>dump→暗号化export<br/>systemd timer]
+    BK -->|復元ドリル| RD[一時DBで検証<br/>PG17+]
+```
+
+### データフロー / Data Flow
+
+```mermaid
+flowchart TD
+    S1[スケジューラ<br/>5分ごと] -->|実プローブ| SRC[外部データソース<br/>JMA / Open-Meteo / WBGT / river]
+    SRC -->|取得結果| DB[(Neon)]
+    S1 -->|判定エンジン| DEC[現場別リスク判定<br/>レベル0-3]
+    DEC --> DB
+    DEC --> NTF[通知<br/>severity≥2]
+    NTF -->|Slack/Teams/ログ| OUT[配送台帳で重複抑止]
+    UI[WebUI] -->|JWT + RBAC| API[API]
+    API --> DB
+    API -->|監査ログ 同一トランザクション| DB
+    OPS[systemd 監視チェック群] -->|health/security/backup/edge| STATUS[ops-status.json]
+    STATUS -->|failed unit検知| ALERT[journald / Slack / Teams]
+```
+
+> 図は 2026-08-01 時点の本番構成（tunnel ingress・systemd unit・監視スクリプト）に基づきます。
+> 変更時は `deploy/systemd/`・`~/.cloudflared/config-cwwd.yml`・`docs/deploy.md` と整合させてください。
 
 ## 🖥️ WebUI
 
