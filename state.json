@@ -227,7 +227,8 @@
       "absorbs_pr": "PR #104 (feature/frontend-static-hardening) のコミットを包含。マージ後に#104はclose予定",
       "pr_87": "chore/state-sync-0712-deployed は#106等で陳腐化のためclose予定",
       "pr_98": "notification hardening は別PRのまま維持（本PRでは取り込まない）",
-      "branch_protection": "main未保護のため有効化予定 (Issue #56)"
+      "branch_protection": "有効化済み (PR必須/5 CI checks strict/enforce_admins/force push・削除禁止)",
+      "pr": "PR #108 (fix/ops-stabilization-20260801) CI全6チェックPASS・mergeable"
     },
     "residual": [
       "PR #98 通知配信ハードニング（CI green・DRAFT）は次サイクルでレビュー・マージ判断",
