@@ -395,6 +395,13 @@ production への直接リストアは CTO / 現場責任者 / DB管理者の明
 本番DBへ直接戻す前に、Neon のブランチまたは一時DBへ復元し、`/health`、ログイン、代表APIを確認します。
 `<dump>.sha256` が無いダンプは既定で復元できません。緊急時に CTO / DB 管理者が明示承認した場合のみ
 `--allow-missing-checksum` を付け、承認理由と代替検証を運用記録へ残します。
+
+> **復元先は PostgreSQL 17 以上が必要**（2026-08-01 実機検証で確認）。本番 dump には
+> `SET transaction_timeout = 0`（PG17 で追加）が含まれるため、PostgreSQL 16 以前の一時DBへは
+> 復元できません。復元ドリルは Neon branch または PG17+ の一時インスタンスで行ってください。
+> 検証実績: PG18 一時クラスタへ `db-restore.sh` で復元し、全18テーブル・行数・
+> `alembic_version` が本番と一致することを確認済み（2026-08-01）。
+
 実行時の `pg_restore` は `--single-transaction --exit-on-error --clean --if-exists` を使い、
 復元エラー時に部分的な drop/restore が残るリスクを抑えます。
 
