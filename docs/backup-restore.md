@@ -377,15 +377,16 @@ deploy/scripts/ops-alert.sh \
 ### オフサイトバックアップ転送と復元検証（Issue #115）
 
 **現状**: 暗号化export（gpg AES256）の作成・local checksum/鮮度/復号一覧監視・
-`pg_restore --list` による復元ドリルまでは実装済みです。一方、**別筐体／オブジェクト
-ストレージへの日次転送・転送後の監視・別筐体からの復元訓練は未実装**で、サーバ・
-ディスク・設置場所の同時障害には対応できていません（外部評価 2026-08 の P0 指摘）。
+`pg_restore --list` による復元ドリルまでは実装済みです。**転送スクリプト・systemd
+unit・転送後監視は実装済み**ですが、**実転送先の設定（rclone remote等）と別筐体からの
+復元訓練は未実施**で、転送先を用意するまでサーバ・ディスク・設置場所の同時障害には
+対応できません（外部評価 2026-08 の P0 指摘）。
 
 #### 完了条件（Issue #115）
 
-- [ ] 日次転送が成功し、鮮度・checksumが監視される
+- [ ] 日次転送が成功し、鮮度・checksumが監視される（実転送先の設定が必要）
 - [ ] 別筐体からの復元訓練に合格
-- [ ] 手順・障害時対応を `docs/backup-restore.md` へ反映（本PRで反映）
+- [x] 手順・障害時対応を `docs/backup-restore.md` へ反映（本PRで反映）
 
 #### 設計方針（実装時の案）
 
@@ -399,11 +400,11 @@ deploy/scripts/ops-alert.sh \
 | 復元訓練 | 年次: offsite コピーを一時DB（PG17+ / Neon branch）へ復元し、全テーブル・行数・`alembic_version` を照合 |
 | 目標 | RPO 24h以内 / RTO 4〜8h / 3-2-1（本番1 + local dump 1 + offsite 1） |
 
-#### 実装構成（案）
+#### 実装構成（実装済み）
 
 - 転送ジョブ: `cwwd-db-backup-offsite-transfer.service` / `.timer`（毎日 04:30 + `RandomizedDelaySec=30min`）
   - script: `deploy/scripts/db-backup-offsite-transfer.sh`
-  - 事前: local export-check成功・disk space・転送先疎通・`0600`権限
+  - 事前: local export-check成功・転送先疎通・`0600`権限
   - 転送後: offsite側で checksum・鮮度を確認
 - 転送後監視: `cwwd-db-backup-offsite-check.service` / `.timer`（毎時50分）
   - 最新 archive の存在・鮮度・checksum・復号tar一覧・orphan・権限
@@ -428,9 +429,9 @@ sudo systemctl enable --now cwwd-db-backup-offsite-transfer.timer
 sudo systemctl enable --now cwwd-db-backup-offsite-check.timer
 
 # 3) 手動検証（dry-run → 実転送 → offsite側チェック）
+set -a; . /home/kensan/.config/cwwd/offsite.env; set +a
 deploy/scripts/db-backup-offsite-transfer.sh \
-  --export-dir /var/backups/cwwd/exports \
-  --env-file /home/kensan/.config/cwwd/offsite.env --dry-run
+  --export-dir /var/backups/cwwd/exports --dry-run
 sudo systemctl start cwwd-db-backup-offsite-transfer.service
 sudo systemctl start cwwd-db-backup-offsite-check.service
 journalctl -u cwwd-db-backup-offsite-transfer.service -n 100 --no-pager
