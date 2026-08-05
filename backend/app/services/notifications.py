@@ -63,7 +63,7 @@ def _n(nid, kind, severity, title, site_id, message, time):
 async def build_current_notifications(db: Session) -> list[dict]:
     """現在の現場リスク・データソース状態から通知一覧を生成する。APIとschedulerで共有。"""
     sites = db.scalars(select(Site).where(Site.status == "active").order_by(Site.id)).all()
-    cards = await assessment.assess_all(list(sites))
+    cards = await assessment.assess_all(list(sites), db=db)
     src = db.scalars(select(DataSourceStatus).order_by(DataSourceStatus.id)).all()
     sources = [{"id": d.id, "name": d.name, "status": d.status,
                 "fails": d.fails, "lastOk": d.last_ok} for d in src]
