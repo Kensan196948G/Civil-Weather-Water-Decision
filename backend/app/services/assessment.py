@@ -54,9 +54,24 @@ async def _cached_fetch(lat: float, lon: float, key: str) -> dict:
 
 
 async def _cached_wbgt(station: str) -> dict:
-    """環境省WBGT予報のキャッシュ付き取得（地点は全現場共通のためTTL共有で十分）。"""
-    key = f"wbgt:{station}"
+    """環境省WBGT予報のキャッシュ付き取得（#113: 全地点CSV優先→地点別フォールバック）。"""
     now = time.monotonic()
+    all_key = "wbgt:all"
+    hit = _CACHE.get(all_key)
+    if _cache_valid(hit, now):
+        all_data = hit[1]
+    else:
+        all_data = await wbgt_env.fetch_forecast_all()
+        _CACHE[all_key] = (now, all_data)
+    if all_data.get("status") == "OK":
+        points = all_data.get("points_by_station", {}).get(station)
+        if points:
+            return {"source_id": wbgt_env.SOURCE_ID, "station": station,
+                    "points": points, "status": "OK", "error": None,
+                    "fetched_at": all_data.get("fetched_at")}
+
+    # 一括取得が失敗/対象地点なしの場合は地点別CSVへフォールバック（既存挙動を維持）
+    key = f"wbgt:{station}"
     hit = _CACHE.get(key)
     if _cache_valid(hit, now):
         return hit[1]
@@ -68,6 +83,7 @@ async def _cached_wbgt(station: str) -> dict:
 def clear_cache() -> None:
     _CACHE.clear()
     _LAST_GOOD.clear()
+    wbgt_env.clear_wbgt_station_cache()
 
 
 def _parse_jst(value: str | None) -> datetime | None:
@@ -276,8 +292,14 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
     # 公式優先（§5.3）: 環境省WBGT予報が時間帯内で取得できた場合のみ推定値を公式値で上書き。
     # 取得失敗・時間帯外・未設定なら従来の推定値のまま（フォールバックを隠さない）。
     wbgt_official = None
-    if settings.wbgt_station_code:
-        wdata = await _cached_wbgt(settings.wbgt_station_code)
+    wbgt_station_code = settings.wbgt_station_code
+    if db is not None:
+        resolved = wbgt_env.resolve_site_wbgt_station(
+            db, site.id, site.latitude, site.longitude)
+        if resolved:
+            wbgt_station_code = resolved["station_code"]
+    if wbgt_station_code:
+        wdata = await _cached_wbgt(wbgt_station_code)
         wbgt_official = wbgt_env.window_max(wdata.get("points", []), start, end)
         if wbgt_official is not None:
             wr = dict(wr)
@@ -300,6 +322,7 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         "windMax": wr.get("wind_ms"), "gust": wr.get("gust_ms"),
         "tempHi": wr.get("temp_c"), "tempLo": wr.get("temp_lo"),
         "wbgt": wr.get("wbgt"), "wbgtDerived": wbgt_official is None,
+        "wbgtStation": wbgt_station_code or None,
         "river": river_view[0]["river_note"] if river_view else site.river_note,
         "riverState": river_view[0]["river_state"] if river_view else site.river_state,
         "riverSource": river_view[0]["source_river"] if river_view else "DS-RIVER-GO",

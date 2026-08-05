@@ -31,11 +31,15 @@ class Settings(BaseSettings):
     enable_jma_warnings: bool = True
     jma_feed_url: str = "https://www.data.jma.go.jp/developer/xml/feed/extra.xml"
 
-    # 環境省 WBGT（暑さ指数）予報の実接続（#9）。地点コード（例: 44132=東京）を設定した
-    # 場合のみ公式予報値を採用し、未設定なら従来どおり気温湿度からの推定のみ（挙動不変）。
-    # 現場ごとの最寄り地点自動選定は観測所マスタ正規化（#29）で対応予定。
+    # 環境省 WBGT（暑さ指数）予報の実接続（#9 / #113）。
+    # 地点コード（例: 44132=東京）を設定した場合のみ公式予報値を採用し、未設定なら
+    # 観測所マスタ（WBGT-ENV）からの最近傍地点解決へフォールバックする。最終的には
+    # 現場ごとの最寄り地点自動選定を優先する。
     wbgt_base_url: str = "https://www.wbgt.env.go.jp"
     wbgt_station_code: str = ""
+    # 環境省 地点マスタCSV（#113）。年度更新時はURLを差し替える運用
+    wbgt_point_master_url: str = (
+        "https://www.wbgt.env.go.jp/man15NH/wbgt_point_master-20260515.csv")
 
     # CORS（フロントエンドの自動割り当てIP/ポートからの接続を許可するため既定は全許可。本番では絞る）
     cors_origins: str = "*"
