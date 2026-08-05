@@ -5,6 +5,8 @@ WebUI(ClaudeDesign) のモックと同じ S01〜S06 を用い、見た目を一�
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,7 +14,8 @@ from .core.config import settings
 from .core.db import SessionLocal
 from .core.security import hash_password
 from .models import (
-    DataSourceStatus, DecisionLog, IdCounter, Site, SiteLink, Station, User, WorkPlan, WorkType,
+    DataSourceStatus, DecisionLog, IdCounter, Site, SiteLink, Station, User,
+    UserSiteAccess, WorkPlan, WorkType,
 )
 
 # デモ用ユーザー（5ロール）。本番では各自パスワード変更／Entra ID 連携。
@@ -167,6 +170,15 @@ def seed(db: Session) -> None:
             db.add(User(id=uid, username=uname, display_name=disp, role=role,
                         department=dept, email=f"{uname}@example.com",
                         password_hash=hash_password(pw)))
+        # #117: デモユーザーへ全現場を割当（現場単位権限の動作確認と既存UI維持用。
+        # 本番では管理API/Entra同期で個別割当するため、このブロックは local のみ）
+        _now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for uid, role in (("U03", "site_decision"), ("U04", "site_decision"),
+                          ("U05", "site_viewer")):
+            for sid, *_ in SITES:
+                db.add(UserSiteAccess(
+                    id=f"SA-{uid}-{sid}", user_id=uid, site_id=sid, role=role,
+                    granted_by="seed", created_at=_now, updated_at=_now))
 
     # 固定IDシード後にID採番カウンタを実データのmaxへ同期（#49: カウンタ遅延による採番衝突を防ぐ）
     def _maxnum(ids: list[str], prefix: str) -> int:

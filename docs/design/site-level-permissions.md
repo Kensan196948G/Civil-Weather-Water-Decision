@@ -63,7 +63,22 @@ user_site_access
 
 ## 5. 完了条件
 
-- [ ] 割当外の現場APIアクセスが403になる（APIテストで担保）
-- [ ] 現場一覧・ダッシュボード・判定・判断履歴がアクセス可能現場のみ返る
-- [ ] 協力会社ユーザーの受け入れテスト（現場Aユーザーが現場Bを閲覧できない）
-- [ ] 割当監査・解除運用が文書化され、Entra グループ同期と接続可能
+- [x] 割当外の現場APIアクセスが403になる（APIテストで担保）
+- [x] 現場一覧・ダッシュボード・判定・判断履歴がアクセス可能現場のみ返る
+- [x] 割当管理API（GET/POST/DELETE /api/admin/user-site-access）と監査
+- [x] `/api/me/sites` で自分のアクセス可能現場とロールを返す
+- [ ] 協力会社ユーザーの受け入れテスト（現場Aユーザーが現場Bを閲覧できない）— 本番ユーザーで実施
+- [ ] PostgreSQL RLS への移行（将来層）
+- [ ] Entra グループ同期と接続（#118 と連携）
+
+## 6. 実装メモ（#117）
+
+- モデル: `user_site_access`（user_id, site_id, role, granted_by, created_at, updated_at）
+- サービス: `backend/app/services/site_access.py`
+  - `accessible_site_ids()`: admin/tech_manager/safety は全現場、site_manager/viewer は割当のみ
+  - `ensure_site_read()` / `ensure_site_write(action=editor|decision)`
+- アプリ層フィルタ適用API:
+  - 現場一覧・詳細・観測所・リンク・河川実測・気象時系列・ダッシュボード・
+    作業予定・判定・判断履歴・通知・判定結果
+- 管理API: `GET/POST/DELETE /api/admin/user-site-access`（admin限定・監査付き）
+- シード: local のみデモユーザーへ全現場を割当（本番は管理API/Entra同期で運用）
