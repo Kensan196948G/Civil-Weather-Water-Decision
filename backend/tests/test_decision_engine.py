@@ -10,6 +10,33 @@ def test_river_flood_is_stop():
     assert any(x["reason_code"] == "flood_warning" for x in res["reasons"])
 
 
+def test_river_upstream_rain_records_provider_and_value():
+    r = Reading(upstream_rain_mm_h=5.0, source_river="SUIBOSAI-OPEN")
+    res = evaluate("river", r)
+    reason = next(x for x in res["reasons"] if x["reason_code"] == "upstream_rain")
+    assert reason["source_id"] == "SUIBOSAI-OPEN"
+    assert reason["observed_value"] == "上流雨量 5.0mm/h"
+    assert res["overall_level"] == 1
+
+
+def test_river_upstream_rain_source_prefers_rainfall_provider():
+    """上流雨量は値を提供した観測所の出典を記録する（最寄りと異なる場合）。"""
+    r = Reading(upstream_rain_mm_h=5.0, source_river="MANUAL",
+                upstream_rain_source="SUIBOSAI-OPEN")
+    res = evaluate("river", r)
+    reason = next(x for x in res["reasons"] if x["reason_code"] == "upstream_rain")
+    assert reason["source_id"] == "SUIBOSAI-OPEN"
+
+
+def test_river_rising_records_measured_level_and_rate():
+    r = Reading(water_level_trend="rising", water_level_m=2.35,
+                water_level_rate_m_h=0.6, source_river="MANUAL")
+    res = evaluate("river", r)
+    reason = next(x for x in res["reasons"] if x["reason_code"] == "water_level_rising")
+    assert reason["source_id"] == "MANUAL"
+    assert reason["observed_value"] == "水位 2.35m（上昇 0.60m/h）"
+
+
 def test_river_all_missing_is_unavailable():
     r = Reading(missing={"river"})
     res = evaluate("river", r)

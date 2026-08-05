@@ -48,5 +48,6 @@
 - **Open-Meteo（DS-OPEN-METEO）の商用利用条件は未承認**（[確認書](./open-meteo-commercial-terms-review.md)）。
   社内業務利用として有償プラン契約の要否・帰属表示（CC BY 4.0）・SLAを法務/ITへ確認中。
 - WBGT（DS-WBGT）は予報CSVの実接続を実装済みだが**単一地点設定制**（`WBGT_STATION_CODE`）。現場ごとの最寄り地点自動選定は観測所マスタ正規化（`#29`）待ち。実況値CSVは取得経路未解明のため未実装（`samples/README.md` §3）。地点コード未設定時は従来どおり気温・湿度からの推定値。
-- 河川（DS-RIVER-GO, DS-WATER-OPEN）は実測水位の自動取得ができておらず、観測所マスタの正規化（`site_stations`）も未着手（`#29`〜`#31`）。
+- 河川（DS-RIVER-GO, DS-WATER-OPEN）は実測水位の自動取得が未接続（`#31` 残課題）。
+  観測所マスタ・現場紐付け（`#29`）と、手動実測を使った判定エンジン組み込み（`#112`）は実装済み。
 - NASA POWER / JMA-CSV / JAXA / NOAA は疎通確認のみで判定エンジンには未反映（将来拡張）。
