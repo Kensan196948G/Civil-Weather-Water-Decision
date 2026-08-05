@@ -1,5 +1,36 @@
 # リリースノート / Release Notes
 
+## 2026-08-05 — 本番運用準備・監視復旧（PR #131 / v0.2.1）
+
+### 変更内容
+
+- **運用ドキュメント新規**: `docs/ops/` に SLO・運用台帳・インシデントRunbook・
+  定期保守（依存/OS/EOL/ライセンス/Secrets/権限/容量・予算）を追加。
+- **権限境界の厳格化**: `/api/data-collectors/run` を admin/tech_manager 限定に
+  （viewer等の任意実行を防止）。
+- **#74 部分緩和**: `effective_th()`（自前Session生成）を `asyncio.to_thread` 化。
+  共有Sessionはスレッド非安全のため河川/WBGT読取は対象外とし、根拠をコードへ明記。
+- **監視復旧**: systemd drift check に `--ignore-missing-units` を追加し、
+  オフサイト転送unit（未適用）による監視familyのfailedループを解消。
+- **テスト**: run_collectors RBAC・drift-check ignore の回帰テストを追加。
+  テスト順序非依存化（test_audit_logged の現場削除）。
+
+### 検証結果
+
+| 項目 | 結果 |
+| --- | --- |
+| backend pytest | 432 passed |
+| CI（PR #131） | 全5ジョブ success |
+| 本番反映 | 2026-08-05 22:10 JST、backend再起動 |
+| 本番スモーク | health/readyz/login/sites 200・public 302・frontend 200・failed unit 0件 |
+| 監視 | ops-status/JSON export status=ok、restore-drill（checksum+list 86件）PASS |
+| セキュリティ | pip-audit 0件・秘密文字列スキャン0件 |
+
+### 残課題
+
+- 外部監視SaaS・webhook実送信（#116）、オフサイト実転送・復元訓練（#115）、
+  Open-Meteo契約承認（#114）、本番UI受入試験（#119）
+
 ## 2026-08-05 — 外部評価P0ロードマップ（#112〜#119）実装・本番反映
 
 ### 変更内容

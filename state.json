@@ -4,7 +4,7 @@
     "repository": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision.git",
     "registered_at": "2026-06-19",
     "release_deadline": "2026-12-19",
-    "current_phase": "Phase 2 進行中（本番運用準備整備済み: SLO/運用台帳/Runbook/定期保守手順。外部連携・受入試験は残）",
+    "current_phase": "Phase 2 進行中（本番運用準備整備済み・v0.2.1反映。外部連携・受入試験は残）",
     "milestones": {
       "M0_foundation_ready": "2026-07-02 (達成済み)",
       "M1_poc_demoable": "2026-07-30",
@@ -45,7 +45,7 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 417,
+    "backend_tests_total": 432,
     "frontend_tests_total": 74,
     "security_critical": 0,
     "blocker_count": 0,
@@ -100,6 +100,19 @@
       "practical_audit": "PASS（pip-audit 0件・秘密文字列スキャン0件・.git履歴に.env/秘密鍵なし・security-surface/public-edge checks ok・branch protection 5 checks+enforce_admins）"
     },
     "notification_test": "journald dry-run 実施可能。webhook実送信は NOT RUN（#116設定待ち）"
+  },
+  "release_2026_08_05_ops": {
+    "title": "本番運用準備と監視復旧",
+    "pr": 131,
+    "tag": "v0.2.1",
+    "merged_at": "2026-08-05T22:05:00+09:00",
+    "deployed_at": "2026-08-05T22:10:00+09:00",
+    "deployment": "main反映(3cd3e34) + backend再起動 + smoke PASS",
+    "monitoring": "drift-check ignore対応でオフサイトunit未適用でも監視OKに修正。failed_units=0を本番確認",
+    "issues": {
+      "fixed": [74],
+      "tightened": ["run_collectors RBAC"]
+    }
   },
   "session": {
     "last_phase": "Monitor",
