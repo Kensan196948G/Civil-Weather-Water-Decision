@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly Civil-Weather-Water-Decision offsite backup freshness check
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/backup-restore.md
+
+[Timer]
+OnCalendar=*-*-* *:50:00
+RandomizedDelaySec=10min
+AccuracySec=5min
+Persistent=true
+Unit=cwwd-db-backup-offsite-check.service
+
+[Install]
+WantedBy=timers.target

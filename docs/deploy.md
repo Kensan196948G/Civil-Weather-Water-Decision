@@ -104,7 +104,9 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
   水防災オープンデータ提供サービス等の接続は未着手）
 - 現場別 WBGT 地点の自動選定（現状は `WBGT_STATION_CODE` 単一地点。2026年度 環境省 Web API 更新も併せて対応）
 - 現場単位権限（協力会社向け role×site×action。設計は `docs/design/site-level-permissions.md`）
-- オフサイトバックアップ転送（暗号化exportは実装済み。別筐体への転送・復元は未完了）
+- オフサイトバックアップ転送（暗号化exportは実装済み。別筐体への転送・復元は未完了。
+  転送スクリプト/systemd unitは整備済み。実転送・復元訓練は未完了。
+  設計・手順は [backup-restore.md](./backup-restore.md#オフサイトバックアップ転送と復元検証issue-115)）
 - 外部死活監視の実設定（手順・ヘルパーは `docs/external-monitoring.md` /
   `deploy/scripts/external-readiness-check.sh` に整備済み。外部SaaSのアカウント・通知先は要設定）
 - Open-Meteo 商用利用条件の確定（法務・IT で契約要否・帰属表示・SLA を承認するまで要確認）
