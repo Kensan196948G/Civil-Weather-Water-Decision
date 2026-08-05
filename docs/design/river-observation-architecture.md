@@ -10,8 +10,8 @@
 - ✅ 現場との多対多紐付け（`site_stations`。上流/最寄り/参照 の区分）
 - ✅ 実測値の保存・時系列API（`river_observations`。手動入力）
 - ✅ API応答とUIで「自動取得は未接続」を明示
+- ✅ 判定エンジンへの実測値組み込み（#112: 水位トレンド・上流雨量・STALE→レベル3）
 - ❌ 自動取得プロバイダ（水防災オープンデータ提供サービス等）の接続
-- ❌ 判定エンジンへの実測値組み込み（`water_level_trend` の自動導出）
 
 ## 2. 設計原則
 
@@ -114,15 +114,22 @@ ObservationProvider (interface)
 - 取得失敗・遅延時は `quality=STALE/ERROR` の行を保存し、判定エンジンは「確認不能」へ導く。
 - 契約・利用条件・コストの確定までは接続しない（Open-Meteo と同様に法務確認が必要）。
 
-## 6. 判定エンジンへの組み込み（将来実装）
+## 6. 判定エンジンへの組み込み（#112: 実装済み）
 
-現在は `sites.river_state`（手動）を `water_level_trend` へ渡している。自動取得導入後は:
+`assess_site()` は呼び出し側から渡された DB セッションで、現場に紐付く最寄り/上流
+観測所（`site_stations`）の最新実測（`river_observations`）を参照する。
 
-1. 現場に紐付く最寄り・上流観測所の最新実測を取得
+1. 現場に紐付く最寄り・上流観測所の最新実測を取得（`rel=nearest` / `rel=upstream`）
 2. 最新2点の水位から rising/stable を判定（差分と時間差から上昇率を計算）
-3. 上流雨量が閾値 `upstream_rain` 以上なら upstream_rain ルールを発火
-4. 観測が閾値時間（例: 30分）より古い・欠測なら `missing` に river を追加しレベル3
-5. `source_river` を提供元IDに、理由の `observed_value` を実測値にする
+   - 上昇率 0.2m/h 以上で `rising`、それ以外は `stable`（`RIVER_RISING_RATE_M_H`）
+3. 上流雨量が閾値 `upstream_rain` 以上なら `upstream_rain` ルールを発火
+   （上流観測所が無い場合は最寄り観測所の雨量を補完。`source_river` は提供元ID）
+4. 観測が30分（`RIVER_MAX_AGE_SECONDS`）より古い・欠測・品質ERRORなら
+   `missing` に `river` を追加しレベル3（確認不能）
+5. `source_river` を提供元IDに、理由の `observed_value` を実測値（水位・上昇率・雨量）に
+
+観測所・実測が未設定の河川現場は、手動 `river_state` が無い場合は安全側に「確認不能」とする。
+`sites.river_state` は手動入力の後方互換として、自動トレンドが導出できない場合のみ使用する。
 
 ## 7. 完了条件（DoD）
 
@@ -138,8 +145,8 @@ ObservationProvider (interface)
 
 - [x] 実測値の保存・時系列API（手動入力）
 - [x] 河川観測画面（自動取得未接続の明示＋手動登録）
+- [x] 判定エンジンへの実測値組み込み（水位トレンド・上流雨量・STALE→レベル3）
 - [ ] 自動取得ジョブと `data_source_statuses` への反映
-- [ ] 判定エンジンへの実測値組み込み（水位トレンド・上流雨量・STALE→レベル3）
 - [ ] 水位基準線（氾濫注意/避難判断/氾濫危険）の表示
 - [ ] 上流雨量の到達時間表示（流域・距離・流速からの概算）
 
