@@ -81,7 +81,23 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 
 ## 残課題（本番化の継続項目）
 
-- Entra ID OIDC（簡易認証からの差し替え, §12）
-- 通知の定期ディスパッチ（スケジューラから `notifications.dispatch`）
-- トークン失効リスト、ログイン試行のRedis集約
-- GitHub branch protection（main への直接push防止。Issue #56 で対応中）
+実装済み（旧残課題の解消）:
+
+- 通知の定期ディスパッチ: 実装済み（#98。スケジューラから `notifications.dispatch`、
+  `notification_deliveries` 台帳＋重複抑止。2026-08-01 本番で配送確認）
+- トークン失効・ログイン試行制限: 実装済み（`revoked_tokens` / `login_attempts` のDB台帳。
+  Redis ではなく PostgreSQL で複数プロセス・再起動をまたいで共有）
+- GitHub branch protection: 適用済み（main は必須チェック5件＋ enforce_admins。PR経由のみマージ）
+- Entra ID OIDC: **未実装**（要件・詳細設計上は本番候補。`.env.example` に OIDC 変数あり）
+
+未実装・継続項目（外部評価 2026-08 に基づく優先順位）:
+
+- 河川観測所マスタ・実測値の**自動取得**（本PRでマスタ/紐付け/手動実測の基盤を追加。
+  水防災オープンデータ提供サービス等の接続は未着手）
+- 現場別 WBGT 地点の自動選定（現状は `WBGT_STATION_CODE` 単一地点。2026年度 環境省 Web API 更新も併せて対応）
+- 現場単位権限（協力会社向け role×site×action。設計は `docs/design/site-level-permissions.md`）
+- オフサイトバックアップ転送（暗号化exportは実装済み。別筐体への転送・復元は未完了）
+- 外部死活監視（同一ホストの systemd 監視のみ。外部SaaS等での URL/証明書/Access 監視を追加予定）
+- Open-Meteo 商用利用条件の確定（法務・IT で契約要否・帰属表示・SLA を承認するまで要確認）
+- 6工種の標準閾値の安全・技術部門レビューと版管理（`docs/threshold-safety-review.md`）
+- 本番UI受入試験（Access認証後の主要シナリオ。基準は `docs/acceptance/poc-acceptance.md`）

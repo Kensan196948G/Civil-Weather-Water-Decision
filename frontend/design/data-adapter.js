@@ -401,7 +401,8 @@
         { key: "decision", label: "作業判断", native: true },
         { key: "concrete-cast", label: "コンクリート打設", go: "decision", preset: "concrete" },
         { key: "marine-work", label: "海上作業" },
-        { key: "wbgt", label: "熱中症・WBGT", native: true }] },
+        { key: "wbgt", label: "熱中症・WBGT", native: true },
+        { key: "river-obs", label: "河川観測" }] },
       { title: "分析", items: [
         { key: "history", label: "判断履歴", native: true },
         { key: "analytics", label: "過去データ分析" },
@@ -1004,10 +1005,13 @@
             var lvHtml = lvOk
               ? '<span class="cw-badge" style="background:' + CW_LVC[d.level] + '18;color:' + CW_LVC[d.level] + '">' + CW_LV[d.level] + "</span>"
               : "—";
+            var riverBadge = (s.hasRiver || s.work === "river")
+              ? '<span class="cw-badge" style="background:#fbe8e8;color:#c62828;margin-left:4px" title="河川水位・雨量の自動取得は未接続（手動入力または未設定）">河川:手動</span>'
+              : "";
             return '<tr class="click" data-id="' + esc(s.id) + '"><td>' + esc(s.id) + "</td><td><b>"
               + esc(s.name) + "</b></td><td>" + esc(s.loc || "") + "</td><td>" + esc(wn[s.work] || s.work || "")
               + "</td><td>" + esc(s.project || "") + "</td><td>" + esc(s.manager || "") + "</td><td>"
-              + (s.status === "active" ? "稼働中" : "休止") + "</td><td>" + lvHtml + "</td></tr>";
+              + (s.status === "active" ? "稼働中" : "休止") + riverBadge + "</td><td>" + lvHtml + "</td></tr>";
           }).join("") + "</tbody></table>";
       });
     }
@@ -1138,6 +1142,144 @@
         + cwBarRows(bySite) + "</div>"
         + '<div class="cw-pg-card"><h3 style="margin:0 0 10px;font-size:13.5px;color:#13344f">月別件数</h3>'
         + cwBarRows(byMonth) + "</div>";
+    }
+
+    // ---- 河川観測（#29/#31 基盤。自動取得は未接続のため未実装を明示） ----
+    function installRiverScreen() {
+      var el = cwMakeScreen("cw-river-screen",
+        '<div class="cw-pg"><h2>河川観測</h2>'
+        + '<p class="sub">河川内・河川近接現場の観測所と実測値。自動取得は未接続のため、手動入力と公式サイト参照が現時点の運用です。</p>'
+        + '<div class="cw-pg-bar"><button type="button" class="cw-btn" id="cw-river-reload">再読込</button>'
+        + '<span class="cw-msg" id="cw-river-msg"></span></div>'
+        + '<div id="cw-river-body"></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-river-reload").addEventListener("click", function () { cwRenderRiver(); });
+    }
+    window.__cwToggleRiverForm = function (sid, stationId) {
+      var form = document.getElementById("cw-river-form-" + sid + "-" + stationId);
+      if (form) form.style.display = form.style.display === "none" ? "block" : "none";
+    };
+    window.__cwSubmitRiver = function (sid, stationId) {
+      cwSubmitRiverManual(sid, stationId);
+    };
+    function cwRiverBadge(rel) {
+      var m = { upstream: "上流", nearest: "最寄り", reference: "参照" };
+      return m[rel] || rel || "";
+    }
+    function cwRiverVal(obs) {
+      if (!obs) return "";
+      var parts = [];
+      if (obs.waterLevelM != null) parts.push("水位 " + esc(obs.waterLevelM) + " m");
+      if (obs.rainfallMmH != null) parts.push("雨量 " + esc(obs.rainfallMmH) + " mm/h");
+      return parts.join(" / ");
+    }
+    function cwSubmitRiverManual(sid, stationId) {
+      var msg = document.getElementById("cw-river-msg");
+      var levelEl = document.getElementById("cw-river-lvl-" + sid + "-" + stationId);
+      var rainEl = document.getElementById("cw-river-rain-" + sid + "-" + stationId);
+      var noteEl = document.getElementById("cw-river-note-" + sid + "-" + stationId);
+      var level = levelEl ? parseFloat(levelEl.value) : NaN;
+      var rain = rainEl ? parseFloat(rainEl.value) : NaN;
+      var body = { station_id: stationId };
+      if (!isNaN(level)) body.water_level_m = level;
+      if (!isNaN(rain)) body.rainfall_mm_h = rain;
+      if (noteEl && noteEl.value) body.note = noteEl.value;
+      if (body.water_level_m == null && body.rainfall_mm_h == null) {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "水位または雨量を入力してください"; }
+        return;
+      }
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "保存中…"; }
+      adapter.authedFetch("/api/sites/" + sid + "/river-observations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      }).then(function (r) { return r.json(); }).then(function (res) {
+        if (res && res.status === "created") {
+          if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "実測値を保存しました"; }
+          cwRenderRiver();
+        } else {
+          var detail = (res && res.detail) || "保存できませんでした";
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "保存失敗: " + (Array.isArray(detail) ? detail.map(function (d) { return d.msg; }).join(" / ") : detail); }
+        }
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "保存に失敗しました（権限または接続を確認）"; }
+      });
+    }
+    function cwRenderRiver() {
+      var box = document.getElementById("cw-river-body");
+      if (!box) return;
+      var msg = document.getElementById("cw-river-msg");
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "更新中…"; }
+      var meta = adapter._state.meta || [];
+      var riverSites = meta.filter(function (s) { return s.hasRiver || s.work === "river"; });
+      if (!riverSites.length) {
+        box.innerHTML = '<div class="cw-pg-card"><div class="cw-empty">河川内・河川近接の現場がありません。</div></div>';
+        if (msg) msg.textContent = "";
+        return;
+      }
+      var role = cwUser ? cwUser.role : "";
+      var canWrite = role === "admin" || role === "tech_manager";
+      var notice = '<div class="cw-pg-card" style="border-left:4px solid #c62828">'
+        + '<div style="font-weight:800;color:#c62828">河川水位・雨量の自動取得は未接続です（未実装）</div>'
+        + '<div style="font-size:11.5px;color:#5f7081;margin-top:4px">現在の河川状態は手動入力または未設定です。'
+        + '自動取得（水防災オープンデータ提供サービス等）はロードマップ上の未実装項目です。'
+        + '退避判断は必ず<a href="https://www.river.go.jp/" target="_blank" rel="noopener noreferrer" style="color:#16527d">川の防災情報（国交省）</a>と現地確認を優先してください。</div></div>';
+      Promise.all(riverSites.map(function (s) {
+        return Promise.all([
+          adapter.authedFetch("/api/sites/" + s.id + "/observation-stations")
+            .then(function (r) { return r.json(); }).catch(function () { return null; }),
+          adapter.authedFetch("/api/sites/" + s.id + "/river-observations?limit=10")
+            .then(function (r) { return r.json(); }).catch(function () { return null; })
+        ]).then(function (pair) { return { site: s, stations: pair[0], series: pair[1] }; });
+      })).then(function (rows) {
+        box.innerHTML = notice + rows.map(function (row) {
+          var st = row.stations && row.stations.stations ? row.stations.stations : [];
+          var obs = row.series && row.series.observations ? row.series.observations : [];
+          var stationHtml = st.length
+            ? st.map(function (x) {
+                var val = x.latest ? cwRiverVal(x.latest) : "";
+                var formId = "cw-river-form-" + esc(row.site.id) + "-" + esc(x.id);
+                var formHtml = canWrite
+                  ? '<tr><td colspan="5" style="padding:6px">'
+                    + '<button type="button" class="cw-btn" style="margin-bottom:4px" onclick="__cwToggleRiverForm(\'' + esc(row.site.id) + "','" + esc(x.id) + '\')">手動登録</button>'
+                    + '<div id="' + formId + '" style="display:none;background:#f6f8fa;border:1px solid #e1e7ed;border-radius:8px;padding:10px">'
+                    + '<div style="font-size:11.5px;font-weight:700;margin-bottom:6px">手動実測値の登録（' + esc(x.name) + "）</div>"
+                    + '<input type="number" step="0.01" id="cw-river-lvl-' + esc(row.site.id) + "-" + esc(x.id)
+                    + '" placeholder="水位 (m)" style="width:130px;margin-right:6px;padding:6px;border:1px solid #c9d3db;border-radius:6px">'
+                    + '<input type="number" step="0.1" id="cw-river-rain-' + esc(row.site.id) + "-" + esc(x.id)
+                    + '" placeholder="雨量 (mm/h)" style="width:140px;margin-right:6px;padding:6px;border:1px solid #c9d3db;border-radius:6px">'
+                    + '<input type="text" id="cw-river-note-' + esc(row.site.id) + "-" + esc(x.id)
+                    + '" placeholder="備考（任意）" style="width:220px;margin-right:6px;padding:6px;border:1px solid #c9d3db;border-radius:6px">'
+                    + '<button type="button" class="cw-btn cw-btn-pri" onclick="__cwSubmitRiver(\'' + esc(row.site.id) + "','" + esc(x.id) + '\')">保存</button>'
+                    + "</div></td></tr>"
+                  : "";
+                return '<tr><td>' + esc(x.name) + "</td><td>" + esc(cwRiverBadge(x.rel)) + "</td><td>"
+                  + esc(x.stationCode) + "</td><td>" + esc(x.kind) + "</td><td>"
+                  + (x.latest
+                    ? '<b style="color:#13344f">' + val + ' <span style="font-weight:400;color:#7e8c99">(' + esc(x.latest.observedAt) + ")</span></b>"
+                    : '<span style="color:#c62828">実測値なし</span>')
+                  + "</td></tr>" + formHtml;
+              }).join("")
+            : '<tr><td colspan="5" style="color:#c62828">観測所が紐付いていません（管理APIからの登録が必要）</td></tr>';
+          var seriesHtml = obs.length
+            ? obs.map(function (o) {
+                return '<div style="font-size:12px;padding:2px 0">' + esc(o.observedAt) + " — " + cwRiverVal(o)
+                  + ' <span style="color:#7e8c99">[' + esc(o.source) + " " + esc(o.quality) + "]</span></div>";
+              }).join("")
+            : '<div class="cw-empty">実測値はまだありません。下の「手動登録」または管理APIで入力します。</div>';
+          return '<div class="cw-pg-card">'
+            + '<h3 style="margin:0 0 6px;font-size:13.5px;color:#13344f">' + esc(row.site.name)
+            + ' <span style="font-weight:400;color:#7e8c99">(' + esc(row.site.code || row.site.id) + ")</span></h3>"
+            + '<table class="cw-tbl"><thead><tr><th>観測所</th><th>区分</th><th>コード</th><th>種別</th><th>最新値</th></tr></thead><tbody>'
+            + stationHtml + "</tbody></table>"
+            + '<h4 style="margin:12px 0 4px;font-size:12px;color:#3a4854">直近の実測値（新しい順）</h4>' + seriesHtml
+            + "</div>";
+        }).join("");
+        if (msg) msg.textContent = "";
+      }).catch(function () {
+        box.innerHTML = notice + '<div class="cw-pg-card"><div class="cw-empty">河川観測データを取得できませんでした（権限または接続を確認）</div></div>';
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "取得失敗"; }
+      });
     }
 
     // ---- レポート出力（管理） ----
@@ -1549,6 +1691,7 @@
     // 画面レジストリ登録（cwSyncScreens が参照）
     CW_SCREENS["sites-list"] = { id: "cw-sites-screen", show: cwRenderSites, live: true };
     CW_SCREENS["wx-national"] = { id: "cw-wx-screen", show: cwRenderWx, live: true };
+    CW_SCREENS["river-obs"] = { id: "cw-river-screen", show: cwRenderRiver, live: true };
     CW_SCREENS["marine-national"] = { id: "cw-marine-screen" };
     CW_SCREENS["marine-work"] = { id: "cw-mwork-screen" };
     CW_SCREENS["analytics"] = { id: "cw-analytics-screen", show: cwRenderAnalytics, live: true };
@@ -1805,6 +1948,7 @@
           installSitesScreen();
           installWxScreen();
           installAnalyticsScreen();
+          installRiverScreen();
           installReportsScreen();
           installOpsScreen();
           installAuditScreen();
