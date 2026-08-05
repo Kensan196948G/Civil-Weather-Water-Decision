@@ -440,6 +440,10 @@ journalctl -u cwwd-db-backup-offsite-check.service -n 100 --no-pager
 
 #### 障害時対応
 
+> オフサイト転送先の設定が完了するまで、`cwwd-db-backup-offsite-*` のunitは
+> systemdへ未適用のため、`cwwd-systemd-unit-drift-check` のignore対象に指定している
+> （転送先設定後にunit適用し、ignore解除する）。
+
 | 症状 | 対応 |
 |---|---|
 | 転送失敗 | journald / alert を確認。転送先疎通・権限・容量を確認し、手動転送で追い上げ。失敗を放置しない |

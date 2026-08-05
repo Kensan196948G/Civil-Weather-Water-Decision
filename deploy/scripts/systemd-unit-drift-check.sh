@@ -8,6 +8,9 @@ Usage: systemd-unit-drift-check.sh [options]
 Checks that applied CWWD systemd units match repository copies:
   --repo-dir PATH       default deploy/systemd under current working directory
   --system-dir PATH     default /etc/systemd/system
+  --ignore-missing-units LIST
+                        comma/space separated basenames to skip when missing
+                        (e.g. units not deployed until external config ready)
   --allow-extra-units   do not fail on extra cwwd units in system-dir
 USAGE
 }
@@ -15,6 +18,7 @@ USAGE
 REPO_DIR="${CWWD_SYSTEMD_REPO_DIR:-deploy/systemd}"
 SYSTEM_DIR="${CWWD_SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 ALLOW_EXTRA_UNITS=false
+IGNORE_MISSING=""
 
 fail() {
   echo "$1" >&2
@@ -34,6 +38,10 @@ while [[ $# -gt 0 ]]; do
     --allow-extra-units)
       ALLOW_EXTRA_UNITS=true
       shift
+      ;;
+    --ignore-missing-units)
+      IGNORE_MISSING="${2:?--ignore-missing-units requires a list}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -55,6 +63,8 @@ repo_units="$(
   find "$REPO_DIR" -maxdepth 1 -type f \( -name 'cwwd-*.service' -o -name 'cwwd-*.timer' \) \
     -printf '%f\n' | sort
 )"
+
+ignore_set="$(printf '%s' "$IGNORE_MISSING" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | sort -u)"
 system_units="$(
   find "$SYSTEM_DIR" -maxdepth 1 -type f \( -name 'cwwd-*.service' -o -name 'cwwd-*.timer' \) \
     -printf '%f\n' | sort
@@ -73,6 +83,10 @@ while IFS= read -r unit; do
   repo_path="$REPO_DIR/$unit"
   system_path="$SYSTEM_DIR/$unit"
   if [[ ! -f "$system_path" ]]; then
+    if grep -Fxq "$unit" <<< "$ignore_set"; then
+      echo "skipped_missing_unit=$unit (ignore-list)" >&2
+      continue
+    fi
     echo "missing_system_unit=$unit" >&2
     missing=$((missing + 1))
     failed=true
