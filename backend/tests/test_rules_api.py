@@ -231,7 +231,7 @@ def test_persisting_evaluation_bypasses_stale_cache(client, monkeypatch):
 
 def test_thresholds_not_leaked_to_general_responses(client):
     """閾値dictは/api/admin/rules以外の応答に載らない（admin読み取り境界の維持）。"""
-    token = login_token(client, "viewer")
+    token = login_token(client, "yamada")  # site_manager（現場割当済み）で評価を実行
     h = {"Authorization": "Bearer " + token}
     dash = client.get("/api/dashboard/site-risk", headers=h)
     assert dash.status_code == 200
