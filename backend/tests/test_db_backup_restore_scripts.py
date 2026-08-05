@@ -852,7 +852,9 @@ if [[ "$cmd" == "show" ]]; then
 fi
 if [[ "$cmd" == "list-units" ]]; then
   if [[ -n "$failed" ]]; then
-    printf '%s loaded failed failed test failure\\n' "$failed"
+    for u in $failed; do
+      printf '%s loaded failed failed test failure\\n' "$u"
+    done
   fi
   exit 0
 fi
@@ -1170,6 +1172,39 @@ def test_ops_status_rejects_failed_cwwd_units(tmp_path):
     assert "failed_units=1" in r.stdout
     assert "failed_unit=cwwd-app-health-check.service" in r.stdout
     assert "Failed cwwd systemd units are present" in r.stderr
+
+
+def test_ops_status_ignores_monitoring_family_failed_units(tmp_path):
+    """監視家族自身の failed 状態は連鎖を起こさない（2026-08-05 実機障害の再発防止）。"""
+    _write_fake_systemctl(
+        tmp_path,
+        failed=("cwwd-ops-status.service cwwd-ops-status-json-export.service "
+                "cwwd-ops-status-json-check.service"),
+    )
+
+    r = subprocess.run([str(OPS_STATUS), "--json"],
+                       env=_env(tmp_path), text=True, capture_output=True)
+
+    assert r.returncode == 0, r.stderr
+    payload = json.loads(r.stdout)
+    assert payload["status"] == "ok"
+    assert payload["failed_units_count"] == 0
+    assert payload["failed_units"] == []
+
+
+def test_ops_status_still_rejects_real_failure_alongside_monitoring_family(tmp_path):
+    """実チェック系の失敗は監視家族が failed でも従来どおり検出する。"""
+    _write_fake_systemctl(
+        tmp_path,
+        failed=("cwwd-ops-status.service cwwd-ops-status-json-export.service "
+                "cwwd-app-health-check.service"),
+    )
+
+    r = subprocess.run([str(OPS_STATUS)], env=_env(tmp_path), text=True, capture_output=True)
+
+    assert r.returncode == 3
+    assert "failed_units=1" in r.stdout
+    assert "failed_unit=cwwd-app-health-check.service" in r.stdout
 
 
 def test_ops_status_can_report_failed_units_without_failing(tmp_path):

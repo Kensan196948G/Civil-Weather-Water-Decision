@@ -243,13 +243,22 @@ FAILED_UNITS="$(systemctl list-units --failed --plain --no-legend 'cwwd-*' 2>/de
 if [[ -n "$FAILED_UNITS" ]]; then
   while IFS= read -r failed_line; do
     [[ -n "$failed_line" ]] || continue
-    FAILED_UNIT_NAMES+=("$(awk '{ print $1 }' <<< "$failed_line")")
+    unit_name="$(awk '{ print $1 }' <<< "$failed_line")"
+    # 監視家族自身（ops-status系）の failed 状態は、JSON再生成により自然回復する導線を
+    # 持つため連鎖の起点にしない（2026-08-05 実機: 再起動後の1回の失敗が
+    # ops-status → json-export → json-check の failed ループを3日間継続させた）。
+    # 実サービス（backend/frontend/tunnel）や実チェック系の失敗は従来どおり検出する。
+    case "$unit_name" in
+      cwwd-ops-status.service|cwwd-ops-status-json-export.service|cwwd-ops-status-json-check.service|cwwd-ops-failure@cwwd-ops-status*)
+        continue ;;
+    esac
+    FAILED_UNIT_NAMES+=("$unit_name")
   done <<< "$FAILED_UNITS"
   emit_property "failed_units" "${#FAILED_UNIT_NAMES[@]}"
   for failed_unit in "${FAILED_UNIT_NAMES[@]}"; do
     emit_property "failed_unit" "$failed_unit"
   done
-  if [[ "$ALLOW_FAILED_UNITS" == false ]]; then
+  if (( ${#FAILED_UNIT_NAMES[@]} > 0 )) && [[ "$ALLOW_FAILED_UNITS" == false ]]; then
     [[ "$FORMAT" == "json" ]] && print_json "failed"
     fail "Failed cwwd systemd units are present" 3
   fi
