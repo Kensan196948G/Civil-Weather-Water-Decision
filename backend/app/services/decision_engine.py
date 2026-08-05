@@ -44,6 +44,8 @@ class Reading:
     wbgt: Optional[float] = None
     upstream_rain_mm_h: Optional[float] = None
     water_level_trend: Optional[str] = None  # 'rising' | 'stable' | 'stale' | None
+    water_level_m: Optional[float] = None          # 直近実測の水位（理由の実測値表示用）
+    water_level_rate_m_h: Optional[float] = None   # 直近2点から導出した上昇率
     flood_warning: bool = False              # 公式の洪水予報・水位到達情報・洪水警報等
     thunderstorm: bool = False               # 雷注意報等
     heavy_rain_warning: bool = False         # 気象庁 大雨警報
@@ -112,11 +114,15 @@ RULES: list[Rule] = [
     Rule("upstream_rain", ("river",), 1,
          lambda r, th: _has(r, "upstream_rain_mm_h") and r.upstream_rain_mm_h >= th["upstream_rain"],
          "上流域で雨量が増加しています。水位上昇に注意してください（到達時間差）。",
-         lambda r: r.source_weather, lambda r: f"上流雨量 {r.upstream_rain_mm_h}mm/h"),
+         lambda r: r.source_river, lambda r: f"上流雨量 {r.upstream_rain_mm_h}mm/h"),
     Rule("water_level_rising", ("river",), 1,
          lambda r, th: r.water_level_trend == "rising",
          "水位が上昇傾向です。退避基準と作業継続条件を確認してください。",
-         lambda r: r.source_river, lambda r: "水位 上昇傾向"),
+         lambda r: r.source_river,
+         lambda r: (f"水位 {r.water_level_m}m（上昇 {r.water_level_rate_m_h:.2f}m/h）"
+                    if r.water_level_m is not None and r.water_level_rate_m_h is not None
+                    else (f"水位 {r.water_level_m}m" if r.water_level_m is not None
+                          else "水位 上昇傾向"))),
     Rule("flood_warning", ("river",), 2,
          lambda r, th: r.flood_warning,
          "洪水関連情報が発表されています。河川内作業の中止・退避を検討してください。",

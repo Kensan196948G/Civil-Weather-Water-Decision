@@ -146,10 +146,11 @@ async def get_site(site_id: str, db: Session = Depends(get_db)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
-    card = await assessment.assess_site(site)
+    card = await assessment.assess_site(site, db=db)
     plans = []
     for p in site.plans:
-        d = await assessment.assess_decision(site, p.work_type, p.planned_start, p.planned_end)
+        d = await assessment.assess_decision(site, p.work_type, p.planned_start,
+                                             p.planned_end, db=db)
         plans.append({"id": p.id, "title": p.title, "time": f"{p.planned_start}–{p.planned_end}",
                       "contractor": p.contractor, "workType": p.work_type,
                       "level": d["overall_level"], "levelLabel": d["overall_label"],
@@ -1391,7 +1392,7 @@ def delete_river_observation(observation_id: str, db: Session = Depends(get_db),
 async def dashboard_site_risk(db: Session = Depends(get_db)):
     sites = db.scalars(
         select(Site).where(Site.status == "active").order_by(Site.id)).all()
-    cards = await assessment.assess_all(list(sites))
+    cards = await assessment.assess_all(list(sites), db=db)
     counts = [0, 0, 0, 0]
     for c in cards:
         counts[c["level"]] += 1
@@ -1463,7 +1464,8 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
     # 永続化する判定は閾値キャッシュをバイパスした fresh 値で評価し、同じ値をスナップショット
     # 保存する(古い閾値での保存を防ぐ)。応答には閾値を含めない(admin読み取り境界の維持)
     th = rules_service.effective_th(fresh=True)
-    res = await assessment.assess_decision(site, req.work_type, req.start, req.end, th=th)
+    res = await assessment.assess_decision(site, req.work_type, req.start, req.end,
+                                           th=th, db=db)
     rid = _persist_decision_result(db, site.id, req.work_type, res, thresholds=th,
                                    user=user, audit_label=req.work_type)
     res["resultId"] = rid
@@ -1657,7 +1659,7 @@ async def evaluate_work_plan(plan_id: str, db: Session = Depends(get_db),
     # /api/decisions/evaluate と同じ fresh 閾値・スナップショット経路(第2の永続化パス)
     th = rules_service.effective_th(fresh=True)
     res = await assessment.assess_decision(site, plan.work_type, plan.planned_start,
-                                           plan.planned_end, th=th)
+                                           plan.planned_end, th=th, db=db)
     rid = _persist_decision_result(db, site.id, plan.work_type, res, thresholds=th,
                                    user=user, audit_label=plan_id)
     res["resultId"] = rid
@@ -1736,7 +1738,7 @@ async def run_collectors(db: Session = Depends(get_db),
     audit(db, user, "collectors_run", "手動再取得")
     assessment.clear_cache()
     sites = db.scalars(select(Site).where(Site.status == "active")).all()
-    cards = await assessment.assess_all(list(sites))
+    cards = await assessment.assess_all(list(sites), db=db)
     ok = sum(1 for c in cards if c["weatherStatus"] == "OK")
     # 全データソースを実プローブして状態を更新（Open-Meteo含む）
     probed = await source_probe.probe_all(db)
@@ -1749,7 +1751,7 @@ async def run_collectors(db: Session = Depends(get_db),
 async def list_notifications(db: Session = Depends(get_db),
                              user: User = Depends(get_current_user)):
     sites = db.scalars(select(Site).where(Site.status == "active").order_by(Site.id)).all()
-    cards = await assessment.assess_all(list(sites))
+    cards = await assessment.assess_all(list(sites), db=db)
     src = db.scalars(select(DataSourceStatus).order_by(DataSourceStatus.id)).all()
     sources = [{"id": d.id, "name": d.name, "status": d.status,
                 "fails": d.fails, "lastOk": d.last_ok} for d in src]
