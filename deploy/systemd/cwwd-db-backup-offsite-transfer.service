@@ -1,0 +1,37 @@
+[Unit]
+Description=Civil-Weather-Water-Decision offsite backup transfer
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/backup-restore.md
+After=network-online.target cwwd-db-backup-export.service
+Wants=network-online.target
+OnFailure=cwwd-db-backup-failure@%n.service
+
+[Service]
+Type=oneshot
+User=kensan
+Group=kensan
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision
+EnvironmentFile=/home/kensan/.config/cwwd/offsite.env
+ExecStartPre=/usr/bin/test -r /var/backups/cwwd/exports
+ExecStart=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/deploy/scripts/db-backup-offsite-transfer.sh
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+RemoveIPC=true
+UMask=0077
