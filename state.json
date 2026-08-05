@@ -45,11 +45,27 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 389,
+    "backend_tests_total": 405,
     "frontend_tests_total": 74,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
+  },
+  "release_2026_08_05": {
+    "pr": 120,
+    "title": "河川観測所マスタ・現場紐付け・実測値基盤と外部評価P0対応",
+    "merge_commit": "462b433a3c684d6ab816c887b2bfaa498fe071e0",
+    "merged_at": "2026-08-05T09:58:07Z",
+    "tag": "v0.1.0",
+    "deployed_at": "2026-08-05T18:58:26+09:00",
+    "deployment": "main反映(fetch/pull 462b433) + systemd再起動(cwwd-backend/cwwd-frontend) + app-health-check全PASS",
+    "migration": "a1b2c3d4e5f6(本番適用済み・observation_stations/site_stations/river_observations 3テーブル・データ0件・既存データ影響なし)",
+    "ci_main": "run 30995473428 全5ジョブ success",
+    "incident": "alembic upgrade headをテストDB指定なしで実行し本番Neonへ先行適用(2026-08-05)。追加のみで無害・隠蔽せずPR #120へ記載。再発防止: DBコマンドはテストDB明示を必須化",
+    "issues": {
+      "redesigned": [29, 31],
+      "created": [112, 113, 114, 115, 116, 117, 118, 119]
+    }
   },
   "session": {
     "last_phase": "Monitor",
