@@ -1,5 +1,41 @@
 # リリースノート / Release Notes
 
+## 2026-08-05 — 外部評価P0ロードマップ（#112〜#119）実装・本番反映
+
+### 変更内容
+
+- **河川実測の判定組み込み（#112 / PR #122）**: 最寄り/上流観測所の最新実測を評価へ反映。
+  水位上昇率0.2m/h以上で `rising`、上流雨量ルール、30分超/欠測/ERRORはレベル3（確認不能）。
+  判定理由に実測値・出典・時刻を記録。
+- **環境省WBGT地点マスタ（#113 / PR #124）**: 地点マスタ同期API/CLI、全地点予報CSV
+  （`yohou_all.csv`）対応、現場別最近傍自動選定（明示リンク優先）。
+- **現場単位権限（#117 / PR #126）**: `user_site_access` 追加。site_manager/viewer は割当現場のみ、
+  未割当は403。管理API（grant/revoke）と `/api/me/sites` を追加。
+- **Entra ID OIDC（#118 / PR #127・Approval PR）**: Authorization Code + PKCE、id_token検証
+  （JWKS/iss/aud/exp/nonce）、グループ→ロール、auto-provision。既定 `AUTH_MODE=app` のため
+  現行認証は互換。本番切替は IT 部門と共同で実施。
+- **ドキュメント/運用整備（#114/#115/#116/#119 / PR #123/#125/#128/#129）**:
+  Open-Meteo商用条件確認書、オフサイトバックアップ転送・監視スクリプト/systemd、
+  外部死活監視手順・ヘルパー、本番UI受入試験チェックリスト。
+
+### 検証結果
+
+| 項目 | 結果 |
+| --- | --- |
+| backend pytest | 417 passed |
+| frontend tests / E2E | PASS |
+| CI（各PR） | 全5ジョブ success |
+| 本番反映 | 2026-08-05 21:40 JST、main反映＋alembic upgrade＋systemd再起動 |
+| 本番DB | `user_site_access` 追加（0件）、alembic_version=h1i2j3k4l5m6 |
+| 本番スモーク | health/readyz/login/sites/user-site-access/OIDC status/public 302 全PASS |
+
+### 残課題
+
+- #114 Open-Meteo契約要否は法務/IT承認待ち
+- #115 実転送先設定と復元訓練、#116 外部SaaS設定と通知確認
+- #119 3現場・30日間の受入試験実施
+- #118 Entra側のアプリ登録・条件付きアクセス（IT部門共同）
+
 ## 2026-08-05 — 河川観測基盤・外部評価P0対応（PR #120 / v0.1.0）
 
 ### 変更内容
