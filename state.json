@@ -45,7 +45,7 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 405,
+    "backend_tests_total": 417,
     "frontend_tests_total": 74,
     "security_critical": 0,
     "blocker_count": 0,
@@ -66,6 +66,29 @@
       "redesigned": [29, 31],
       "created": [112, 113, 114, 115, 116, 117, 118, 119]
     }
+  },
+  "release_2026_08_05_roadmap": {
+    "title": "外部評価P0ロードマップ（#112〜#119）一括実装・本番反映",
+    "prs": [123, 122, 124, 125, 128, 129, 126, 127],
+    "issues": {
+      "implemented": [112, 113, 117, 118],
+      "external_pending": [114, 115, 116, 119]
+    },
+    "merged_at": "2026-08-05T21:35:00+09:00",
+    "deployed_at": "2026-08-05T21:40:00+09:00",
+    "deployment": "main反映(9cdf5eb) + alembic upgrade head(h1i2j3k4l5m6 user_site_access) + systemd再起動(cwwd-backend/cwwd-frontend) + smoke全PASS",
+    "migration": "h1i2j3k4l5m6(本番適用済み・user_site_access 1テーブル追加・既存データ影響なし)",
+    "smoke": {
+      "health": "200 OK",
+      "readyz": "200 OK",
+      "login": "OK",
+      "sites": 16,
+      "user_site_access": "テーブル/API動作・割当0件（adminは全現場）",
+      "oidc_status": "enabled=false（既定 app モード）",
+      "public_url": "302（Cloudflare Access）",
+      "frontend": "200 OK"
+    },
+    "ci_main": "PR #122/#123/#124/#125/#126/#127/#128/#129 各5ジョブ success"
   },
   "session": {
     "last_phase": "Monitor",
