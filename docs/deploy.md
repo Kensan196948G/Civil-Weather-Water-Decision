@@ -90,6 +90,14 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - GitHub branch protection: 適用済み（main は必須チェック5件＋ enforce_admins。PR経由のみマージ）
 - Entra ID OIDC: **未実装**（要件・詳細設計上は本番候補。`.env.example` に OIDC 変数あり）
 
+## 外部死活監視（#116）
+
+- 監視対象: `https://cwwd.mirai-dx-platform.com/` の HTTP 302（Cloudflare Access）、
+  TLS証明書残日数、DNS名前解決（詳細: `docs/external-monitoring.md`）
+- ヘルパー: `deploy/scripts/external-readiness-check.sh`（別ホスト/外部SaaS用・認証情報不要）
+- 設定手順・当番・復旧手順: `docs/external-monitoring.md`
+- 現状: **外部SaaSアカウントと通知先は未設定**（IT・DX部門の設定作業が必要）
+
 未実装・継続項目（外部評価 2026-08 に基づく優先順位）:
 
 - 河川観測所マスタ・実測値の**自動取得**（本PRでマスタ/紐付け/手動実測の基盤を追加。
@@ -97,8 +105,10 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - 現場別 WBGT 地点の自動選定（現状は `WBGT_STATION_CODE` 単一地点。2026年度 環境省 Web API 更新も併せて対応）
 - 現場単位権限（協力会社向け role×site×action。設計は `docs/design/site-level-permissions.md`）
 - オフサイトバックアップ転送（暗号化exportは実装済み。別筐体への転送・復元は未完了。
+  転送スクリプト/systemd unitは整備済み。実転送・復元訓練は未完了。
   設計・手順は [backup-restore.md](./backup-restore.md#オフサイトバックアップ転送と復元検証issue-115)）
-- 外部死活監視（同一ホストの systemd 監視のみ。外部SaaS等での URL/証明書/Access 監視を追加予定）
+- 外部死活監視の実設定（手順・ヘルパーは `docs/external-monitoring.md` /
+  `deploy/scripts/external-readiness-check.sh` に整備済み。外部SaaSのアカウント・通知先は要設定）
 - Open-Meteo 商用利用条件の確定（法務・IT で契約要否・帰属表示・SLA を承認するまで要確認）
 - 6工種の標準閾値の安全・技術部門レビューと版管理（`docs/threshold-safety-review.md`）
 - 本番UI受入試験（Access認証後の主要シナリオ。基準は `docs/acceptance/poc-acceptance.md`）
