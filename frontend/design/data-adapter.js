@@ -61,6 +61,11 @@
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }
       }).catch(function () {}).then(function () { clearToken(); return { ok: true }; });
     }
+    // ---- OIDC（#118）----
+    function oidcStatus() {
+      return _fetch(url("/api/auth/oidc/status")).then(function (r) { return r.json(); })
+        .catch(function () { return { enabled: false }; });
+    }
 
     // ---- マッピング（API形 → dc が期待する形）----
     function mapReasons(rs) {
@@ -276,7 +281,8 @@
       patch: patch, loadAll: loadAll, loadDashboard: loadDashboard, loadSources: loadSources,
       loadHistory: loadHistory, loadSeries: loadSeries, ensureSiteDetail: ensureSiteDetail,
       workTypes: workTypes, createSite: createSite,
-      login: login, logout: logout, getToken: getToken, clearToken: clearToken,
+      login: login, logout: logout, oidcStatus: oidcStatus,
+      getToken: getToken, clearToken: clearToken,
       me: function () { return j("/api/auth/me"); },
       notifications: function () { return j("/api/notifications"); },
       rules: function () { return j("/api/admin/rules"); },
@@ -1828,6 +1834,9 @@
         + ".cw-login-card label{display:block;font-size:11.5px;font-weight:700;color:#3a4854;margin:11px 0 4px}"
         + ".cw-login-card input{width:100%;padding:10px;border:1px solid #d4dce2;border-radius:7px;font:400 14px sans-serif;box-sizing:border-box}"
         + ".cw-login-card button{width:100%;margin-top:18px;padding:11px;border:none;border-radius:8px;background:#16527d;color:#fff;font:700 14px 'Noto Sans JP',sans-serif;cursor:pointer}"
+        + ".cw-login-card .cw-oidc-btn{margin-top:10px;background:#fff;color:#16527d;border:1px solid #b8c9d6}"
+        + "#cw-login.oidc input,#cw-login.oidc button[type=submit]{display:none}"
+        + "#cw-login.oidc .cw-oidc-btn{display:block}"
         + ".cw-login-msg{margin-top:10px;font-size:12px;min-height:16px;color:#c62828}"
         + ".cw-login-hint{margin-top:14px;font-size:11px;color:#7e8c99;line-height:1.7}"
         + "#cw-user{display:none;align-items:center;gap:8px;"
@@ -1846,6 +1855,34 @@
         + '<div class="cw-login-hint" id="cw-login-hint"></div>'
         + "</form>";
       document.body.appendChild(ov);
+      // OIDC コールバックのフラグメント（#oidc_token=...）を消費して再読込する
+      try {
+        if (typeof location !== "undefined" && location.hash
+            && location.hash.indexOf("#oidc_token=") === 0) {
+          setToken(decodeURIComponent(location.hash.slice("#oidc_token=".length)));
+          if (typeof history !== "undefined" && history.replaceState) {
+            history.replaceState(null, "", location.pathname + location.search);
+          }
+          location.reload();
+          return;
+        }
+      } catch (_) {}
+      // OIDC 有効時は Entra ログインボタンを表示し、パスワード入力は隠す
+      adapter.oidcStatus().then(function (s) {
+        if (s && s.enabled) {
+          ov.classList.add("oidc");
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "cw-oidc-btn";
+          btn.textContent = "Entra ID でログイン";
+          btn.addEventListener("click", function () {
+            location.href = apiBase + "/api/auth/oidc/authorize?redirect="
+              + encodeURIComponent(location.pathname + location.search);
+          });
+          ov.querySelector(".cw-login-card").insertBefore(
+            btn, ov.querySelector(".cw-login-msg"));
+        }
+      }).catch(function () {});
       // デモ資格情報のヒントは env=local（seed.py がデモユーザーを作成する環境）でのみ表示する。
       // 本番はデモ資格情報が存在しない/パスワードが異なり得るため、無条件表示は誤情報になる。
       // /health は認証不要・同一オリジンで安全に参照可能。取得失敗時は表示しない（fail-closed）。

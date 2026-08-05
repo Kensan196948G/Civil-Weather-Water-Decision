@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..core.config import settings
 from ..core.db import get_db
 from ..core.deps import get_current_user, get_token_payload
 from ..core.security import DUMMY_HASH, create_access_token, verify_password
@@ -101,6 +102,9 @@ class LoginReq(BaseModel):
 
 @router.post("/auth/login")
 def login(req: LoginReq, request: Request, db: Session = Depends(get_db)):
+    if settings.auth_mode == "oidc":
+        # #118: OIDC モードではアプリ内パスワード認証を無効化（二重管理・弱パスワード排除）
+        raise HTTPException(403, "OIDCログインを利用してください（AUTH_MODE=oidc）")
     now = _now_ts()
     _prune_old_attempts(db, now)
     key, normalized_username, ip_hash = _login_attempt_key(req.username, _client_ip(request))

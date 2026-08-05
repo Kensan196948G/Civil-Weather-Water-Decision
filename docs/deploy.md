@@ -32,6 +32,25 @@ docker compose up -d   # postgres + backend(+migrate&seed) + frontend
 
 代替: Cloudflare Pages（フロント静的）＋ コンテナ基盤（backend）。
 
+## Entra ID OIDC 切替（#118）
+
+PoC はアプリ内ユーザー＋JWT（`ENABLE_AUTH=true` / `JWT_SECRET`）です。
+600名規模のアカウント統合時は `AUTH_MODE=oidc` へ切替え、Entra ID の
+Authorization Code + PKCE でログインします（設計: `docs/design/entra-id-oidc.md`）。
+
+切替手順:
+
+1. Entra 側でアプリ登録・リダイレクトURI（`https://{host}/api/auth/oidc/callback`）・
+   グループクレームを設定（IT 部門と共同）
+2. `.env` へ `AUTH_MODE=oidc` と `OIDC_*` を設定（シークレットは Secret 管理）
+3. アプリ起動時ガード（本番で必須項目未設定なら起動失敗）を確認
+4. `GET /api/auth/oidc/status` が `enabled=true` を返すことを確認
+5. ログイン・コールバック・ログアウトを検証環境（テストテナント）で実施
+
+切替前に既存ユーザーの email と Entra アカウントの整合を確認し、
+全ユーザーへ切替日時を通知してください。OIDC モードではアプリ内パスワード
+ログイン（`/api/auth/login`）は 403 で拒否されます。
+
 ## 公開ドメイン（Tunnel開通済み・常駐化と本番化は未了）
 
 Mirai-DX-Project 系の兄弟プロジェクトは `mirai-dx-platform.com` を共通ドメインとし、

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .api.auth import router as auth_router
+from .api.oidc import router as oidc_router
 from .api.routes import router
 from .core import readiness
 from .core.config import settings
@@ -124,4 +125,5 @@ def readyz():
 
 
 app.include_router(auth_router, prefix="/api")  # /api/auth/* は公開（ログイン）
+app.include_router(oidc_router, prefix="/api")  # /api/auth/oidc/* は公開（OIDCログイン）
 app.include_router(router, prefix="/api")  # その他は認証必須

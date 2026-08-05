@@ -57,6 +57,22 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 480
     admin_password: str = ""
 
+    # Entra ID OIDC（#118）。auth_mode=oidc のときのみ OIDC ログインを有効化する。
+    # 既定は app（アプリ内ユーザー＋パスワード）で、本番切替時は必ず明示する。
+    auth_mode: str = "app"  # app | oidc
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_scopes: str = "openid profile email"
+    oidc_redirect_path: str = "/api/auth/oidc/callback"
+    oidc_auto_provision: bool = True
+    # Entra グループ（カンマ区切り）→ アプリロールのマッピング
+    oidc_group_role_admin: str = ""
+    oidc_group_role_tech_manager: str = ""
+    oidc_group_role_site_manager: str = ""
+    oidc_group_role_safety: str = ""
+    oidc_group_role_viewer: str = ""
+
     # 設定値（AI APIキー等）の暗号化専用鍵（#80 対抗レビュー high-2）。
     # 本番では32バイト以上を起動時に必須化し、JWT_SECRET のローテーションと分離する。
     # local/test では未設定時のみ JWT_SECRET へフォールバックするが、弱鍵では ai_api_key 保存を拒否する。
@@ -89,6 +105,11 @@ class Settings(BaseSettings):
         if self.app_env != "local":
             if not self.enable_auth:
                 raise RuntimeError("本番では ENABLE_AUTH=true 必須（認証を無効化できません）")
+            if self.auth_mode == "oidc" and not (
+                    self.oidc_issuer_url and self.oidc_client_id and self.oidc_client_secret):
+                raise RuntimeError(
+                    "本番で AUTH_MODE=oidc の場合は OIDC_ISSUER_URL / OIDC_CLIENT_ID / "
+                    "OIDC_CLIENT_SECRET が必須です")
             if self.jwt_secret == _DEFAULT_JWT_SECRET or len(self.jwt_secret.encode()) < 32:
                 raise RuntimeError("本番では JWT_SECRET を 32バイト以上で必ず上書きしてください")
             if len((self.settings_encryption_key or "").strip().encode()) < 32:

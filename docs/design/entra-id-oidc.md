@@ -66,8 +66,39 @@ Entra グループ名をコード化（`group:xxxx` 等）し、アプリのロ�
 
 ## 8. 完了条件
 
-- [ ] OIDC ログイン/ログアウトが CI（モック）と検証環境で成功
+- [x] OIDC ログイン（authorize/callback・PKCE・state/nonce）が CI（モック）で成功
+- [x] グループ→ロールのマッピングと auto-provision（監査付き）
+- [x] AUTH_MODE=oidc 時にアプリ内パスワードログインを無効化
+- [x] 既存の JWT失効・RBAC テストが全パス（アプリJWT方式を維持）
+- [ ] 検証環境（Entra テストテナント）でのログイン確認
 - [ ] Entra 側のアカウント無効化が5分以内にアプリへ反映
-- [ ] グループ→ロールの同期が監査可能
-- [ ] 既存の JWT失効・試行制限・RBAC テストが全パス
 - [ ] HENNGE ONE 方針との整合確認完了
+
+## 9. 実装メモ（#118）
+
+- 実装: `backend/app/services/oidc.py` / `backend/app/api/oidc.py`
+  - OIDC discovery（issuer / authorization / token / jwks_uri）をTTL1時間でキャッシュ
+  - Authorization Code + PKCE（S256）。state / nonce / code_verifier は
+    アプリJWT秘密鍵で署名した HttpOnly クッキー `oidc_state`（TTL 5分）で運搬
+  - id_token は RS256・JWKS・iss / aud / exp / nonce を検証
+  - グループ→ロール: `OIDC_GROUP_ROLE_*`（カンマ区切り）で優先順にマッピング、
+    未一致は viewer（安全側）
+  - email 突合＋auto-provision（`OIDC_AUTO_PROVISION`）
+  - 監査: `oidc_login_success` / `oidc_logout`。アプリJWTは既存 `create_access_token` を使用
+- フロント: `data-adapter.js` が OIDC 有効時に「Entra ID でログイン」ボタンを表示し、
+  コールバックの `#oidc_token` フラグメントを消費して再読込
+- 設定例:
+  ```text
+  AUTH_MODE=oidc
+  OIDC_ISSUER_URL=https://login.microsoftonline.com/{tenant}/v2.0
+  OIDC_CLIENT_ID=...
+  OIDC_CLIENT_SECRET=...            # Secret管理
+  OIDC_GROUP_ROLE_ADMIN=...
+  OIDC_GROUP_ROLE_TECH_MANAGER=...
+  OIDC_GROUP_ROLE_SITE_MANAGER=...
+  OIDC_GROUP_ROLE_SAFETY=...
+  OIDC_GROUP_ROLE_VIEWER=...
+  ```
+- 本番ガード: `APP_ENV=production` かつ `AUTH_MODE=oidc` のとき、
+  `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` 未設定は起動失敗
+- 未実施: Entra 側のアプリ登録・条件付きアクセス・グループ同期は IT 部門との共同作業
