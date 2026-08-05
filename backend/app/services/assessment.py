@@ -142,12 +142,15 @@ def _load_river_context(db: Session, site_id: str) -> dict:
             "source": last.source or "MANUAL",
             "prev_observed_at": prev.observed_at if prev else None,
             "prev_water_level_m": prev.water_level_m if prev else None,
+            "prev_quality": prev.quality if prev else None,
         }
     return ctx
 
 
 def _derive_trend(entry: dict) -> tuple[str | None, float | None]:
     """最新2点の水位から上昇率を計算し ('rising'|'stable', m/h) を返す。1点のみは None。"""
+    if entry.get("prev_quality") != "OK":
+        return None, None
     if entry.get("water_level_m") is None or entry.get("prev_water_level_m") is None:
         return None, None
     t1 = _parse_jst(entry.get("observed_at"))
@@ -164,6 +167,7 @@ def _river_view(river_ctx: dict | None, site: Site) -> tuple[dict, set[str]]:
     now = datetime.now(JST)
     view = {
         "upstream_rain_mm_h": None,
+        "upstream_rain_source": None,
         "water_level_trend": None,
         "water_level_m": None,
         "water_level_rate_m_h": None,
@@ -177,6 +181,7 @@ def _river_view(river_ctx: dict | None, site: Site) -> tuple[dict, set[str]]:
     # 「データなし」を安全側（確認不能）として扱う。
     if not river_ctx or not (river_ctx.get("nearest") or river_ctx.get("upstream")):
         if site.river_state in ("rising", "stable"):
+            view["source_river"] = "MANUAL"
             view["water_level_trend"] = site.river_state
             view["river_state"] = site.river_state
             view["river_note"] = f"手動入力: {site.river_state}（{site.river_note}）"
@@ -221,6 +226,7 @@ def _river_view(river_ctx: dict | None, site: Site) -> tuple[dict, set[str]]:
     for entry in (upstream, nearest):
         if entry and _is_fresh_observation(entry, now) and entry.get("rainfall_mm_h") is not None:
             view["upstream_rain_mm_h"] = entry["rainfall_mm_h"]
+            view["upstream_rain_source"] = entry["source"]
             break
 
     if view["water_level_trend"] is None:
@@ -230,7 +236,8 @@ def _river_view(river_ctx: dict | None, site: Site) -> tuple[dict, set[str]]:
 
 def build_reading(work_type: str, wr: dict, site: Site,
                   pref_warnings: set | None = None,
-                  river_ctx: dict | None = None) -> Reading:
+                  river_ctx: dict | None = None,
+                  river_view: tuple[dict, set[str]] | None = None) -> Reading:
     pref_warnings = pref_warnings or set()
     r = Reading(
         precip_mm_h=wr.get("precip_mm_h"), temp_c=wr.get("temp_c"),
@@ -239,12 +246,15 @@ def build_reading(work_type: str, wr: dict, site: Site,
         missing=set(wr.get("missing") or set()),
     )
     if work_type == "river":
-        river_view, river_missing = _river_view(river_ctx, site)
-        r.upstream_rain_mm_h = river_view["upstream_rain_mm_h"]
-        r.water_level_trend = river_view["water_level_trend"]
-        r.water_level_m = river_view["water_level_m"]
-        r.water_level_rate_m_h = river_view["water_level_rate_m_h"]
-        r.source_river = river_view["source_river"]
+        if river_view is None:
+            river_view = _river_view(river_ctx, site)
+        view, river_missing = river_view
+        r.upstream_rain_mm_h = view["upstream_rain_mm_h"]
+        r.upstream_rain_source = view["upstream_rain_source"]
+        r.water_level_trend = view["water_level_trend"]
+        r.water_level_m = view["water_level_m"]
+        r.water_level_rate_m_h = view["water_level_rate_m_h"]
+        r.source_river = view["source_river"]
         # 公式優先: 気象庁の洪水警報/注意報があれば洪水フラグ（§8.3-6）
         r.flood_warning = (bool(site.flood_info)
                            or "洪水警報" in pref_warnings or "洪水注意報" in pref_warnings)
@@ -269,6 +279,7 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
     pref_warnings = jma_warnings.warnings_for_site(warnmap, site.loc)
     if river_ctx is None and db is not None and wt == "river":
         river_ctx = _load_river_context(db, site.id)
+    river_view = _river_view(river_ctx, site) if wt == "river" else None
 
     status = data.get("status", "ERROR")
     points = data.get("points", [])
@@ -295,13 +306,13 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
             wr["wbgt"] = wbgt_official
             wr["missing"] = set(wr.get("missing") or set()) - {"wbgt"}
 
-    reading = build_reading(wt, wr, site, pref_warnings, river_ctx=river_ctx)
+    reading = build_reading(wt, wr, site, pref_warnings, river_ctx=river_ctx,
+                            river_view=river_view)
     if status == "STALE":
         reading.stale_weather = True  # 前回取得値での参考表示を判定理由に明示（§5.3）
     # #35: 実効閾値はDBが単一の真実。永続化を伴う評価は呼び出し側が fresh 解決した
     # th を注入する(表示用は th=None → 短TTLキャッシュ解決で足りる)
     decision = evaluate(wt, reading, th=th or rules_service.effective_th())
-    river_view = _river_view(river_ctx, site) if wt == "river" else None
 
     return {
         "id": site.id, "name": site.name, "code": site.site_code, "loc": site.loc,

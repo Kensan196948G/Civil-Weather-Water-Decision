@@ -181,3 +181,36 @@ async def test_river_site_without_observation_is_unavailable(monkeypatch):
     assert any(r["reason_code"] == "missing_river" for r in card["reasonsRaw"])
     assert card["riverState"] == "stale"
     assessment.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_river_manual_state_fallback_keeps_manual_source(monkeypatch):
+    """観測所未設定でも手動 river_state は後方互換で尊重し、出典はMANUALを明示する。"""
+    from app.services.data_collectors import open_meteo
+
+    async def fake_fetch(lat, lon, **kw):
+        sample = {
+            "timezone": "Asia/Tokyo",
+            "hourly": {
+                "time": ["2026-08-05T08:00", "2026-08-05T09:00"],
+                "temperature_2m": [28.0, 29.0], "precipitation": [0.0, 0.0],
+                "wind_speed_10m": [3.0, 3.0], "wind_gusts_10m": [5.0, 5.0],
+                "relative_humidity_2m": [70, 68], "weather_code": [1, 1],
+            },
+        }
+        norm = open_meteo.normalize(sample)
+        norm.update(status="OK", fetched_at="2026-08-05T08:00:00Z", error=None)
+        return norm
+
+    assessment.clear_cache()
+    site = Site(id="S91", site_code="CW-MANUAL-RIVER", name="手動入力現場", loc="X市",
+                latitude=35.7, longitude=139.7, work_type="river",
+                project_type="公共", river_work_flag=True, river_state="rising",
+                river_note="現場確認で上昇中", flood_info=False, manager="試験")
+    card = await assessment.assess_site(site, fetch=fake_fetch, warnmap={})
+    assert card["riverState"] == "rising"
+    assert card["riverSource"] == "MANUAL"
+    assert card["level"] == 1
+    codes = [r["reason_code"] for r in card["reasonsRaw"]]
+    assert "water_level_rising" in codes
+    assessment.clear_cache()

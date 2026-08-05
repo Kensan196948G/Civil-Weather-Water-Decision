@@ -43,6 +43,7 @@ class Reading:
     humidity_pct: Optional[float] = None
     wbgt: Optional[float] = None
     upstream_rain_mm_h: Optional[float] = None
+    upstream_rain_source: Optional[str] = None  # 上流雨量の実測提供元（補完元と一致させる）
     water_level_trend: Optional[str] = None  # 'rising' | 'stable' | 'stale' | None
     water_level_m: Optional[float] = None          # 直近実測の水位（理由の実測値表示用）
     water_level_rate_m_h: Optional[float] = None   # 直近2点から導出した上昇率
@@ -114,7 +115,8 @@ RULES: list[Rule] = [
     Rule("upstream_rain", ("river",), 1,
          lambda r, th: _has(r, "upstream_rain_mm_h") and r.upstream_rain_mm_h >= th["upstream_rain"],
          "上流域で雨量が増加しています。水位上昇に注意してください（到達時間差）。",
-         lambda r: r.source_river, lambda r: f"上流雨量 {r.upstream_rain_mm_h}mm/h"),
+         lambda r: r.upstream_rain_source or r.source_river,
+         lambda r: f"上流雨量 {r.upstream_rain_mm_h}mm/h"),
     Rule("water_level_rising", ("river",), 1,
          lambda r, th: r.water_level_trend == "rising",
          "水位が上昇傾向です。退避基準と作業継続条件を確認してください。",
