@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 🗄️ Neon PostgreSQL | Neon の PITR / マネージドバックアップ | 継続 | Neon 管理面 |
 | 📦 論理ダンプ | `deploy/scripts/db-backup.sh` (`pg_dump --format=custom`) | 日次・リリース前 | local `/var/backups/cwwd/postgres` |
-| 🔐 暗号化export | `deploy/scripts/db-backup-export.sh` (`tar` → `gpg AES256`) | 日次・off-host転送前 | local `/var/backups/cwwd/exports` + off-host storage |
+| 🔐 暗号化export | `deploy/scripts/db-backup-export.sh` (`tar` → `gpg AES256`) | 日次・off-host転送前 | local `/var/backups/cwwd/exports`（off-host転送は Issue #115 で未実装） |
 | ⚙️ 設定ファイル | `backend/.env` / systemd unit / cloudflared config | 変更時 | 秘密管理領域 |
 
 `backend/.env` とダンプファイルは Git 管理禁止です。`.gitignore` で `.env*` と `backups/` を除外しています。
@@ -47,6 +47,7 @@ deploy/scripts/db-restore.sh --env-file backend/.env --dump backups/postgres/<fi
 | RPO | 24時間以内 |
 | RTO | 4〜8時間 |
 | 復元先 | まず Neon branch / 一時DB。production 直復元は禁止 |
+| オフサイト保管 | 暗号化exportを日次転送し、年次に別筐体から復元訓練（Issue #115） |
 
 ## バックアップ
 
@@ -369,8 +370,89 @@ deploy/scripts/ops-alert.sh \
 ```
 
 `backups/` は Git 管理外です。local dump は短期復旧用であり、長期保管・災害対策は
-暗号化された off-host storage へ転送する運用を追加してください。
+暗号化された off-host storage への転送運用が必要です（設計・手順は次の
+「オフサイトバックアップ転送と復元検証（Issue #115）」参照）。
 `pg_dump` / `pg_restore` にはパスワード付き URL を argv で渡さず、script 内で一時 `PGPASSFILE` を作成して libpq 環境変数で接続します。
+
+### オフサイトバックアップ転送と復元検証（Issue #115）
+
+**現状**: 暗号化export（gpg AES256）の作成・local checksum/鮮度/復号一覧監視・
+`pg_restore --list` による復元ドリルまでは実装済みです。一方、**別筐体／オブジェクト
+ストレージへの日次転送・転送後の監視・別筐体からの復元訓練は未実装**で、サーバ・
+ディスク・設置場所の同時障害には対応できていません（外部評価 2026-08 の P0 指摘）。
+
+#### 完了条件（Issue #115）
+
+- [ ] 日次転送が成功し、鮮度・checksumが監視される
+- [ ] 別筐体からの復元訓練に合格
+- [ ] 手順・障害時対応を `docs/backup-restore.md` へ反映（本PRで反映）
+
+#### 設計方針（実装時の案）
+
+| 項目 | 内容 |
+|---|---|
+| 転送物 | `/var/backups/cwwd/exports/cwwd-*.dump.tar.gpg` + `.sha256`（passphrase で暗号化済み） |
+| 転送方式 | rsync over SSH（別筐体）または rclone（S3互換オブジェクトストレージ） |
+| 認証情報 | `/home/kensan/.config/cwwd/offsite.env`（`0600`、転送先情報のみ）。argv・stdout・ログへ出力しない |
+| 転送後監視 | offsite側で `sha256sum -c`・最新export鮮度（26h warning / 28h critical）・復号tar一覧を確認 |
+| 障害通知 | `cwwd-db-backup-failure@` 経由の journald alert + optional Slack/Teams |
+| 復元訓練 | 年次: offsite コピーを一時DB（PG17+ / Neon branch）へ復元し、全テーブル・行数・`alembic_version` を照合 |
+| 目標 | RPO 24h以内 / RTO 4〜8h / 3-2-1（本番1 + local dump 1 + offsite 1） |
+
+#### 実装構成（案）
+
+- 転送ジョブ: `cwwd-db-backup-offsite-transfer.service` / `.timer`（毎日 04:30 + `RandomizedDelaySec=30min`）
+  - script: `deploy/scripts/db-backup-offsite-transfer.sh`
+  - 事前: local export-check成功・disk space・転送先疎通・`0600`権限
+  - 転送後: offsite側で checksum・鮮度を確認
+- 転送後監視: `cwwd-db-backup-offsite-check.service` / `.timer`（毎時50分）
+  - 最新 archive の存在・鮮度・checksum・復号tar一覧・orphan・権限
+- 年次復元訓練: `cwwd-db-backup-offsite-restore-drill`（手動 or 年次タイマー）
+  - offsite から取得 → 復号 → 一時 PG17+ DB/Neon branch へ `db-restore.sh` → schema/行数/API検証 → 記録
+
+#### 適用・検証手順（転送先と認証情報が用意できた後に実行）
+
+```bash
+# 1) 転送先の認証情報を Secret 管理（値は画面・ログへ出力しない）
+sudo install -m 600 -o kensan -g kensan deploy/systemd/cwwd-offsite.env.example \
+  /home/kensan/.config/cwwd/offsite.env
+sudoedit /home/kensan/.config/cwwd/offsite.env   # 転送方式に応じた接続情報のみ
+
+# 2) unit 適用
+sudo cp deploy/systemd/cwwd-db-backup-offsite-transfer.service \
+         deploy/systemd/cwwd-db-backup-offsite-transfer.timer \
+         deploy/systemd/cwwd-db-backup-offsite-check.service \
+         deploy/systemd/cwwd-db-backup-offsite-check.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now cwwd-db-backup-offsite-transfer.timer
+sudo systemctl enable --now cwwd-db-backup-offsite-check.timer
+
+# 3) 手動検証（dry-run → 実転送 → offsite側チェック）
+deploy/scripts/db-backup-offsite-transfer.sh \
+  --export-dir /var/backups/cwwd/exports \
+  --env-file /home/kensan/.config/cwwd/offsite.env --dry-run
+sudo systemctl start cwwd-db-backup-offsite-transfer.service
+sudo systemctl start cwwd-db-backup-offsite-check.service
+journalctl -u cwwd-db-backup-offsite-transfer.service -n 100 --no-pager
+journalctl -u cwwd-db-backup-offsite-check.service -n 100 --no-pager
+```
+
+#### 障害時対応
+
+| 症状 | 対応 |
+|---|---|
+| 転送失敗 | journald / alert を確認。転送先疎通・権限・容量を確認し、手動転送で追い上げ。失敗を放置しない |
+| offsite checksum 不一致 | 転送物を再転送。local 側 checksum と一致するまで使用しない |
+| 復元訓練失敗 | 原因（archive破損・passphrase不一致・PG version）を特定し、該当archiveを除外して再訓練。結果を運用記録へ残す |
+
+#### 現在の状態
+
+| 項目 | 状態 |
+|---|---|
+| 暗号化export（local） | PASS（日次・checksum/復号一覧/鮮度監視済み） |
+| 日次オフサイト転送 | NOT RUN（転送先・認証情報の提供待ち） |
+| 転送後鮮度/checksum監視 | NOT RUN（上記に依存） |
+| 別筐体からの復元訓練 | NOT RUN（年次。転送確立後に実施） |
 
 ## アーカイブ検証
 
@@ -442,19 +524,21 @@ curl -sS http://127.0.0.1:55019/readyz
 - ダンプは個人情報・現場情報・判断履歴を含む可能性があります。暗号化保管し、共有リンクに置かないでください。
 - Neon の PITR と論理ダンプは役割が異なります。誤削除直後は PITR、移行・監査・長期保管は論理ダンプを使います。
 
-## 実機メモ（2026-07-13）
+## 実機メモ（2026-08-01 現在）
 
 | 項目 | 状態 |
 |---|---|
-| `DATABASE_URL_DIRECT` | `backend/.env` に設定済み（pooled URL から direct host を導出、値は非表示管理） |
+| `DATABASE_URL_DIRECT` | `backend/.env` に設定済み（値は非表示管理） |
 | backup env | `/home/kensan/.config/cwwd/db-backup.env` 作成済み（DB-only, `0600`, 値は非表示管理） |
-| local client | PostgreSQL 17.10 client 導入済み（`/usr/lib/postgresql/17/bin`）。スクリプトは最大 version を自動選択 |
-| Neon server | PostgreSQL 17.10 |
-| backup timer | `cwwd-db-backup.timer` enabled/active。次回 `2026-07-14 02:21:37 JST` 実行予定 |
-| encrypted export | `cwwd-db-backup-export.timer` enabled/active。次回 `2026-07-14 03:12:21 JST` 実行予定。最新dumpから `cwwd-20260713T041247Z.dump.tar.gpg` 作成・sha256・復号tar一覧検証済み |
+| local client | PostgreSQL 17 client 導入済み。スクリプトは最大 version を自動選択 |
+| Neon server | PostgreSQL 17系（restore先は PG17+ 必須） |
+| backup timer | `cwwd-db-backup.timer` enabled/active。2026-08-01 に `db-backup.env` の認証情報を現行へ同期して日次ダンプを復旧し、以降 Result=success |
+| encrypted export | `cwwd-db-backup-export.timer` enabled/active。日次最新dumpから暗号化export作成・sha256・復号tar一覧検証済み |
 | export freshness monitor | `cwwd-db-backup-export-check.timer` enabled/active。最新暗号化exportのage/checksum/orphan/権限/復号tar一覧検査をhourly実行 |
 | freshness monitor | `cwwd-db-backup-check.timer` enabled/active。最新dumpのage/checksum/orphan/権限検査をhourly実行 |
 | restore drill monitor | `cwwd-db-backup-restore-drill.timer` enabled/active。最新dumpのchecksumと`pg_restore --list` parseabilityをdaily実行 |
 | disk space monitor | `cwwd-disk-space-check.timer` enabled/active。`/`・backup・export filesystem のfree bytes/free%/inode%をhourly検査し、backup/export直前にもpreflight gate実行 |
 | ops alert | `cwwd-db-backup-failure@.service` 適用済み。journald fallback + optional Slack/Teams webhook env 対応 |
-| live dump | `/var/backups/cwwd/postgres/cwwd-20260713T041247Z.dump` 作成済み。sha256 検証・restore dry-run 済み |
+| 実復元検証 | PASS（2026-08-01: 本番dumpをPG18一時クラスタへ `db-restore.sh` で復元し、全18テーブル・行数・`alembic_version` 一致） |
+| live dump | 日次生成継続中（`/var/backups/cwwd/postgres/` を参照。値・秘密は非表示管理） |
+| offsite転送 | NOT RUN（Issue #115。転送先・認証情報の提供待ち） |
