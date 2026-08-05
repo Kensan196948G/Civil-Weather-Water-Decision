@@ -58,6 +58,10 @@ Construction Weather & Water Decision Support
 - [閾値 安全・技術レビュー用資料](./docs/threshold-safety-review.md)
 - [Open-Meteo 商用利用条件 確認書（要承認）](./docs/open-meteo-commercial-terms-review.md)
 - [PoC 受入基準（3現場・30日間）](./docs/acceptance/poc-acceptance.md)
+- [SLI / SLO とアラート基準](./docs/ops/SLO.md)
+- [運用台帳](./docs/ops/operations-ledger.md)
+- [インシデント対応 Runbook](./docs/ops/runbook.md)
+- [定期保守・ライフサイクル管理](./docs/ops/maintenance.md)
 - [リリースノート](./docs/release-notes.md)
 
 ## システム構成 / Architecture

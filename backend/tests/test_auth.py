@@ -56,6 +56,14 @@ def test_viewer_cannot_create_site(client):
     assert r.status_code == 403
 
 
+def test_run_collectors_requires_admin_or_tech_manager(client):
+    """#goal: データ再取得・実プローブは管理者/技術管理者のみ（viewerは403）。"""
+    token = login_token(client, "viewer")
+    r = client.post("/api/data-collectors/run",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+
+
 def test_site_manager_records_but_cannot_create_site(client):
     tok = login_token(client, "yamada")
     h = {"Authorization": f"Bearer {tok}"}
@@ -71,12 +79,18 @@ def test_site_manager_records_but_cannot_create_site(client):
 
 def test_audit_logged(client):
     # 管理者で現場登録 → 監査ログに記録される
-    client.post("/api/sites", json={"name": "監査テスト現場", "latitude": 35.4,
-                                     "longitude": 139.4, "work_type": "crane"})
-    logs = client.get("/api/admin/audit-logs").json()
-    actions = {row["action"] for row in logs}
-    assert "site_create" in actions
-    assert "login" in actions
+    r = client.post("/api/sites", json={"name": "監査テスト現場", "latitude": 35.4,
+                                        "longitude": 139.4, "work_type": "crane"})
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    try:
+        logs = client.get("/api/admin/audit-logs").json()
+        actions = {row["action"] for row in logs}
+        assert "site_create" in actions
+        assert "login" in actions
+    finally:
+        # 後続テストの現場数想定（16件）を壊さないよう作成した現場を削除（テスト順序非依存化）
+        assert client.delete(f"/api/sites/{sid}").status_code == 200
 
 
 def test_viewer_cannot_view_audit(client):

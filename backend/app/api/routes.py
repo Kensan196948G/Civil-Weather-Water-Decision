@@ -1785,7 +1785,7 @@ def export_decision_logs(db: Session = Depends(get_db),
 # ---------- データ取得（手動再取得） ----------
 @router.post("/data-collectors/run")
 async def run_collectors(db: Session = Depends(get_db),
-                         user: User = Depends(get_current_user)):
+                         user: User = Depends(require_role("admin", "tech_manager"))):
     # 実行「要求」の監査（後続プローブ結果の成否によらず要求事実を 1 件残す設計。
     # 「成功した更新の監査」へ変える場合は probe_all を no-commit 化して同一 tx へ寄せること — #63 対抗レビューで意図明示）
     audit(db, user, "collectors_run", "手動再取得")
