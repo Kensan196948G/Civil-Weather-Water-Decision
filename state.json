@@ -4,7 +4,7 @@
     "repository": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision.git",
     "registered_at": "2026-06-19",
     "release_deadline": "2026-12-19",
-    "current_phase": "Phase 2 進行中（Phase 1 MVP完了・Phase 3 認証/監査/通知は大幅先行・Phase 4 CI/CD着手済み）",
+    "current_phase": "Phase 2 進行中（本番運用準備整備済み: SLO/運用台帳/Runbook/定期保守手順。外部連携・受入試験は残）",
     "milestones": {
       "M0_foundation_ready": "2026-07-02 (達成済み)",
       "M1_poc_demoable": "2026-07-30",
@@ -89,6 +89,17 @@
       "frontend": "200 OK"
     },
     "ci_main": "PR #122/#123/#124/#125/#126/#127/#128/#129 各5ジョブ success"
+  },
+  "operations_2026_08_05": {
+    "slo": "docs/ops/SLO.md（初期目標: 営業時間可用性99% / p95<=3s / RPO24h / RTO4-8h）",
+    "ledger": "docs/ops/operations-ledger.md（日次/週次/月次/四半期・担当・証跡・次回予定）",
+    "runbook": "docs/ops/runbook.md（切分け・復旧・rollback・データ訂正・記録テンプレ）",
+    "maintenance": "docs/ops/maintenance.md（依存/OS/EOL/ライセンス/Secrets/権限/容量・予算）",
+    "security_scan": {
+      "formal_codex_scan": "NOT RUN（preflight incomplete: multi-agent runtime mode unknown。正式スキャンの実行条件を満たせないため誤って実施済みとしない）",
+      "practical_audit": "PASS（pip-audit 0件・秘密文字列スキャン0件・.git履歴に.env/秘密鍵なし・security-surface/public-edge checks ok・branch protection 5 checks+enforce_admins）"
+    },
+    "notification_test": "journald dry-run 実施可能。webhook実送信は NOT RUN（#116設定待ち）"
   },
   "session": {
     "last_phase": "Monitor",

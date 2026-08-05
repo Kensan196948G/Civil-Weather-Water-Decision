@@ -278,6 +278,8 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         warnmap = await jma_warnings.get_active_warnings()
     pref_warnings = jma_warnings.warnings_for_site(warnmap, site.loc)
     if river_ctx is None and db is not None and wt == "river":
+        # #74 注記: Session はスレッド非安全のため共有セッションは to_thread 化しない。
+        # 複数現場評価では asyncio.gather 内でも同期読取は直列化され、競合しない。
         river_ctx = _load_river_context(db, site.id)
     river_view = _river_view(river_ctx, site) if wt == "river" else None
 
@@ -312,7 +314,10 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         reading.stale_weather = True  # 前回取得値での参考表示を判定理由に明示（§5.3）
     # #35: 実効閾値はDBが単一の真実。永続化を伴う評価は呼び出し側が fresh 解決した
     # th を注入する(表示用は th=None → 短TTLキャッシュ解決で足りる)
-    decision = evaluate(wt, reading, th=th or rules_service.effective_th())
+    # #74 緩和: effective_th は内部で SessionLocal を生成するためスレッド化しても安全。
+    # 共有セッション（river/wbgt）はスレッド非安全のため対象外（上記コメント参照）。
+    effective = th or await asyncio.to_thread(rules_service.effective_th)
+    decision = evaluate(wt, reading, th=effective)
 
     return {
         "id": site.id, "name": site.name, "code": site.site_code, "loc": site.loc,

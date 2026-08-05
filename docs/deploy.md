@@ -107,7 +107,8 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - トークン失効・ログイン試行制限: 実装済み（`revoked_tokens` / `login_attempts` のDB台帳。
   Redis ではなく PostgreSQL で複数プロセス・再起動をまたいで共有）
 - GitHub branch protection: 適用済み（main は必須チェック5件＋ enforce_admins。PR経由のみマージ）
-- Entra ID OIDC: **未実装**（要件・詳細設計上は本番候補。`.env.example` に OIDC 変数あり）
+- Entra ID OIDC: **実装済み（#127）**。既定は `AUTH_MODE=app`（現行互換）。
+  本番切替は IT 部門と共同で `AUTH_MODE=oidc` を適用（設計: `docs/design/entra-id-oidc.md`）
 
 ## 外部死活監視（#116）
 
@@ -117,12 +118,21 @@ ID `07c9bda3-b4ad-46ae-8401-4b677de3c8a4`）。2026-07-12 に人間実行で開�
 - 設定手順・当番・復旧手順: `docs/external-monitoring.md`
 - 現状: **外部SaaSアカウントと通知先は未設定**（IT・DX部門の設定作業が必要）
 
+## 運用・継続管理（docs/ops）
+
+- [SLI / SLO とアラート基準](./ops/SLO.md)
+- [運用台帳（日次・週次・月次・四半期）](./ops/operations-ledger.md)
+- [インシデント対応・復旧 Runbook](./ops/runbook.md)
+- [定期保守・ライフサイクル管理](./ops/maintenance.md)
+
 未実装・継続項目（外部評価 2026-08 に基づく優先順位）:
 
 - 河川観測所マスタ・実測値の**自動取得**（本PRでマスタ/紐付け/手動実測の基盤を追加。
   水防災オープンデータ提供サービス等の接続は未着手）
-- 現場別 WBGT 地点の自動選定（現状は `WBGT_STATION_CODE` 単一地点。2026年度 環境省 Web API 更新も併せて対応）
-- 現場単位権限（協力会社向け role×site×action。設計は `docs/design/site-level-permissions.md`）
+- 現場別 WBGT 地点の自動選定: **実装済み（#124）**（地点マスタ同期・最近傍自動選択。
+  残: 実況値CSV・地点移設の自動追跡）
+- 現場単位権限: **実装済み（#126、`user_site_access`）**。
+  残: 協力会社ユーザーの受入テスト（設計は `docs/design/site-level-permissions.md`）
 - オフサイトバックアップ転送（暗号化exportは実装済み。別筐体への転送・復元は未完了。
   転送スクリプト/systemd unitは整備済み。実転送・復元訓練は未完了。
   設計・手順は [backup-restore.md](./backup-restore.md#オフサイトバックアップ転送と復元検証issue-115)）
