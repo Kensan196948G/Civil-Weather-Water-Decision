@@ -25,6 +25,29 @@ class User(Base):
     updated_at: Mapped[str] = mapped_column(String(40), default="")
 
 
+class UserSiteAccess(Base):
+    """現場単位権限（#117: role × site × action）。
+
+    site_manager / viewer はこの行でアクセス可能な現場を制限する。
+    role: site_viewer（閲覧）/ site_editor（作業予定・実測等の更新）/
+          site_decision（判定・判断記録）。admin / tech_manager / safety は
+          全現場を閲覧できるため行を持たない（持ってもよいが不要）。
+    """
+    __tablename__ = "user_site_access"
+    __table_args__ = (
+        UniqueConstraint("user_id", "site_id",
+                         name="uq_user_site_access_user_site"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.id"))
+    role: Mapped[str] = mapped_column(String(20), default="site_viewer")
+    granted_by: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+
+
 class AuditLog(Base):
     """監査ログ（設計§13）。ログイン・設定変更・判定・判断・CSV出力等を記録。"""
     __tablename__ = "audit_logs"

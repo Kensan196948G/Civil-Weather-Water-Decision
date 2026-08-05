@@ -23,9 +23,10 @@ from ..core.deps import get_current_user, require_role
 from ..models import (
     AppSetting, AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
     IdCounter, ObservationStation, RiverObservation, Site, SiteLink, SiteStation,
-    User, WorkPlan, WorkType,
+    User, UserSiteAccess, WorkPlan, WorkType,
 )
 from ..services import assessment, notifications, rules as rules_service
+from ..services import site_access
 from ..services.audit import audit, audit_add
 from ..services.data_collectors import open_meteo, source_probe, wbgt_env
 
@@ -133,8 +134,11 @@ def _commit_with_retry(db: Session, build_and_add):
 
 # ---------- 現場 ----------
 @router.get("/sites")
-def list_sites(db: Session = Depends(get_db)):
-    sites = db.scalars(select(Site).order_by(Site.id)).all()
+def list_sites(db: Session = Depends(get_db),
+               user: User = Depends(get_current_user)):
+    accessible = site_access.accessible_site_ids(db, user)
+    sites = db.scalars(
+        select(Site).where(Site.id.in_(accessible)).order_by(Site.id)).all()
     return [{"id": s.id, "code": s.site_code, "name": s.name, "loc": s.loc,
              "lat": s.latitude, "lon": s.longitude, "work": s.work_type,
              "project": s.project_type, "riverWork": s.river_work_flag,
@@ -142,10 +146,12 @@ def list_sites(db: Session = Depends(get_db)):
 
 
 @router.get("/sites/{site_id}")
-async def get_site(site_id: str, db: Session = Depends(get_db)):
+async def get_site(site_id: str, db: Session = Depends(get_db),
+                   user: User = Depends(get_current_user)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_read(db, user, site_id)
     card = await assessment.assess_site(site, db=db)
     plans = []
     for p in site.plans:
@@ -168,10 +174,12 @@ async def get_site(site_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/sites/{site_id}/stations")
-def site_stations(site_id: str, db: Session = Depends(get_db)):
+def site_stations(site_id: str, db: Session = Depends(get_db),
+                  user: User = Depends(get_current_user)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_read(db, user, site_id)
     return [{"id": st.id, "name": st.name, "type": st.type, "rel": st.rel,
              "lat": st.latitude, "lon": st.longitude} for st in site.stations]
 
@@ -745,10 +753,12 @@ def _site_link_dict(ln: SiteLink) -> dict:
 
 
 @router.get("/sites/{site_id}/links")
-def list_site_links(site_id: str, db: Session = Depends(get_db)):
+def list_site_links(site_id: str, db: Session = Depends(get_db),
+                    user: User = Depends(get_current_user)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_read(db, user, site_id)
     rows = db.scalars(select(SiteLink).where(SiteLink.site_id == site_id)
                       .order_by(SiteLink.sort_order, SiteLink.id)).all()
     return [_site_link_dict(ln) for ln in rows]
@@ -1121,7 +1131,8 @@ def _latest_observation(db: Session, station_id: str) -> dict | None:
 
 @router.get("/observation-stations")
 def list_observation_stations(kind: str | None = None, site_id: str | None = None,
-                              db: Session = Depends(get_db)):
+                              db: Session = Depends(get_db),
+                              user: User = Depends(get_current_user)):
     q = select(ObservationStation).order_by(ObservationStation.basin_name,
                                             ObservationStation.name)
     if kind:
@@ -1131,6 +1142,7 @@ def list_observation_stations(kind: str | None = None, site_id: str | None = Non
     if site_id:
         if not db.get(Site, site_id):
             raise HTTPException(404, "site not found")
+        site_access.ensure_site_read(db, user, site_id)
         q = q.join(SiteStation, SiteStation.station_id == ObservationStation.id) \
              .where(SiteStation.site_id == site_id)
     return [_observation_station_dict(st) for st in db.scalars(q).all()]
@@ -1224,10 +1236,12 @@ def delete_observation_station(station_id: str, db: Session = Depends(get_db),
 
 
 @router.get("/sites/{site_id}/observation-stations")
-def list_site_observation_stations(site_id: str, db: Session = Depends(get_db)):
+def list_site_observation_stations(site_id: str, db: Session = Depends(get_db),
+                                   user: User = Depends(get_current_user)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_read(db, user, site_id)
     rows = db.execute(
         select(SiteStation, ObservationStation)
         .join(ObservationStation, ObservationStation.id == SiteStation.station_id)
@@ -1299,10 +1313,12 @@ def unlink_site_observation_station(site_id: str, station_id: str,
 
 @router.get("/sites/{site_id}/river-observations")
 def list_river_observations(site_id: str, limit: int = Query(24, ge=1, le=500),
-                            db: Session = Depends(get_db)):
+                            db: Session = Depends(get_db),
+                            user: User = Depends(get_current_user)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_read(db, user, site_id)
     station_ids = db.scalars(
         select(SiteStation.station_id).where(SiteStation.site_id == site_id)
     ).all()
@@ -1403,9 +1419,12 @@ def delete_river_observation(observation_id: str, db: Session = Depends(get_db),
 
 # ---------- ダッシュボード ----------
 @router.get("/dashboard/site-risk")
-async def dashboard_site_risk(db: Session = Depends(get_db)):
+async def dashboard_site_risk(db: Session = Depends(get_db),
+                              user: User = Depends(get_current_user)):
+    accessible = site_access.accessible_site_ids(db, user)
     sites = db.scalars(
-        select(Site).where(Site.status == "active").order_by(Site.id)).all()
+        select(Site).where(Site.status == "active", Site.id.in_(accessible))
+        .order_by(Site.id)).all()
     cards = await assessment.assess_all(list(sites), db=db)
     counts = [0, 0, 0, 0]
     for c in cards:
@@ -1423,10 +1442,12 @@ def dashboard_data_sources(db: Session = Depends(get_db)):
 
 # ---------- 気象 ----------
 @router.get("/weather/timeseries")
-async def weather_timeseries(site_id: str = Query(...), db: Session = Depends(get_db)):
+async def weather_timeseries(site_id: str = Query(...), db: Session = Depends(get_db),
+                             user: User = Depends(get_current_user)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_read(db, user, site_id)
     data = await assessment._cached_fetch(site.latitude, site.longitude, site.id)
     return {"siteId": site.id, "source": open_meteo.SOURCE_ID, "status": data.get("status"),
             "fetchedAt": data.get("fetched_at"), "points": data.get("points", [])[:24]}
@@ -1475,6 +1496,7 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_write(db, user, req.site_id, "decision")
     # 永続化する判定は閾値キャッシュをバイパスした fresh 値で評価し、同じ値をスナップショット
     # 保存する(古い閾値での保存を防ぐ)。応答には閾値を含めない(admin読み取り境界の維持)
     th = rules_service.effective_th(fresh=True)
@@ -1487,10 +1509,12 @@ async def evaluate_decision(req: EvaluateReq, db: Session = Depends(get_db),
 
 
 @router.get("/decision-results/{result_id}")
-def get_decision_result(result_id: str, db: Session = Depends(get_db)):
+def get_decision_result(result_id: str, db: Session = Depends(get_db),
+                        user: User = Depends(get_current_user)):
     dr = db.get(DecisionResult, result_id)
     if not dr:
         raise HTTPException(404, "decision result not found")
+    site_access.ensure_site_read(db, user, dr.site_id)
     return {
         "id": dr.id, "siteId": dr.site_id, "workType": dr.work_type,
         "evaluatedAt": dr.evaluated_at, "overall_level": dr.overall_level,
@@ -1586,8 +1610,11 @@ class WorkPlanUpdate(BaseModel):
 
 @router.get("/work-plans")
 def list_work_plans(site_id: str | None = None, date: str | None = None,
-                    db: Session = Depends(get_db)):
+                    db: Session = Depends(get_db),
+                    user: User = Depends(get_current_user)):
+    accessible = site_access.accessible_site_ids(db, user)
     q = select(WorkPlan).order_by(WorkPlan.id)
+    q = q.where(WorkPlan.site_id.in_(accessible))
     if site_id:
         q = q.where(WorkPlan.site_id == site_id)
     if date:
@@ -1601,10 +1628,12 @@ def list_work_plans(site_id: str | None = None, date: str | None = None,
 
 
 @router.get("/work-plans/{plan_id}")
-def get_work_plan(plan_id: str, db: Session = Depends(get_db)):
+def get_work_plan(plan_id: str, db: Session = Depends(get_db),
+                  user: User = Depends(get_current_user)):
     plan = db.get(WorkPlan, plan_id)
     if not plan:
         raise HTTPException(404, "work plan not found")
+    site_access.ensure_site_read(db, user, plan.site_id)
     return _work_plan_dict(plan)
 
 
@@ -1614,6 +1643,7 @@ def create_work_plan(req: WorkPlanCreate, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_write(db, user, req.site_id, "editor")
 
     def _build():
         plan = WorkPlan(id=_allocate_id(db, WorkPlan, "WP", 2), site_id=req.site_id,
@@ -1635,6 +1665,7 @@ def update_work_plan(plan_id: str, req: WorkPlanUpdate, db: Session = Depends(ge
     plan = db.get(WorkPlan, plan_id)
     if not plan:
         raise HTTPException(404, "work plan not found")
+    site_access.ensure_site_write(db, user, plan.site_id, "editor")
     data = req.model_dump(exclude_none=True)
     if "work_type" in data and data["work_type"] not in WORK_KEYS:
         raise HTTPException(422, "invalid work_type")
@@ -1670,6 +1701,7 @@ async def evaluate_work_plan(plan_id: str, db: Session = Depends(get_db),
     site = db.get(Site, plan.site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_write(db, user, plan.site_id, "decision")
     # /api/decisions/evaluate と同じ fresh 閾値・スナップショット経路(第2の永続化パス)
     th = rules_service.effective_th(fresh=True)
     res = await assessment.assess_decision(site, plan.work_type, plan.planned_start,
@@ -1693,8 +1725,11 @@ class DecisionLogReq(BaseModel):
 
 
 @router.get("/decision-logs")
-def list_decision_logs(action: str | None = None, db: Session = Depends(get_db)):
+def list_decision_logs(action: str | None = None, db: Session = Depends(get_db),
+                       user: User = Depends(get_current_user)):
+    accessible = site_access.accessible_site_ids(db, user)
     q = select(DecisionLog).order_by(DecisionLog.id.desc())
+    q = q.where(DecisionLog.site_id.in_(accessible))
     if action and action != "all":
         q = q.where(DecisionLog.action == action)
     rows = db.scalars(q).all()
@@ -1709,6 +1744,7 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db),
     site = db.get(Site, req.site_id)
     if not site:
         raise HTTPException(404, "site not found")
+    site_access.ensure_site_write(db, user, req.site_id, "decision")
 
     def _build():
         entry = DecisionLog(
@@ -1730,7 +1766,10 @@ def create_decision_log(req: DecisionLogReq, db: Session = Depends(get_db),
 def export_decision_logs(db: Session = Depends(get_db),
                          user: User = Depends(get_current_user)):
     audit(db, user, "csv_export", "decision_logs.csv")
-    rows = db.scalars(select(DecisionLog).order_by(DecisionLog.id.desc())).all()
+    accessible = site_access.accessible_site_ids(db, user)
+    rows = db.scalars(
+        select(DecisionLog).where(DecisionLog.site_id.in_(accessible))
+        .order_by(DecisionLog.id.desc())).all()
     buf = io.StringIO()
     buf.write("﻿")  # Excel(JP) 用 BOM
     w = csv.writer(buf)
@@ -1764,7 +1803,10 @@ async def run_collectors(db: Session = Depends(get_db),
 @router.get("/notifications")
 async def list_notifications(db: Session = Depends(get_db),
                              user: User = Depends(get_current_user)):
-    sites = db.scalars(select(Site).where(Site.status == "active").order_by(Site.id)).all()
+    accessible = site_access.accessible_site_ids(db, user)
+    sites = db.scalars(
+        select(Site).where(Site.status == "active", Site.id.in_(accessible))
+        .order_by(Site.id)).all()
     cards = await assessment.assess_all(list(sites), db=db)
     src = db.scalars(select(DataSourceStatus).order_by(DataSourceStatus.id)).all()
     sources = [{"id": d.id, "name": d.name, "status": d.status,
@@ -1780,6 +1822,100 @@ def list_audit_logs(limit: int = 100, db: Session = Depends(get_db),
     rows = db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)).all()
     return [{"id": r.id, "timestamp": r.timestamp, "user": r.username, "action": r.action,
              "message": r.message, "siteId": r.site_id} for r in rows]
+
+
+# ---------- 現場単位権限（#117） ----------
+class UserSiteAccessGrant(BaseModel):
+    user_id: str
+    site_id: str
+    role: str = "site_viewer"
+
+    @field_validator("user_id", "site_id")
+    @classmethod
+    def _id(cls, v):
+        v = (v or "").strip()
+        if not v or len(v) > 20:
+            raise ValueError("user_id / site_id は必須・20文字以内で指定してください")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v):
+        if v not in site_access.SITE_ACCESS_ROLES:
+            raise ValueError(f"role は {sorted(site_access.SITE_ACCESS_ROLES)} のいずれか")
+        return v
+
+
+def _user_site_access_dict(row: UserSiteAccess) -> dict:
+    return {"id": row.id, "userId": row.user_id, "siteId": row.site_id,
+            "role": row.role, "grantedBy": row.granted_by,
+            "createdAt": row.created_at, "updatedAt": row.updated_at}
+
+
+@router.get("/admin/user-site-access")
+def list_user_site_access(db: Session = Depends(get_db),
+                          user: User = Depends(require_role("admin"))):
+    rows = db.scalars(select(UserSiteAccess).order_by(
+        UserSiteAccess.user_id, UserSiteAccess.site_id)).all()
+    return [_user_site_access_dict(r) for r in rows]
+
+
+@router.post("/admin/user-site-access", status_code=201)
+def grant_user_site_access(req: UserSiteAccessGrant, db: Session = Depends(get_db),
+                           user: User = Depends(require_role("admin"))):
+    target = db.get(User, req.user_id)
+    if not target:
+        raise HTTPException(404, "user not found")
+    if not db.get(Site, req.site_id):
+        raise HTTPException(404, "site not found")
+    row = db.scalar(select(UserSiteAccess).where(
+        UserSiteAccess.user_id == req.user_id,
+        UserSiteAccess.site_id == req.site_id))
+    now = datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+    if row:
+        row.role = req.role
+        row.granted_by = user.username or user.id
+        row.updated_at = now
+        audit_add(db, user, "user_site_access_update",
+                  f"{row.id} {req.user_id} {req.site_id} role={req.role}")
+        db.commit()
+        return {"id": row.id, "status": "updated"}
+    row = UserSiteAccess(
+        id=_allocate_id(db, UserSiteAccess, "USA", 3),
+        user_id=req.user_id, site_id=req.site_id, role=req.role,
+        granted_by=user.username or user.id, created_at=now, updated_at=now)
+    db.add(row)
+    audit_add(db, user, "user_site_access_grant",
+              f"{row.id} {req.user_id} {req.site_id} role={req.role}")
+    db.commit()
+    return {"id": row.id, "status": "granted"}
+
+
+@router.delete("/admin/user-site-access/{access_id}")
+def revoke_user_site_access(access_id: str, db: Session = Depends(get_db),
+                            user: User = Depends(require_role("admin"))):
+    row = db.get(UserSiteAccess, access_id)
+    if not row:
+        raise HTTPException(404, "user site access not found")
+    audit_add(db, user, "user_site_access_revoke",
+              f"{row.id} {row.user_id} {row.site_id} role={row.role}")
+    db.delete(row)
+    db.commit()
+    return {"id": access_id, "status": "revoked"}
+
+
+@router.get("/me/sites")
+def my_sites(db: Session = Depends(get_db),
+             user: User = Depends(get_current_user)):
+    accessible = site_access.accessible_site_ids(db, user)
+    rows = db.scalars(select(Site).where(Site.id.in_(accessible))
+                      .order_by(Site.id)).all()
+    grants = {}
+    if not site_access.has_full_read(user):
+        grants = {r.site_id: r.role for r in db.scalars(
+            select(UserSiteAccess).where(UserSiteAccess.user_id == user.id)).all()}
+    return [{"id": s.id, "code": s.site_code, "name": s.name,
+             "role": grants.get(s.id, "full")} for s in rows]
 
 
 # ---------- 運用監視（管理者・技術管理者、#95） ----------
