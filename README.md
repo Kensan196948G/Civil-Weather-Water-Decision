@@ -56,6 +56,7 @@ Construction Weather & Water Decision Support
 - [Entra ID OIDC 基本設計](./docs/design/entra-id-oidc.md)
 - [現場単位権限 基本設計](./docs/design/site-level-permissions.md)
 - [閾値 安全・技術レビュー用資料](./docs/threshold-safety-review.md)
+- [Open-Meteo 商用利用条件 確認書（要承認）](./docs/open-meteo-commercial-terms-review.md)
 - [PoC 受入基準（3現場・30日間）](./docs/acceptance/poc-acceptance.md)
 - [リリースノート](./docs/release-notes.md)
 
