@@ -112,6 +112,13 @@ async def test_assess_site_overlays_official_wbgt(monkeypatch):
 
     monkeypatch.setattr(we, "fetch_forecast", fake_wbgt)
 
+    # #113: 一括取得（yohou_all）は失敗扱いにし、地点別CSVへフォールバックさせる
+    async def fake_all(**kw):
+        return {"source_id": "DS-WBGT", "status": "ERROR", "error": "mock-all-down",
+                "points_by_station": {}, "count": 0}
+
+    monkeypatch.setattr(we, "fetch_forecast_all", fake_all)
+
     om_sample = {
         "timezone": "Asia/Tokyo",
         "hourly": {
