@@ -22,7 +22,8 @@ from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
     AppSetting, AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
-    IdCounter, Site, SiteLink, User, WorkPlan, WorkType,
+    IdCounter, ObservationStation, RiverObservation, Site, SiteLink, SiteStation,
+    User, WorkPlan, WorkType,
 )
 from ..services import assessment, notifications, rules as rules_service
 from ..services.audit import audit, audit_add
@@ -66,7 +67,9 @@ def _allocate_id(db: Session, model, prefix: str, width: int) -> str:
 
 # 採番対象の (モデル, プレフィックス)。重複検出時のカウンタ再同期に使う
 _COUNTER_SPECS = ((Site, "S"), (DecisionResult, "DR"), (WorkPlan, "WP"),
-                  (DecisionLog, "L"), (SiteLink, "SL"))
+                  (DecisionLog, "L"), (SiteLink, "SL"),
+                  (ObservationStation, "OS"), (SiteStation, "SS"),
+                  (RiverObservation, "RO"))
 
 # リトライしてよい一時エラーのみ許可（恒久障害を409に偽装しない: 対抗レビュー[medium]）
 _SQLITE_TRANSIENT_MARKERS = ("database is locked", "database table is locked")
@@ -813,6 +816,574 @@ def delete_site_link(link_id: str, db: Session = Depends(get_db),
     db.delete(link)
     db.commit()
     return {"id": link_id, "status": "deleted"}
+
+
+# ---------- 河川観測所マスタ・現場紐付け・実測値（#29/#31 T2-01/T2-03） ----------
+# 2026-08 時点の到達点: 観測所マスタ・現場紐付け・手動実測値の保存/時系列APIまで実装。
+# 自動取得（水防災オープンデータ提供サービス等）は未接続のため、API 応答とUIで
+# 「自動取得は未接続」を明示し、実測値と判定の取り違えを防ぐ（外部評価 P0 対応）。
+OBS_KINDS = {"water", "rain", "water_rain"}
+SITE_STATION_RELS = {"upstream", "nearest", "reference"}
+OBS_QUALITIES = {"OK", "MISSING", "STALE", "ERROR"}
+_SITE_STATIONS_MAX = 8  # 1現場あたりの観測所紐付け上限（応答肥大化・設定ミス防止）
+_OBS_NOTE_MAX = 200
+
+
+def _clean_station_text(v, max_len: int, label: str) -> str:
+    v = (v or "").strip()
+    if not v:
+        raise ValueError(f"{label} は必須です")
+    if len(v) > max_len:
+        raise ValueError(f"{label} は {max_len} 文字以内で指定してください")
+    if "<" in v or ">" in v:
+        raise ValueError(f"{label} に < > は使用できません")
+    return v
+
+
+def _optional_float(v, label: str, lo: float, hi: float) -> float | None:
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ValueError(f"{label} は数値で指定してください")
+    if not (lo <= float(v) <= hi):
+        raise ValueError(f"{label} は {lo}〜{hi} の範囲で指定してください")
+    return float(v)
+
+
+def _normalize_observed_at(v: str | None) -> str:
+    """観測時刻を JST の "%Y-%m-%d %H:%M:%S" へ正規化（未指定なら現在時刻）。"""
+    if not v:
+        return datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("observed_at は ISO 8601 形式で指定してください") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=assessment.JST)
+    return dt.astimezone(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+class ObservationStationCreate(BaseModel):
+    source_id: str = "MANUAL"
+    station_code: str
+    name: str
+    agency: str = ""
+    basin_name: str = ""
+    kind: str = "water"
+    latitude: float | None = None
+    longitude: float | None = None
+
+    @field_validator("source_id")
+    @classmethod
+    def _source(cls, v):
+        return _clean_station_text(v, 40, "source_id")
+
+    @field_validator("station_code")
+    @classmethod
+    def _code(cls, v):
+        return _clean_station_text(v, 50, "station_code")
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v):
+        return _clean_station_text(v, 200, "name")
+
+    @field_validator("agency")
+    @classmethod
+    def _agency(cls, v):
+        v = (v or "").strip()
+        if len(v) > 100:
+            raise ValueError("agency は 100 文字以内で指定してください")
+        return v
+
+    @field_validator("basin_name")
+    @classmethod
+    def _basin(cls, v):
+        v = (v or "").strip()
+        if len(v) > 100:
+            raise ValueError("basinName は 100 文字以内で指定してください")
+        return v
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v):
+        if v not in OBS_KINDS:
+            raise ValueError(f"kind は {sorted(OBS_KINDS)} のいずれか")
+        return v
+
+    @field_validator("latitude")
+    @classmethod
+    def _lat(cls, v):
+        return _optional_float(v, "latitude", -90.0, 90.0)
+
+    @field_validator("longitude")
+    @classmethod
+    def _lon(cls, v):
+        return _optional_float(v, "longitude", -180.0, 180.0)
+
+
+class ObservationStationUpdate(BaseModel):
+    source_id: str | None = None
+    station_code: str | None = None
+    name: str | None = None
+    agency: str | None = None
+    basin_name: str | None = None
+    kind: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    status: str | None = None
+
+    @field_validator("source_id")
+    @classmethod
+    def _source(cls, v):
+        return v if v is None else _clean_station_text(v, 40, "source_id")
+
+    @field_validator("station_code")
+    @classmethod
+    def _code(cls, v):
+        return v if v is None else _clean_station_text(v, 50, "station_code")
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v):
+        return v if v is None else _clean_station_text(v, 200, "name")
+
+    @field_validator("agency")
+    @classmethod
+    def _agency(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        if len(v) > 100:
+            raise ValueError("agency は 100 文字以内で指定してください")
+        return v
+
+    @field_validator("basin_name")
+    @classmethod
+    def _basin(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        if len(v) > 100:
+            raise ValueError("basinName は 100 文字以内で指定してください")
+        return v
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v):
+        if v is not None and v not in OBS_KINDS:
+            raise ValueError(f"kind は {sorted(OBS_KINDS)} のいずれか")
+        return v
+
+    @field_validator("latitude")
+    @classmethod
+    def _lat(cls, v):
+        return _optional_float(v, "latitude", -90.0, 90.0)
+
+    @field_validator("longitude")
+    @classmethod
+    def _lon(cls, v):
+        return _optional_float(v, "longitude", -180.0, 180.0)
+
+    @field_validator("status")
+    @classmethod
+    def _status(cls, v):
+        if v is not None and v not in {"active", "inactive"}:
+            raise ValueError("status は active/inactive のいずれか")
+        return v
+
+
+class SiteStationLink(BaseModel):
+    station_id: str
+    rel: str = "nearest"
+    sort_order: int = 0
+
+    @field_validator("station_id")
+    @classmethod
+    def _station(cls, v):
+        return _clean_station_text(v, 20, "station_id")
+
+    @field_validator("rel")
+    @classmethod
+    def _rel(cls, v):
+        if v not in SITE_STATION_RELS:
+            raise ValueError(f"rel は {sorted(SITE_STATION_RELS)} のいずれか")
+        return v
+
+    @field_validator("sort_order")
+    @classmethod
+    def _sort(cls, v):
+        if isinstance(v, bool) or not isinstance(v, int) or not (0 <= v <= 100):
+            raise ValueError("sort_order は 0〜100 の整数で指定してください")
+        return v
+
+
+class RiverObservationCreate(BaseModel):
+    station_id: str
+    observed_at: str | None = None
+    water_level_m: float | None = None
+    rainfall_mm_h: float | None = None
+    quality: str = "OK"
+    note: str = ""
+
+    @field_validator("station_id")
+    @classmethod
+    def _station(cls, v):
+        return _clean_station_text(v, 20, "station_id")
+
+    @field_validator("observed_at")
+    @classmethod
+    def _time(cls, v):
+        return v if v is None else _normalize_observed_at(v)
+
+    @field_validator("water_level_m")
+    @classmethod
+    def _level(cls, v):
+        return _optional_float(v, "water_level_m", -5.0, 100.0)
+
+    @field_validator("rainfall_mm_h")
+    @classmethod
+    def _rain(cls, v):
+        return _optional_float(v, "rainfall_mm_h", 0.0, 500.0)
+
+    @field_validator("quality")
+    @classmethod
+    def _quality(cls, v):
+        if v not in OBS_QUALITIES:
+            raise ValueError(f"quality は {sorted(OBS_QUALITIES)} のいずれか")
+        return v
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v):
+        v = (v or "").strip()
+        if len(v) > _OBS_NOTE_MAX:
+            raise ValueError(f"note は {_OBS_NOTE_MAX} 文字以内で指定してください")
+        return v
+
+    @model_validator(mode="after")
+    def _has_value(self):
+        if self.water_level_m is None and self.rainfall_mm_h is None:
+            raise ValueError("water_level_m または rainfall_mm_h の少なくとも一方が必要です")
+        return self
+
+
+class RiverObservationUpdate(RiverObservationCreate):
+    """手動入力の修正用。全項目任意（指定された項目だけ更新）。"""
+
+    station_id: str | None = None
+    observed_at: str | None = None
+    water_level_m: float | None = None
+    rainfall_mm_h: float | None = None
+    quality: str | None = None
+    note: str | None = None
+
+    @field_validator("quality")
+    @classmethod
+    def _quality(cls, v):
+        if v is not None and v not in OBS_QUALITIES:
+            raise ValueError(f"quality は {sorted(OBS_QUALITIES)} のいずれか")
+        return v
+
+    @model_validator(mode="after")
+    def _has_value(self):
+        if self.model_dump(exclude_none=True):
+            return self
+        raise ValueError("更新内容がありません")
+
+
+def _observation_station_dict(st: ObservationStation) -> dict:
+    return {
+        "id": st.id, "sourceId": st.source_id, "stationCode": st.station_code,
+        "name": st.name, "agency": st.agency, "basinName": st.basin_name,
+        "kind": st.kind, "latitude": st.latitude, "longitude": st.longitude,
+        "status": st.status, "updatedAt": st.updated_at,
+    }
+
+
+def _latest_observation(db: Session, station_id: str) -> dict | None:
+    row = db.scalar(
+        select(RiverObservation)
+        .where(RiverObservation.station_id == station_id)
+        .order_by(RiverObservation.observed_at.desc())
+        .limit(1)
+    )
+    if row is None:
+        return None
+    return {
+        "id": row.id, "observedAt": row.observed_at,
+        "waterLevelM": row.water_level_m, "rainfallMmH": row.rainfall_mm_h,
+        "quality": row.quality, "source": row.source, "recordedAt": row.recorded_at,
+        "recordedBy": row.recorded_by, "note": row.note,
+    }
+
+
+@router.get("/observation-stations")
+def list_observation_stations(kind: str | None = None, site_id: str | None = None,
+                              db: Session = Depends(get_db)):
+    q = select(ObservationStation).order_by(ObservationStation.basin_name,
+                                            ObservationStation.name)
+    if kind:
+        if kind not in OBS_KINDS:
+            raise HTTPException(422, f"kind は {sorted(OBS_KINDS)} のいずれか")
+        q = q.where(ObservationStation.kind == kind)
+    if site_id:
+        if not db.get(Site, site_id):
+            raise HTTPException(404, "site not found")
+        q = q.join(SiteStation, SiteStation.station_id == ObservationStation.id) \
+             .where(SiteStation.site_id == site_id)
+    return [_observation_station_dict(st) for st in db.scalars(q).all()]
+
+
+@router.post("/observation-stations", status_code=201)
+def create_observation_station(req: ObservationStationCreate, db: Session = Depends(get_db),
+                               user: User = Depends(require_role("admin", "tech_manager"))):
+    dup = db.scalar(select(ObservationStation).where(
+        ObservationStation.source_id == req.source_id,
+        ObservationStation.station_code == req.station_code))
+    if dup:
+        raise HTTPException(409, "同じ source_id + station_code の観測所が既に登録されています")
+
+    def _build():
+        now = datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+        st = ObservationStation(
+            id=_allocate_id(db, ObservationStation, "OS", 3),
+            source_id=req.source_id, station_code=req.station_code, name=req.name,
+            agency=req.agency, basin_name=req.basin_name, kind=req.kind,
+            latitude=req.latitude, longitude=req.longitude, status="active",
+            created_at=now, updated_at=now)
+        db.add(st)
+        audit_add(db, user, "observation_station_create",
+                  f"{st.id} {req.source_id}:{req.station_code} {req.name}",
+                  source_id=req.source_id)
+        return st
+
+    st = _commit_with_retry(db, _build)
+    return {"id": st.id, "status": "created"}
+
+
+@router.put("/observation-stations/{station_id}")
+def update_observation_station(station_id: str, req: ObservationStationUpdate,
+                               db: Session = Depends(get_db),
+                               user: User = Depends(require_role("admin", "tech_manager"))):
+    st = db.get(ObservationStation, station_id)
+    if not st:
+        raise HTTPException(404, "observation station not found")
+    data = req.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(422, "更新内容がありません")
+    if "source_id" in data or "station_code" in data:
+        dup = db.scalar(select(ObservationStation).where(
+            ObservationStation.source_id == data.get("source_id", st.source_id),
+            ObservationStation.station_code == data.get("station_code", st.station_code),
+            ObservationStation.id != station_id))
+        if dup:
+            raise HTTPException(409, "同じ source_id + station_code の観測所が既に登録されています")
+    for k, v in data.items():
+        setattr(st, k, v)
+    st.updated_at = datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+    audit_add(db, user, "observation_station_update",
+              f"{station_id} {','.join(data.keys())}", source_id=st.source_id)
+    db.commit()
+    return {"id": station_id, "status": "updated"}
+
+
+@router.delete("/observation-stations/{station_id}")
+def delete_observation_station(station_id: str, db: Session = Depends(get_db),
+                               user: User = Depends(require_role("admin"))):
+    st = db.get(ObservationStation, station_id)
+    if not st:
+        raise HTTPException(404, "observation station not found")
+    linked = db.scalar(select(func.count()).select_from(SiteStation)
+                       .where(SiteStation.station_id == station_id))
+    observed = db.scalar(select(func.count()).select_from(RiverObservation)
+                         .where(RiverObservation.station_id == station_id))
+    if linked or observed:
+        raise HTTPException(409, "現場紐付けまたは実測値が存在するため削除できません（status=inactive で無効化してください）")
+    audit_add(db, user, "observation_station_delete",
+              f"{station_id} {st.source_id}:{st.station_code} {st.name}",
+              source_id=st.source_id)
+    db.delete(st)
+    db.commit()
+    return {"id": station_id, "status": "deleted"}
+
+
+@router.get("/sites/{site_id}/observation-stations")
+def list_site_observation_stations(site_id: str, db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    rows = db.execute(
+        select(SiteStation, ObservationStation)
+        .join(ObservationStation, ObservationStation.id == SiteStation.station_id)
+        .where(SiteStation.site_id == site_id)
+        .order_by(SiteStation.sort_order, SiteStation.id)
+    ).all()
+    stations = []
+    for link, st in rows:
+        item = _observation_station_dict(st)
+        item["rel"] = link.rel
+        item["sortOrder"] = link.sort_order
+        item["latest"] = _latest_observation(db, st.id)
+        stations.append(item)
+    return {
+        "automatic": False,
+        "provider": "未接続（自動取得は未実装。水防災オープンデータ提供サービス等の接続が未設定）",
+        "stations": stations,
+    }
+
+
+@router.post("/sites/{site_id}/observation-stations", status_code=201)
+def link_site_observation_station(site_id: str, req: SiteStationLink,
+                                  db: Session = Depends(get_db),
+                                  user: User = Depends(require_role("admin", "tech_manager"))):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    st = db.get(ObservationStation, req.station_id)
+    if not st or st.status != "active":
+        raise HTTPException(404, "observation station not found")
+    count = db.scalar(select(func.count()).select_from(SiteStation)
+                      .where(SiteStation.site_id == site_id))
+    if count >= _SITE_STATIONS_MAX:
+        raise HTTPException(422, f"観測所は1現場あたり最大 {_SITE_STATIONS_MAX} 件までです")
+    dup = db.scalar(select(SiteStation).where(SiteStation.site_id == site_id,
+                                              SiteStation.station_id == req.station_id))
+    if dup:
+        raise HTTPException(409, "この観測所は既に現場へ紐付いています")
+
+    def _build():
+        link = SiteStation(
+            id=_allocate_id(db, SiteStation, "SS", 3),
+            site_id=site_id, station_id=req.station_id, rel=req.rel,
+            sort_order=req.sort_order,
+            created_at=datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S"))
+        db.add(link)
+        audit_add(db, user, "site_station_link", f"{link.id} {site_id} {req.station_id} {req.rel}",
+                  site_id=site_id)
+        return link
+
+    link = _commit_with_retry(db, _build)
+    return {"id": link.id, "status": "linked"}
+
+
+@router.delete("/sites/{site_id}/observation-stations/{station_id}")
+def unlink_site_observation_station(site_id: str, station_id: str,
+                                    db: Session = Depends(get_db),
+                                    user: User = Depends(require_role("admin", "tech_manager"))):
+    link = db.scalar(select(SiteStation).where(SiteStation.site_id == site_id,
+                                               SiteStation.station_id == station_id))
+    if not link:
+        raise HTTPException(404, "site station link not found")
+    audit_add(db, user, "site_station_unlink",
+              f"{link.id} {site_id} {station_id}", site_id=site_id)
+    db.delete(link)
+    db.commit()
+    return {"status": "unlinked"}
+
+
+@router.get("/sites/{site_id}/river-observations")
+def list_river_observations(site_id: str, limit: int = Query(24, ge=1, le=500),
+                            db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    station_ids = db.scalars(
+        select(SiteStation.station_id).where(SiteStation.site_id == site_id)
+    ).all()
+    if not station_ids:
+        return {"automatic": False, "provider": "未接続（観測所が紐付いていません）",
+                "observations": []}
+    rows = db.scalars(
+        select(RiverObservation)
+        .where(RiverObservation.station_id.in_(station_ids))
+        .order_by(RiverObservation.observed_at.desc())
+        .limit(limit)
+    ).all()
+    station_names = {
+        st.id: st.name
+        for st in db.scalars(
+            select(ObservationStation).where(ObservationStation.id.in_(station_ids))
+        ).all()
+    }
+    return {
+        "automatic": False,
+        "provider": "未接続（自動取得は未実装。現在は手動入力のみ）",
+        "observations": [{
+            "id": r.id, "stationId": r.station_id,
+            "stationName": station_names.get(r.station_id, ""),
+            "observedAt": r.observed_at, "waterLevelM": r.water_level_m,
+            "rainfallMmH": r.rainfall_mm_h, "quality": r.quality,
+            "source": r.source, "recordedAt": r.recorded_at,
+            "recordedBy": r.recorded_by, "note": r.note,
+        } for r in rows],
+    }
+
+
+@router.post("/sites/{site_id}/river-observations", status_code=201)
+def create_river_observation(site_id: str, req: RiverObservationCreate,
+                             db: Session = Depends(get_db),
+                             user: User = Depends(require_role("admin", "tech_manager"))):
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "site not found")
+    link = db.scalar(select(SiteStation).where(SiteStation.site_id == site_id,
+                                               SiteStation.station_id == req.station_id))
+    if not link:
+        raise HTTPException(422, "この観測所は現場へ紐付いていません。先に紐付けを行ってください")
+
+    def _build():
+        now = datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+        obs = RiverObservation(
+            id=_allocate_id(db, RiverObservation, "RO", 5),
+            station_id=req.station_id,
+            observed_at=_normalize_observed_at(req.observed_at),
+            water_level_m=req.water_level_m, rainfall_mm_h=req.rainfall_mm_h,
+            quality=req.quality, source="MANUAL", recorded_at=now,
+            recorded_by=user.username or user.id, note=req.note)
+        db.add(obs)
+        audit_add(db, user, "river_observation_create",
+                  f"{obs.id} {site_id} {req.station_id} L={req.water_level_m} R={req.rainfall_mm_h}",
+                  site_id=site_id)
+        return obs
+
+    obs = _commit_with_retry(db, _build)
+    return {"id": obs.id, "status": "created"}
+
+
+@router.put("/river-observations/{observation_id}")
+def update_river_observation(observation_id: str, req: RiverObservationUpdate,
+                             db: Session = Depends(get_db),
+                             user: User = Depends(require_role("admin", "tech_manager"))):
+    obs = db.get(RiverObservation, observation_id)
+    if not obs:
+        raise HTTPException(404, "river observation not found")
+    data = req.model_dump(exclude_none=True)
+    data.pop("station_id", None)  # 観測所の付け替えは不可（紐付け解除→再登録で対応）
+    if not data:
+        raise HTTPException(422, "更新内容がありません")
+    if "observed_at" in data:
+        data["observed_at"] = _normalize_observed_at(data["observed_at"])
+    for k, v in data.items():
+        setattr(obs, k, v)
+    obs.recorded_by = f"{user.username or user.id} (update)"
+    audit_add(db, user, "river_observation_update",
+              f"{observation_id} {','.join(data.keys())}")
+    db.commit()
+    return {"id": observation_id, "status": "updated"}
+
+
+@router.delete("/river-observations/{observation_id}")
+def delete_river_observation(observation_id: str, db: Session = Depends(get_db),
+                             user: User = Depends(require_role("admin"))):
+    obs = db.get(RiverObservation, observation_id)
+    if not obs:
+        raise HTTPException(404, "river observation not found")
+    audit_add(db, user, "river_observation_delete",
+              f"{observation_id} {obs.observed_at}")
+    db.delete(obs)
+    db.commit()
+    return {"id": observation_id, "status": "deleted"}
 
 
 # ---------- ダッシュボード ----------

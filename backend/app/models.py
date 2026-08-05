@@ -257,3 +257,73 @@ class NotificationDelivery(Base):
     last_error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String(40), default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class ObservationStation(Base):
+    """河川・雨量観測所マスタ（#29 T2-01 / FR-031, 詳細設計 §6.2.6 の正規化版）。
+
+    site に直結していた PoC 版 Station と異なり、観測所を独立マスタとして管理し、
+    SiteStation を介して複数現場へ紐付ける（上流/最寄り/参照 の区分付き）。
+    将来の自動取得では source_id に水防災オープンデータ提供サービス等の提供元を、
+    station_code に公式観測所コードを格納する。
+    """
+    __tablename__ = "observation_stations"
+    __table_args__ = (
+        UniqueConstraint("source_id", "station_code",
+                         name="uq_observation_station_source_code"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(40), default="MANUAL")
+    station_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    agency: Mapped[str] = mapped_column(String(100), default="")
+    basin_name: Mapped[str] = mapped_column(String(100), default="")
+    kind: Mapped[str] = mapped_column(String(20), default="water")  # water/rain/water_rain
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active/inactive
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class SiteStation(Base):
+    """現場と観測所の多対多紐付け（#29 T2-01 / FR-031）。
+
+    rel は upstream(上流)/nearest(最寄り)/reference(参照)。同じ観測所を複数現場へ
+    共有できる。観測所を削除する場合も、この行がある限り FK で保護される。
+    """
+    __tablename__ = "site_stations"
+    __table_args__ = (
+        UniqueConstraint("site_id", "station_id",
+                         name="uq_site_station_site_station"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.id"))
+    station_id: Mapped[str] = mapped_column(ForeignKey("observation_stations.id"))
+    rel: Mapped[str] = mapped_column(String(20), default="nearest")  # upstream/nearest/reference
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class RiverObservation(Base):
+    """観測所の実測値（#31 T2-03 / FR-032〜034）。
+
+    water_level_m / rainfall_mm_h は少なくとも一方を持つ。observed_at は観測時刻
+    （JST ISO文字列）、recorded_at は本システムへの記録時刻。quality は
+    OK/MISSING/STALE/ERROR を保持し、欠測・遅延を「安全」と誤認させない。
+    source は MANUAL（手動入力）または将来の自動取得提供元ID。
+    """
+    __tablename__ = "river_observations"
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    station_id: Mapped[str] = mapped_column(ForeignKey("observation_stations.id"))
+    observed_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    water_level_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rainfall_mm_h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality: Mapped[str] = mapped_column(String(20), default="OK")
+    source: Mapped[str] = mapped_column(String(40), default="MANUAL")
+    recorded_at: Mapped[str] = mapped_column(String(40), default="")
+    recorded_by: Mapped[str] = mapped_column(String(100), default="")
+    note: Mapped[str] = mapped_column(String(200), default="")

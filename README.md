@@ -30,7 +30,7 @@ Construction Weather & Water Decision Support
 ## 主なデータソース / Main Data Sources
 
 - 気象庁（防災情報XML・気象データ高度利用ポータル）
-- 国土交通省 川の防災情報
+- 国土交通省 川の防災情報（現時点は公式リンク・手動実測のみ。自動取得は未接続）
 - 水防災オープンデータ提供サービス
 - Open-Meteo（予報・補完）
 - 環境省 暑さ指数 WBGT
@@ -52,6 +52,11 @@ Construction Weather & Water Decision Support
 - [実装計画書（ロードマップ・WBS・リスク）](./docs/implementation-plan.md)
 - [デプロイ手順 / 運用チェック](./docs/deploy.md)
 - [バックアップ・リストア手順](./docs/backup-restore.md)
+- [河川観測アーキテクチャ設計](./docs/design/river-observation-architecture.md)
+- [Entra ID OIDC 基本設計](./docs/design/entra-id-oidc.md)
+- [現場単位権限 基本設計](./docs/design/site-level-permissions.md)
+- [閾値 安全・技術レビュー用資料](./docs/threshold-safety-review.md)
+- [PoC 受入基準（3現場・30日間）](./docs/acceptance/poc-acceptance.md)
 - [リリースノート](./docs/release-notes.md)
 
 ## システム構成 / Architecture
@@ -137,8 +142,16 @@ LAN 直アクセスは不要な公開面になるため既定で無効です（�
 | フェーズ | Phase 2 進行中（Phase 1 MVP完了・Phase 3 認証/監査/通知は大幅先行・Phase 4 CI/CD着手済み） |
 | 登録日 | 2026-06-19 |
 | 本番リリース期限 | 2026-12-19（登録から6ヶ月） |
-| テスト状況 | backend 389 / frontend 74（logic 21 + adapter契約 47 + policy系 6）、全pass（2026-08-01時点） |
+| テスト状況 | backend 405 / frontend 74（logic 21 + adapter契約 47 + policy系 6）、全pass（2026-08-05時点） |
 | CI | GitHub Actions（backend lint+test / 依存脆弱性スキャン / frontend test / docker build） |
+
+### 河川観測のステータス
+
+2026-08-05 時点:
+
+- ✅ 観測所マスタ・現場紐付け（上流/最寄り/参照）・手動実測値の保存と時系列API
+- ✅ UIに「自動取得は未接続（未実装）」を明示（誤って実測済みと見せない）
+- ❌ 自動取得（水防災オープンデータ提供サービス等）は未接続。判定エンジンへの実測値組み込みも未着手
 
 マイルストーン・タスクは GitHub Issues / Milestones で管理します。
 

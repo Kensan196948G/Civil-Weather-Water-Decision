@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-MIGRATION_HEAD = "f2a4d6c8e9b1"
+MIGRATION_HEAD = "a1b2c3d4e5f6"
 
 
 def _run_alembic(database_url: str) -> subprocess.CompletedProcess[bytes]:
