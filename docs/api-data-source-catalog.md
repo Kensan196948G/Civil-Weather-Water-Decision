@@ -9,7 +9,7 @@
 |---|---|---|---|---|---|---|---|---|
 | DS-JMA-XML | 気象庁 防災情報XML | 公式・最優先 | 警報・注意報を判定に反映（公式優先） | atomフィード `www.data.jma.go.jp/developer/xml/feed/extra.xml` → 個別警報XML | 不要 | 無料・登録不要（気象庁利用規約の範囲で二次利用可）。高頻度取得は避ける運用が望ましく本実装は10分キャッシュ | **実装済み・実接続**（10分キャッシュ） | `jma_warnings.py` |
 | DS-OPEN-METEO | Open-Meteo | 外部API・補完 | 気象予報の補完・時系列生成 | `api.open-meteo.com/v1/forecast` | 不要（APIキー不要） | 非商用利用は無料枠（10,000 calls/日・SLAなし）。**商用利用・SLA保証には有償プラン契約が必要**（[確認書](./open-meteo-commercial-terms-review.md)・要承認） | **実装済み・実接続**（予報キャッシュ5分毎ウォーム） | `open_meteo.py` |
-| DS-WBGT | 環境省 暑さ指数(WBGT) | 公式 | 熱中症対策の判定材料 | 予報CSV `www.wbgt.env.go.jp/prev15WG/dl/yohou_{地点コード}.csv` | 不要 | 公開サイト。提供は夏期（概ね4月下旬〜10月、期間外は404）。大量・商用取得は個別に利用条件確認が望ましい | **実装済み・実接続（設定制）**: `WBGT_STATION_CODE` 設定時のみ公式予報値を採用（`wbgtDerived=false`）。未設定時・取得失敗時は気温湿度からの **derived 推定**へフォールバック | `wbgt_env.py` / `open_meteo.py: estimate_wbgt()` |
+| DS-WBGT | 環境省 暑さ指数(WBGT) | 公式 | 熱中症対策の判定材料 | 全地点予報CSV `www.wbgt.env.go.jp/prev15WG/dl/yohou_all.csv`（フォールバック: `yohou_{地点コード}.csv`）、地点マスタCSV | 不要 | 公開サイト。提供は夏期（概ね4月下旬〜10月、期間外は404）。**出典明記（環境省）必須**。大量・商用取得は個別に利用条件確認が望ましい | **実装済み・実接続（現場別自動選定）**: 地点マスタ同期（`observation_stations` kind=wbgt）から現場ごとに最近傍を自動選択（明示リンク優先）。全地点CSVを優先し、対象外・失敗時は地点別CSVへフォールバック。`WBGT_STATION_CODE` は最終フォールバック | `wbgt_env.py` / `open_meteo.py: estimate_wbgt()` |
 | DS-RIVER-GO | 川の防災情報（国交省） | 公式（参照） | 河川水位情報の参照案内 | `www.river.go.jp` | 不要 | 無認証の機械可読APIは非公開（Webサイト参照のみ想定） | 疎通プローブのみ。無認証の実測水位APIが無いため公式サイト参照リンク案内に留める | `source_probe.py` |
 | DS-WATER-OPEN | 水防災オープンデータ提供サービス | 準公式（契約制） | 河川観測所の実測データ（将来） | ― | 要契約 | **本格利用には利用者登録・契約が必要**（有償プランあり）。再配布・SLA等は契約条件に依存 | **意図的にプローブ対象外**。未接続・シードのError状態を保持（契約・利用条件確認が必要） | `seed.py: SOURCES` |
 | DS-NASA-POWER | NASA POWER | 公式・補助 | 日射量・長期傾向の参考データ | `power.larc.nasa.gov` | 不要 | NASA公開データ方針に基づき自由利用可。呼出頻度はFair Use的運用（明示的な数値上限は非公開） | 疎通プローブのみ。判定へは未反映（将来拡張） | `source_probe.py` |
@@ -47,7 +47,20 @@
 
 - **Open-Meteo（DS-OPEN-METEO）の商用利用条件は未承認**（[確認書](./open-meteo-commercial-terms-review.md)）。
   社内業務利用として有償プラン契約の要否・帰属表示（CC BY 4.0）・SLAを法務/ITへ確認中。
-- WBGT（DS-WBGT）は予報CSVの実接続を実装済みだが**単一地点設定制**（`WBGT_STATION_CODE`）。現場ごとの最寄り地点自動選定は観測所マスタ正規化（`#29`）待ち。実況値CSVは取得経路未解明のため未実装（`samples/README.md` §3）。地点コード未設定時は従来どおり気温・湿度からの推定値。
+- WBGT（DS-WBGT）は地点マスタ（`WBGT-ENV`）の同期と現場別最近傍自動選定を実装済み（#113）。
+  実況値CSV（`wbgt_{地点番号}_{YYYYMM}.csv`）は未実装、地点移設時のコード差異はマスタ再同期で対応。
 - 河川（DS-RIVER-GO, DS-WATER-OPEN）は実測水位の自動取得が未接続（`#31` 残課題）。
   観測所マスタ・現場紐付け（`#29`）と、手動実測を使った判定エンジン組み込み（`#112`）は実装済み。
 - NASA POWER / JMA-CSV / JAXA / NOAA は疎通確認のみで判定エンジンには未反映（将来拡張）。
+
+## 環境省WBGT 地点マスタ運用（#113）
+
+- 地点マスタCSV: `https://www.wbgt.env.go.jp/man15NH/wbgt_point_master-20260515.csv`
+  （年度更新時は `WBGT_POINT_MASTER_URL` を差し替え）
+- 同期API: `POST /api/admin/wbgt/stations/sync`（admin/tech_manager）
+- 同期CLI: `cd backend && python -m app.scripts.import_wbgt_stations [--dry-run]`
+- 同期内容: `observation_stations`（`source_id=WBGT-ENV`, `kind=wbgt`）へ地点番号・名称・
+  地方・緯度経度（度＋分→10進度変換）を upsert
+- 現場別解決: 明示リンク（`site_stations` のWBGT観測所）→ 最近傍（ハーバサイン距離）→
+  `WBGT_STATION_CODE`（最終フォールバック）
+- 出典明記: 公式値を採用する際は画面・判定理由に「環境省 暑さ指数」の出典を表示する

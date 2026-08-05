@@ -33,7 +33,7 @@ Construction Weather & Water Decision Support
 - 国土交通省 川の防災情報（現時点は公式リンク・手動実測のみ。自動取得は未接続）
 - 水防災オープンデータ提供サービス
 - Open-Meteo（予報・補完）
-- 環境省 暑さ指数 WBGT
+- 環境省 暑さ指数 WBGT（地点マスタ同期・現場別最近傍自動選定）
 - NASA POWER / JAXA G-Portal・Earth API（将来拡張）
 
 ## 判断レベル / Decision Levels

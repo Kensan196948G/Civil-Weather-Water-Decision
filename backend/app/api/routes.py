@@ -28,7 +28,7 @@ from ..models import (
 from ..services import assessment, notifications, rules as rules_service
 from ..services import site_access
 from ..services.audit import audit, audit_add
-from ..services.data_collectors import open_meteo, source_probe
+from ..services.data_collectors import open_meteo, source_probe, wbgt_env
 
 # ルータ全体に認証を必須化（/auth と /health は別ルータ/main で公開）
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -833,7 +833,7 @@ def delete_site_link(link_id: str, db: Session = Depends(get_db),
 # 2026-08 時点の到達点: 観測所マスタ・現場紐付け・手動実測値の保存/時系列APIまで実装。
 # 自動取得（水防災オープンデータ提供サービス等）は未接続のため、API 応答とUIで
 # 「自動取得は未接続」を明示し、実測値と判定の取り違えを防ぐ（外部評価 P0 対応）。
-OBS_KINDS = {"water", "rain", "water_rain"}
+OBS_KINDS = {"water", "rain", "water_rain", "wbgt"}
 SITE_STATION_RELS = {"upstream", "nearest", "reference"}
 OBS_QUALITIES = {"OK", "MISSING", "STALE", "ERROR"}
 _SITE_STATIONS_MAX = 8  # 1現場あたりの観測所紐付け上限（応答肥大化・設定ミス防止）
@@ -1146,6 +1146,20 @@ def list_observation_stations(kind: str | None = None, site_id: str | None = Non
         q = q.join(SiteStation, SiteStation.station_id == ObservationStation.id) \
              .where(SiteStation.site_id == site_id)
     return [_observation_station_dict(st) for st in db.scalars(q).all()]
+
+
+@router.post("/admin/wbgt/stations/sync")
+async def sync_wbgt_stations(db: Session = Depends(get_db),
+                             user: User = Depends(require_role("admin", "tech_manager"))):
+    """環境省 地点マスタCSVを observation_stations（kind=wbgt）へ同期する（#113）。"""
+    result = await wbgt_env.sync_point_master(db)
+    if result.get("status") != "OK":
+        raise HTTPException(502, f"WBGT地点マスタの取得に失敗しました: {result.get('error')}")
+    audit_add(db, user, "wbgt_station_sync",
+              f"count={result.get('count')} upserted={result.get('upserted')} "
+              f"updated={result.get('updated')}")
+    db.commit()
+    return result
 
 
 @router.post("/observation-stations", status_code=201)
