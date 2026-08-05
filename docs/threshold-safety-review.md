@@ -35,6 +35,17 @@
 | crane（クレーン） | wind_strong / gust_stop / 気象庁警報 |
 | heat（熱中症対策） | wbgt_caution / wbgt_danger / temp_high |
 
+## 2.1 河川実測の判定定数（#112・コード定数）
+
+判定エンジンへ河川実測を組み込む際の鮮度・トレンド判定は、現時点では
+`backend/app/services/assessment.py` のコード定数として保持している
+（将来の設定化候補。`DecisionRule` の共通閾値とは別管理）。
+
+| 定数 | 値 | 判定への影響 |
+| --- | --- | --- |
+| `RIVER_MAX_AGE_SECONDS` | 1800（30分） | 実測が30分以上古い・欠測・品質ERROR は「確認不能（レベル3）」 |
+| `RIVER_RISING_RATE_M_H` | 0.2 | 直近2点の水位上昇率が 0.2m/h 以上で rising（注意） |
+
 ## 3. 工種別の運用上の注意点（レビュー観点）
 
 1. **コンクリート**: 外気温4℃以下は低温対策の目安。打設可否の追加条件

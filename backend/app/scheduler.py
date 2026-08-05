@@ -33,7 +33,7 @@ async def _forecast_job() -> None:
     assessment.clear_cache()
     with SessionLocal() as db:
         sites = db.scalars(select(Site).where(Site.status == "active")).all()
-        await assessment.assess_all(list(sites))
+        await assessment.assess_all(list(sites), db=db)
 
 
 async def _notification_job() -> None:
