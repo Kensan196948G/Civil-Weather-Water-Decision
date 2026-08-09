@@ -31,10 +31,10 @@ frontend/
 - 地図は self-host した Leaflet（既定はタイルなし）、グラフは JS で生成する SVG。
 
 > JS/CSS/font CDN 依存は `frontend/design/vendor/` へ固定版をself-host済み。
-> タイルURLは起動前の `window.__CW_TILE_URL__` または `serve.py` の `CW_TILE_URL` で明示した場合だけ使う。
-> 未指定または `CW_TILE_URL=none` / `off` / `disabled` はタイルなしで地図UIを表示する。
-> 本番systemdは外部タイル通信抑止のため `none` で運用し、必要時は内部タイルサービスURLへ差し替える。
-> タイルの帰属表示が必要な場合は `window.__CW_TILE_ATTRIBUTION__` または `CW_TILE_ATTRIBUTION` も設定する。
+> タイルURLは起動前の `window.__CW_TILE_URL__` または `serve.py` の `CW_TILE_URL` で指定する。
+> 未指定時は国土地理院 標準地図（APIキー不要）を既定表示し、マップ非表示（背景タイル欠落）を防ぐ。
+> `CW_TILE_URL=none` / `off` / `disabled` を明示した場合のみタイルなし（グリッド背景）で表示する。
+> タイルの帰属表示は `CW_TILE_ATTRIBUTION`（既定: 国土地理院）で設定する。
 
 ## 起動方法（ローカル）
 

@@ -11,7 +11,8 @@ Group=kensan
 WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/frontend
 Environment=PORT=34979
 Environment=HOST=127.0.0.1
-Environment=CW_TILE_URL=none
+Environment=CW_TILE_URL=https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png
+Environment=CW_TILE_ATTRIBUTION=国土地理院
 Environment=CW_BACKEND_PROXY_BASE=http://127.0.0.1:55019
 ExecStart=/usr/bin/python3 serve.py
 Restart=always

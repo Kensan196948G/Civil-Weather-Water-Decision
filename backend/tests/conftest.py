@@ -15,6 +15,9 @@ os.environ["APP_ENV"] = "local"
 os.environ["JWT_SECRET"] = "dev-secret-change-in-production-please-32+"
 os.environ["ENABLE_SCHEDULER"] = "false"
 os.environ["ENABLE_JMA_WARNINGS"] = "false"  # 気象庁XML取得を無効化（ネット非依存）
+# 河川観測デモ自動取得は本番/ローカル向け。既存テストは「自動取得未接続」前提の
+# 検証を維持するため、テスト環境では無効化し、デモ用テストで個別に有効化する。
+os.environ["RIVER_DEMO_ENABLED"] = "false"
 # ローカルの .env に実値があってもテストを環境非依存にするため、JWT_SECRET を
 # config.py の既定値へ固定する（弱鍵ケースを検証するテストが monkeypatch で
 # 同じ既定値へ差し替える前提のため、ログイン時の署名鍵と一致させる必要がある）。

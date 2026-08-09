@@ -1868,11 +1868,17 @@ def _write_fake_security_curl(tmp_path: Path, *, docs_status: str = "404",
         "X-Permitted-Cross-Domain-Policies: none\\r\\n"
         "X-Download-Options: noopen\\r\\n"
         "Cache-Control: no-store\\r\\n"
-        "Content-Security-Policy-Report-Only: default-src 'self'; frame-ancestors 'none'; connect-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*\\r\\n"
+        "Content-Security-Policy-Report-Only: default-src 'self'; frame-ancestors 'none'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; "
+        "img-src 'self' data: blob: https://cyberjapandata.gsi.go.jp; "
+        "connect-src 'self' http://127.0.0.1:* http://localhost:*\\r\\n"
         "\\r\\n"
     )
     frontend_missing_csp = frontend_header_lines.replace(
-        "Content-Security-Policy-Report-Only: default-src 'self'; frame-ancestors 'none'; connect-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*\\r\\n",
+        "Content-Security-Policy-Report-Only: default-src 'self'; frame-ancestors 'none'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; "
+        "img-src 'self' data: blob: https://cyberjapandata.gsi.go.jp; "
+        "connect-src 'self' http://127.0.0.1:* http://localhost:*\\r\\n",
         "",
     )
     backend_headers_text = backend_header_lines if backend_headers else missing_backend_headers

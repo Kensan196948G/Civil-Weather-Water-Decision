@@ -22,6 +22,11 @@
       sources: null, history: null, series: {}, stations: {}, result: null, ver: 0 };
 
     function url(p) { return base + p; }
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
 
     // ---- 認証トークン（localStorage。Node テストでは null） ----
     function getToken() { try { return localStorage.getItem("cw_token"); } catch (e) { return null; } }
@@ -80,6 +85,7 @@
           id: c.id, name: c.name, code: c.code, loc: c.loc, work: c.work, level: c.level,
           rainNow: c.rainNow, rainPeak: c.rainPeak, windMax: c.windMax, gust: c.gust,
           tempHi: c.tempHi, tempLo: c.tempLo, wbgt: c.wbgt, river: c.river, riverState: c.riverState,
+          riverSource: c.riverSource,
           updated: c.updated, rainy: (c.rainPeak || 0) > 0,
           lat: meta[c.id] && meta[c.id].lat, lon: meta[c.id] && meta[c.id].lon, // 地図用
           project: (meta[c.id] && meta[c.id].project) || "公共",
@@ -153,11 +159,36 @@
           });
         }
       }).catch(function () {});
-      var stations = j("/api/sites/" + id + "/stations").then(function (list) {
-        CW.stations[id] = (list || []).map(function (st) {
-          return { name: st.name, type: st.type, rel: st.rel, d: [st.lat, st.lon] };
-        });
-      }).catch(function () {}); // 観測所ピンは補助表示のため、取得失敗時も現場詳細自体は表示を継続
+      // 観測所は正規化マスタ（observation-stations: 最新実測・コード・種別付き）を優先し、
+      // 旧 stations API をフォールバックに使う（#29/#31 対応。詳細マップ出力用）
+      var stations = j("/api/sites/" + id + "/observation-stations")
+        .then(function (d) {
+          var list = (d && Array.isArray(d.stations)) ? d.stations : null;
+          if (!list) {
+            // 旧API/モック互換: 正規化マスタAPIが未実装の場合は従来 /stations へ退避
+            return j("/api/sites/" + id + "/stations").then(function (old) {
+              CW.stations[id] = (old || []).map(function (st) {
+                return { name: st.name, type: st.type, rel: st.rel, d: [st.lat, st.lon] };
+              }).filter(function (st) { return st.d && st.d[0] != null && st.d[1] != null; });
+              return CW.stations[id];
+            });
+          }
+          CW.stations[id] = list.map(function (st) {
+            return {
+              name: st.name, type: st.kind === "water" || st.kind === "water_rain" ? "river" : st.kind,
+              rel: st.rel, d: [st.latitude, st.longitude],
+              stationCode: st.stationCode, kind: st.kind,
+              latest: st.latest || null,
+            };
+          }).filter(function (st) { return st.d && st.d[0] != null && st.d[1] != null; });
+        })
+        .catch(function () {
+          return j("/api/sites/" + id + "/stations").then(function (list) {
+            CW.stations[id] = (list || []).map(function (st) {
+              return { name: st.name, type: st.type, rel: st.rel, d: [st.lat, st.lon] };
+            }).filter(function (st) { return st.d && st.d[0] != null && st.d[1] != null; });
+          }).catch(function () {});
+        }); // 観測所ピンは補助表示のため、取得失敗時も現場詳細自体は表示を継続
       return Promise.all([detail, stations]).then(bump);
     }
     function loadAll() {
@@ -258,7 +289,6 @@
 
       // 作業種別マスタに無い種別（例: marine）の現場が混入しても地図構築が落ちないよう
       // WORK / LEVELS の欠落を既定値で補完してから元のビルダーを呼ぶ
-      var origDash = proto.buildDashMap, origSite = proto.buildSiteMap;
       function cwSafeWorkLevels(self) {
         var wk = self.WORK = self.WORK || {};
         var lv = self.LEVELS = self.LEVELS || {};
@@ -274,13 +304,123 @@
           }
         });
       }
+      // 詳細マップ出力（#79 派生: タイル背景・現場詳細・観測所最新値・凡例を出す）
+      function cwAddTiles(L, map) {
+        var u = window.__CW_TILE_URL__ || "";
+        if (!u) return;
+        var has = false;
+        map.eachLayer(function (layer) { if (layer instanceof L.TileLayer) has = true; });
+        if (!has) L.tileLayer(u, {
+          maxZoom: 18, attribution: window.__CW_TILE_ATTRIBUTION__ || ""
+        }).addTo(map);
+      }
+      function cwLatestText(latest) {
+        if (!latest) return "実測値なし";
+        var parts = [];
+        if (latest.waterLevelM != null) parts.push("水位 " + latest.waterLevelM + " m");
+        if (latest.rainfallMmH != null) parts.push("雨量 " + latest.rainfallMmH + " mm/h");
+        var txt = parts.length ? parts.join(" / ") : "値なし";
+        return txt + "（" + esc(latest.observedAt || "") + " ・ " + esc(latest.source || "") + "）";
+      }
+      function cwIsUpstream(rel) {
+        return rel === "upstream" || rel === "上流";
+      }
+      function cwSitePop(site) {
+        var wk = (this.WORK && this.WORK[site.work] && this.WORK[site.work].label) || site.work || "";
+        var lv = this.LEVELS && this.LEVELS[site.level] ? this.LEVELS[site.level] : null;
+        var rows = [];
+        if (site.rainPeak != null) rows.push("ピーク雨量 " + site.rainPeak + " mm/h");
+        if (site.windMax != null) rows.push("最大風速 " + site.windMax + " m/s");
+        if (site.gust != null) rows.push("突風 " + site.gust + " m/s");
+        if (site.tempHi != null) rows.push("最高気温 " + site.tempHi + "℃");
+        if (site.wbgt != null) rows.push("WBGT " + site.wbgt);
+        if (site.river) {
+          rows.push("河川: " + site.river
+            + (site.riverSource ? "（" + site.riverSource + "）" : ""));
+        }
+        return '<div style="min-width:200px">'
+          + '<div style="font-weight:800;font-size:13px;color:#1c2935;margin-bottom:2px">' + esc(site.name) + "</div>"
+          + '<div style="font-size:11px;color:#62727f;margin-bottom:6px">' + esc(wk) + " ・ "
+          + (lv ? '<b style="color:' + esc(lv.color) + '">' + esc(lv.label) + "</b>" : "—") + "</div>"
+          + (rows.length
+            ? '<div style="font-size:11.5px;line-height:1.7;color:#3a4854">'
+              + rows.map(function (r) { return "・" + esc(r); }).join("<br>") + "</div>"
+            : "")
+          + '<button class="cw-open" style="width:100%;margin-top:8px;padding:6px;border:none;'
+          + "background:#16527d;color:#fff;border-radius:6px;font-size:11.5px;font-weight:700;"
+          + 'cursor:pointer;font-family:inherit">現場詳細を開く</button>'
+          + "</div>";
+      }
       proto.buildDashMap = function (L, el) {
         cwSafeWorkLevels(this);
-        return origDash.call(this, L, el);
+        var self = this;
+        var map = L.map(el, { scrollWheelZoom: false }).setView([35.58, 139.6], 10);
+        cwAddTiles(L, map);
+        var pts = [];
+        (this.SITES || []).forEach(function (s) {
+          var c = self.COORDS[s.id]; if (!c) return;
+          var lv = self.LEVELS[s.level] || self.LEVELS[0];
+          var m = L.marker(c, { icon: self.pin(L, lv.color, lv.tag) }).addTo(map);
+          m.bindPopup(cwSitePop.call(self, s));
+          m.on("popupopen", function (e) {
+            var b = e.popup._contentNode.querySelector(".cw-open");
+            if (b) b.onclick = function () { self.openSite(s.id); };
+          });
+          pts.push(c);
+        });
+        if (pts.length) map.fitBounds(pts, { padding: [46, 46] });
+        return map;
       };
       proto.buildSiteMap = function (L, el, siteId) {
         cwSafeWorkLevels(this);
-        return origSite.call(this, L, el, siteId);
+        var self = this;
+        var s = this.SITES.filter(function (x) { return x.id === siteId; })[0] || this.SITES[0];
+        var c = this.COORDS[s.id] || [35.58, 139.6];
+        var map = L.map(el, { scrollWheelZoom: false }).setView(c, 13);
+        cwAddTiles(L, map);
+        var lv = this.LEVELS[s.level] || this.LEVELS[0];
+        var pts = [c];
+        var siteMk = L.marker(c, { icon: this.pin(L, lv.color, "現") }).addTo(map);
+        siteMk.bindPopup(cwSitePop.call(this, s));
+        siteMk.on("popupopen", function (e) {
+          var b = e.popup._contentNode.querySelector(".cw-open");
+          if (b) b.onclick = function () {
+            self.setState({ screen: "decision",
+              dform: Object.assign({}, self.state.dform || {}, { siteId: s.id }) });
+          };
+        });
+        (this.STATIONS[s.id] || []).forEach(function (st) {
+          var col = st.type === "river" ? "#0e7d8f"
+            : st.type === "wbgt" ? "#cc4444"
+              : st.type === "weather" ? "#e0892a" : "#566472";
+          var mk = L.marker(st.d, { icon: self.dotPin(L, col) }).addTo(map);
+          mk.bindPopup('<div style="min-width:180px"><b>' + esc(st.name) + "</b><br>"
+            + '<span style="font-size:11px;color:#62727f">' + esc(st.rel || "") + " 観測所"
+            + (st.stationCode ? " ・ " + esc(st.stationCode) : "")
+            + (st.kind ? " ・ " + esc(st.kind) : "") + "</span><br>"
+            + '<span style="font-size:12px;color:#3a4854">' + cwLatestText(st.latest) + "</span></div>");
+          pts.push(st.d);
+          if (st.type === "river" && cwIsUpstream(st.rel)) {
+            var up = [st.d];
+            L.polyline(up.concat([c]), { color: "#2a8fb0", weight: 3, opacity: .65, dashArray: "7 5" })
+              .addTo(map);
+          }
+        });
+        // 観測所凡例（詳細出力）
+        var legend = L.control({ position: "bottomleft" });
+        legend.onAdd = function () {
+          var d = L.DomUtil.create("div", "cw-map-legend");
+          d.style.cssText = "background:#fff;border:1px solid #d4dce2;border-radius:8px;"
+            + "padding:6px 9px;font:11px 'Noto Sans JP',sans-serif;color:#3a4854;line-height:1.9";
+          d.innerHTML = '<b style="color:#1c2935">観測所</b><br>'
+            + '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#0e7d8f;margin-right:5px"></span>河川水位・雨量<br>'
+            + '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e0892a;margin-right:5px"></span>気象（アメダス等）<br>'
+            + '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#cc4444;margin-right:5px"></span>WBGT';
+          return d;
+        };
+        legend.addTo(map);
+        map.fitBounds(pts, { padding: [40, 40], maxZoom: 14 });
+        return map;
       };
 
       proto.evaluate = function () {
@@ -385,6 +525,7 @@
       },
       // ---- #72 段5: 海象データ（全国版 / 海上作業判定） ----
       marineNational: function () { return j("/api/marine/national"); },
+      returnPeriods: function () { return j("/api/marine/return-periods"); },
       evaluateMarine: function (siteId, start, end) {
         return _fetch(url("/api/decisions/evaluate"), {
           method: "POST",
@@ -899,7 +1040,13 @@
           if (s.lat == null || s.lon == null) return;
           var m = wbgtMeta(s.wbgt);
           var mk = L.circleMarker([s.lat, s.lon], { radius: 8, color: "#fff", weight: 2, fillColor: m.color, fillOpacity: 0.95 });
-          mk.bindPopup("<b>" + esc(s.name) + "</b><br>WBGT " + (s.wbgt == null ? "—" : s.wbgt) + ' ・ <b style="color:' + m.color + '">' + m.label + "</b>");
+          var extra = [];
+          if (s.tempHi != null) extra.push("最高気温 " + esc(s.tempHi) + "℃");
+          if (s.windMax != null) extra.push("風速 " + esc(s.windMax) + " m/s");
+          mk.bindPopup("<b>" + esc(s.name) + "</b><br>WBGT "
+            + (s.wbgt == null ? "—" : esc(s.wbgt))
+            + ' ・ <b style="color:' + m.color + '">' + m.label + "</b>"
+            + (extra.length ? "<br>" + extra.join(" ・ ") : ""));
           wbgtMarkers.addLayer(mk); pts.push([s.lat, s.lon]);
         });
         if (pts.length) { try { wbgtMap.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch (e) {} }
@@ -1117,7 +1264,7 @@
               ? '<span class="cw-badge" style="background:' + CW_LVC[d.level] + '18;color:' + CW_LVC[d.level] + '">' + CW_LV[d.level] + "</span>"
               : "—";
             var riverBadge = (s.hasRiver || s.work === "river")
-              ? '<span class="cw-badge" style="background:#fbe8e8;color:#c62828;margin-left:4px" title="河川水位・雨量の自動取得は未接続（手動入力または未設定）">河川:手動</span>'
+              ? '<span class="cw-badge" style="background:#e7f3f4;color:#0e7d8f;margin-left:4px" title="河川観測はデモ自動取得または手動入力（公式の水防災オープンデータは未接続）">河川</span>'
               : "";
             return '<tr class="click" data-id="' + esc(s.id) + '"><td>' + esc(s.id) + "</td><td><b>"
               + esc(s.name) + "</b></td><td>" + esc(s.loc || "") + "</td><td>" + esc(wn[s.work] || s.work || "")
@@ -1268,9 +1415,15 @@
     function installRiverScreen() {
       var el = cwMakeScreen("cw-river-screen",
         '<div class="cw-pg"><h2>河川観測</h2>'
-        + '<p class="sub">河川内・河川近接現場の観測所と実測値。自動取得は未接続のため、手動入力と公式サイト参照が現時点の運用です。</p>'
+        + '<p class="sub">河川内・河川近接現場の観測所と実測値。現在はデモ自動取得（シミュレーション）と手動入力で運用中。公式の水防災オープンデータ提供サービスは未接続です。</p>'
         + '<div class="cw-pg-bar"><button type="button" class="cw-btn" id="cw-river-reload">再読込</button>'
         + '<span class="cw-msg" id="cw-river-msg"></span></div>'
+        + '<div class="cw-pg-card" style="padding:12px 14px">'
+        + '<div id="cw-river-map" style="height:38vh;min-height:280px;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1)"></div>'
+        + '<div class="cw-wbgt-scale" style="margin:10px 0 0">'
+        + '<span style="background:#0e7d8f">上流観測所</span>'
+        + '<span style="background:#16527d">最寄り観測所</span>'
+        + '<span style="background:#566472">参照観測所</span></div></div>'
         + '<div id="cw-river-body"></div></div>');
       if (!el) return;
       el.querySelector("#cw-river-reload").addEventListener("click", function () { cwRenderRiver(); });
@@ -1292,6 +1445,59 @@
       if (obs.waterLevelM != null) parts.push("水位 " + esc(obs.waterLevelM) + " m");
       if (obs.rainfallMmH != null) parts.push("雨量 " + esc(obs.rainfallMmH) + " mm/h");
       return parts.join(" / ");
+    }
+    var cwRiverMap = null, cwRiverMarkers = null;
+    function cwRiverSiteColor(site) {
+      if (!site) return "#0e7d8f";
+      if (site.riverState === "rising") return "#c62828";
+      if (site.riverState === "stale") return "#c2920a";
+      return "#0e7d8f";
+    }
+    function cwBuildRiverMap(rows) {
+      var mapEl = document.getElementById("cw-river-map");
+      if (!mapEl || !rows || !rows.length) return;
+      if (!window.L) { cwEnsureLeaflet(function () { cwBuildRiverMap(rows); }); return; }
+      var L = window.L;
+      if (!cwRiverMap) {
+        cwRiverMap = L.map(mapEl, { scrollWheelZoom: false }).setView([37.5, 137.0], 5);
+        var tileUrl = cwTileUrl();
+        if (tileUrl) L.tileLayer(tileUrl, { maxZoom: 18, attribution: cwTileAttribution() }).addTo(cwRiverMap);
+        cwRiverMarkers = L.layerGroup().addTo(cwRiverMap);
+      }
+      cwRiverMap.invalidateSize();
+      cwRiverMarkers.clearLayers();
+      var pts = [];
+      rows.forEach(function (row) {
+        var site = row.site;
+        if (site == null || site.lat == null || site.lon == null) return;
+        var st = (row.stations && row.stations.stations) || [];
+        var col = cwRiverSiteColor(site);
+        var mk = L.circleMarker([site.lat, site.lon], { radius: 10, color: "#fff", weight: 2,
+          fillColor: col, fillOpacity: 0.95 });
+        var vals = st.map(function (x) {
+          return esc(x.name) + ": " + (x.latest ? cwRiverVal(x.latest) : "実測値なし");
+        });
+        mk.bindPopup("<b>" + esc(site.name) + "</b><br>"
+          + '<span style="color:#62727f;font-size:11px">' + esc(site.code || site.id) + "</span><br>"
+          + '<span style="color:' + col + ';font-weight:700">' + esc(site.river || "河川データなし") + "</span>"
+          + (vals.length ? "<br>" + vals.join("<br>") : ""));
+        cwRiverMarkers.addLayer(mk);
+        pts.push([site.lat, site.lon]);
+        var relColor = { upstream: "#0e7d8f", nearest: "#16527d", reference: "#566472" };
+        st.forEach(function (x) {
+          if (x.latitude == null || x.longitude == null) return;
+          var c2 = relColor[x.rel] || "#566472";
+          var sm = L.circleMarker([x.latitude, x.longitude], { radius: 6, color: "#fff", weight: 2,
+            fillColor: c2, fillOpacity: 0.95 });
+          sm.bindPopup("<b>" + esc(x.name) + "</b><br>"
+            + '<span style="font-size:11px;color:#62727f">' + esc(x.rel || "") + " ・ " + esc(x.stationCode || "")
+            + (x.kind ? " ・ " + esc(x.kind) : "") + "</span><br>"
+            + (x.latest ? cwRiverVal(x.latest) + "（" + esc(x.latest.source || "") + "）" : "実測値なし"));
+          cwRiverMarkers.addLayer(sm);
+        });
+      });
+      if (pts.length) { try { cwRiverMap.fitBounds(pts, { padding: [40, 40], maxZoom: 8 }); } catch (e) {} }
+      setTimeout(function () { try { cwRiverMap.invalidateSize(); } catch (e) {} }, 150);
     }
     function cwSubmitRiverManual(sid, stationId) {
       var msg = document.getElementById("cw-river-msg");
@@ -1339,11 +1545,6 @@
       }
       var role = cwUser ? cwUser.role : "";
       var canWrite = role === "admin" || role === "tech_manager";
-      var notice = '<div class="cw-pg-card" style="border-left:4px solid #c62828">'
-        + '<div style="font-weight:800;color:#c62828">河川水位・雨量の自動取得は未接続です（未実装）</div>'
-        + '<div style="font-size:11.5px;color:#5f7081;margin-top:4px">現在の河川状態は手動入力または未設定です。'
-        + '自動取得（水防災オープンデータ提供サービス等）はロードマップ上の未実装項目です。'
-        + '退避判断は必ず<a href="https://www.river.go.jp/" target="_blank" rel="noopener noreferrer" style="color:#16527d">川の防災情報（国交省）</a>と現地確認を優先してください。</div></div>';
       Promise.all(riverSites.map(function (s) {
         return Promise.all([
           adapter.authedFetch("/api/sites/" + s.id + "/observation-stations")
@@ -1352,6 +1553,20 @@
             .then(function (r) { return r.json(); }).catch(function () { return null; })
         ]).then(function (pair) { return { site: s, stations: pair[0], series: pair[1] }; });
       })).then(function (rows) {
+        var autoEnabled = rows.some(function (row) {
+          return row.stations && row.stations.automatic;
+        });
+        var notice = autoEnabled
+          ? '<div class="cw-pg-card" style="border-left:4px solid #c2920a">'
+            + '<div style="font-weight:800;color:#8a6410">河川観測: デモ自動取得（シミュレーション）稼働中</div>'
+            + '<div style="font-size:11.5px;color:#5f7081;margin-top:4px">'
+            + '現在の値は DEMO-RIVER によるシミュレーションです。公式の水防災オープンデータ提供サービスは未接続のため、'
+            + '退避判断は必ず<a href="https://www.river.go.jp/" target="_blank" rel="noopener noreferrer" style="color:#16527d">川の防災情報（国交省）</a>と現地確認を優先してください。</div></div>'
+          : '<div class="cw-pg-card" style="border-left:4px solid #c62828">'
+            + '<div style="font-weight:800;color:#c62828">河川水位・雨量の自動取得は未接続です（手動入力のみ）</div>'
+            + '<div style="font-size:11.5px;color:#5f7081;margin-top:4px">'
+            + '退避判断は必ず<a href="https://www.river.go.jp/" target="_blank" rel="noopener noreferrer" style="color:#16527d">川の防災情報（国交省）</a>と現地確認を優先してください。</div></div>';
+        cwBuildRiverMap(rows);
         box.innerHTML = notice + rows.map(function (row) {
           var st = row.stations && row.stations.stations ? row.stations.stations : [];
           var obs = row.series && row.series.observations ? row.series.observations : [];
@@ -1397,7 +1612,10 @@
         }).join("");
         if (msg) msg.textContent = "";
       }).catch(function () {
-        box.innerHTML = notice + '<div class="cw-pg-card"><div class="cw-empty">河川観測データを取得できませんでした（権限または接続を確認）</div></div>';
+        box.innerHTML = '<div class="cw-pg-card" style="border-left:4px solid #c62828">'
+          + '<div style="font-weight:800;color:#c62828">河川観測データを取得できませんでした</div>'
+          + '<div style="font-size:11.5px;color:#5f7081;margin-top:4px">権限または接続を確認してください。'
+          + '退避判断は<a href="https://www.river.go.jp/" target="_blank" rel="noopener noreferrer" style="color:#16527d">川の防災情報（国交省）</a>と現地確認を優先。</div></div>';
         if (msg) { msg.style.color = "#c62828"; msg.textContent = "取得失敗"; }
       });
     }
@@ -1891,11 +2109,20 @@
           if (s.lat == null || s.lon == null) return;
           var m = cwMarineMeta(s.waveHeight);
           var mk = L.circleMarker([s.lat, s.lon], { radius: 9, color: "#fff", weight: 2, fillColor: m.color, fillOpacity: 0.95 });
+          var detail = [];
+          if (s.wavePeriod != null) detail.push("周期 " + esc(s.wavePeriod) + " s");
+          if (s.waveDirection != null) detail.push("波向 " + esc(s.waveDirection) + "°");
+          if (s.swellHeight != null) detail.push("うねり " + esc(s.swellHeight) + " m");
+          if (s.swellPeriod != null) detail.push("うねり周期 " + esc(s.swellPeriod) + " s");
+          if (s.windMax != null) detail.push("海上風 " + esc(s.windMax) + " m/s");
+          if (s.gust != null) detail.push("突風 " + esc(s.gust) + " m/s");
+          if (s.seaTemp != null) detail.push("水温 " + esc(s.seaTemp) + "℃");
           mk.bindPopup("<b>" + esc(s.name) + "</b><br>有義波高 "
             + (s.waveHeight == null ? "—" : esc(s.waveHeight) + " m") + " ・ 周期 "
             + (s.wavePeriod == null ? "—" : esc(s.wavePeriod) + " s")
             + '<br><b style="color:' + m.color + '">' + m.label + "</b>"
-            + (s.windMax == null ? "" : "<br>海上風 " + esc(s.windMax) + " m/s"));
+            + (detail.length ? "<br>" + detail.join(" ・ ") : "")
+            + '<br><span style="font-size:10.5px;color:#8a99a5">潮位: 未接続（気象庁潮位表を参照）</span>');
           marineMarkers.addLayer(mk); pts.push([s.lat, s.lon]);
         });
         if (pts.length) { try { marineMap.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch (e) {} }
@@ -2038,20 +2265,108 @@
       setTimeout(function () { try { map.invalidateSize(); } catch (e) {} }, 150);
     }
 
-    // ---- 準備中画面（50年確率波） ----
-    function cwInstallSoon(id, emoji, title, desc, plans, issueNote) {
-      cwMakeScreen(id,
-        '<div class="cw-pg"><h2>' + esc(title) + "</h2>"
-        + '<div class="cw-pg-card"><div class="cw-soon"><div class="big">' + emoji + "</div>"
-        + "<h3>準備中の機能です</h3><p>" + desc + "</p>"
-        + '<div class="plan">' + plans.map(function (p) { return "・" + p; }).join("<br>") + "</div>"
-        + '<p style="margin-top:12px;font-size:11px">' + esc(issueNote) + "</p></div></div></div>");
+    // ---- 50年確率波（#72 段7: 極値統計のデモ実装） ----
+    function cwWave50Meta(h) {
+      if (h == null) return { label: "欠測", color: "#5a6b7b" };
+      if (h < 3.0) return { label: "3m未満", color: "#2e7d32" };
+      if (h < 5.0) return { label: "3-5m", color: "#c2920a" };
+      return { label: "5m以上", color: "#c62828" };
     }
-    function installSoonScreens() {
-      cwInstallSoon("cw-wave50-screen", "📈", "50年確率波",
-        "極値統計（Gumbel / Weibull 等）による再現期間波高の解析機能を提供予定です。",
-        ["NOWPHAS 長期観測データの蓄積（Neon PostgreSQL）", "年最大値法・POT法による極値解析", "地点別の50年確率波高・設計波条件の参照"],
-        "対応計画: Issue #72 段7（段5・段6のデータ蓄積が前提）");
+    function installWave50Screen() {
+      var el = cwMakeScreen("cw-wave50-screen",
+        '<div class="cw-pg"><h2>50年確率波</h2>'
+        + '<p class="sub">Gumbel / Weibull 極値統計による再現期間波高（50年・100年）の解析。'
+        + '現在はシミュレーションデータ（DEMO-EXTREME）のため、設計条件の決定には使用できません。</p>'
+        + '<div class="cw-pg-bar"><button type="button" class="cw-btn" id="cw-wave50-reload">再解析</button>'
+        + '<span class="cw-msg" id="cw-wave50-msg"></span></div>'
+        + '<div class="cw-pg-card" style="padding:12px 14px">'
+        + '<div id="cw-wave50-map" style="height:42vh;min-height:300px;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1)"></div>'
+        + '<div class="cw-wbgt-scale" style="margin:10px 0 0">'
+        + '<span style="background:#2e7d32">~3m</span><span style="background:#c2920a">3-5m</span>'
+        + '<span style="background:#c62828">5m~</span><span style="background:#5a6b7b">欠測</span></div></div>'
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(100vh - 320px)" id="cw-wave50-body"></div>'
+        + '<div class="cw-pg-card" style="border-left:4px solid #c2920a;font-size:11.5px;color:#5f7081;line-height:1.8">'
+        + '<b style="color:#8a6410">解析手法（デモ）</b><br>'
+        + '・Gumbel 分布: 位置母数 loc / 尺度母数 scale をモーメント法で推定<br>'
+        + '・Weibull 分布: 2母数（形状・尺度）を確率プロットの線形回帰で推定<br>'
+        + '・標本年数30年（地点IDから決定的に生成した年最大波高）<br>'
+        + '・NOWPHAS 長期観測データの蓄積（Neon PostgreSQL）後に実測ベースへ切替予定（Issue #72 段7）</div></div>');
+      if (!el) return;
+      el.querySelector("#cw-wave50-reload").addEventListener("click", cwRenderWave50);
+    }
+    var cwWave50Map = null, cwWave50Markers = null;
+    function cwRenderWave50() {
+      var box = document.getElementById("cw-wave50-body");
+      var mapEl = document.getElementById("cw-wave50-map");
+      var msg = document.getElementById("cw-wave50-msg");
+      if (!box) return;
+      box.innerHTML = '<div class="cw-empty">解析中…</div>';
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "極値解析を実行中…"; }
+      adapter.returnPeriods().then(function (d) {
+        if (!d || !d.sites) {
+          var detail = (d && d.detail) || "APIエラー（権限または接続を確認）";
+          box.innerHTML = '<div class="cw-empty" style="color:#c62828">50年確率波を取得できませんでした: ' + esc(detail) + "</div>";
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "取得失敗"; }
+          return;
+        }
+        var rows = d.sites;
+        box.innerHTML = '<table class="cw-tbl"><thead><tr>'
+          + "<th>現場</th><th>H50 (m)</th><th>H100 (m)</th><th>採用手法</th><th>標本</th>"
+          + "<th>Gumbel (loc/scale)</th><th>Weibull (shape/scale)</th></tr></thead><tbody>"
+          + rows.map(function (s) {
+            var m = cwWave50Meta(s.h50);
+            var g = s.methods && s.methods.gumbel;
+            var w = s.methods && s.methods.weibull;
+            return "<tr><td><b>" + esc(s.name) + '</b><div style="font-size:10.5px;color:#7e8c99">' + esc(s.loc || "") + "</div></td>"
+              + '<td class="cw-num"><b style="color:' + m.color + '">' + (s.h50 == null ? "—" : esc(s.h50)) + "</b> "
+              + '<span style="font-size:10.5px;color:' + m.color + '">' + m.label + "</span></td>"
+              + '<td class="cw-num">' + (s.h100 == null ? "—" : esc(s.h100)) + "</td>"
+              + '<td>' + esc(s.primaryMethod || "—") + "</td>"
+              + '<td class="cw-num">' + esc(s.sampleYears || "—") + "年</td>"
+              + '<td class="cw-num">' + (g ? esc(g.loc) + " / " + esc(g.scale) : "—") + "</td>"
+              + '<td class="cw-num">' + (w ? esc(w.shape) + " / " + esc(w.scale) : "—") + "</td></tr>";
+          }).join("") + "</tbody></table>"
+          + '<div class="cw-pg-card" style="margin-top:12px;border-left:4px solid #c62828">'
+          + '<div style="font-weight:800;color:#c62828;font-size:12px">注意（デモ）</div>'
+          + '<div style="font-size:11.5px;color:#5f7081;margin-top:4px">' + esc(d.note || "") + "</div></div>";
+        if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "解析しました（" + rows.length + "地点）"; }
+        cwBuildWave50Map(mapEl, rows);
+      }).catch(function () {
+        box.innerHTML = '<div class="cw-empty" style="color:#c62828">50年確率波の取得に失敗しました（通信エラー）</div>';
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラー"; }
+      });
+    }
+    function cwBuildWave50Map(mapEl, rows) {
+      if (!mapEl) return;
+      if (!window.L) { cwEnsureLeaflet(function () { cwBuildWave50Map(mapEl, rows); }); return; }
+      var L = window.L;
+      if (!cwWave50Map) {
+        cwWave50Map = L.map(mapEl, { scrollWheelZoom: false }).setView([37.5, 137.0], 4);
+        var tileUrl = cwTileUrl();
+        if (tileUrl) L.tileLayer(tileUrl, { maxZoom: 18, attribution: cwTileAttribution() }).addTo(cwWave50Map);
+        cwWave50Markers = L.layerGroup().addTo(cwWave50Map);
+      }
+      cwWave50Map.invalidateSize();
+      cwWave50Markers.clearLayers();
+      var pts = [];
+      rows.forEach(function (s) {
+        if (s.latitude == null || s.longitude == null) return;
+        var m = cwWave50Meta(s.h50);
+        var mk = L.circleMarker([s.latitude, s.longitude], { radius: 9, color: "#fff", weight: 2, fillColor: m.color, fillOpacity: 0.95 });
+        var g = s.methods && s.methods.gumbel;
+        var w = s.methods && s.methods.weibull;
+        mk.bindPopup("<b>" + esc(s.name) + "</b><br>H50 <b style=\"color:" + m.color + "\">"
+          + (s.h50 == null ? "—" : esc(s.h50)) + " m</b> ・ H100 "
+          + (s.h100 == null ? "—" : esc(s.h100)) + " m<br>"
+          + "手法 " + esc(s.primaryMethod || "—") + " ・ 標本 " + esc(s.sampleYears || "—") + "年<br>"
+          + (g ? "Gumbel: loc " + esc(g.loc) + " / scale " + esc(g.scale) + "<br>" : "")
+          + (w ? "Weibull: shape " + esc(w.shape) + " / scale " + esc(w.scale) : "")
+          + '<br><span style="font-size:10.5px;color:#8a99a5">デモ・シミュレーション（設計不可）</span>');
+        cwWave50Markers.addLayer(mk);
+        pts.push([s.latitude, s.longitude]);
+      });
+      if (pts.length) { try { cwWave50Map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 }); } catch (e) {} }
+      setTimeout(function () { try { cwWave50Map.invalidateSize(); } catch (e) {} }, 150);
     }
 
     // 画面レジストリ登録（cwSyncScreens が参照）
@@ -2061,7 +2376,7 @@
     CW_SCREENS["marine-national"] = { id: "cw-marine-screen", show: cwRenderMarine, live: true };
     CW_SCREENS["marine-work"] = { id: "cw-mwork-screen", show: cwRenderMarineWork, live: true };
     CW_SCREENS["analytics"] = { id: "cw-analytics-screen", show: cwRenderAnalytics, live: true };
-    CW_SCREENS["wave50"] = { id: "cw-wave50-screen" };
+    CW_SCREENS["wave50"] = { id: "cw-wave50-screen", show: cwRenderWave50, live: true };
     CW_SCREENS["reports"] = { id: "cw-reports-screen", show: cwRenderReports };
     CW_SCREENS["ops-status"] = { id: "cw-ops-screen", show: cwLoadOpsStatus };
     CW_SCREENS["audit"] = { id: "cw-audit-screen", show: cwLoadAudit };
@@ -2358,7 +2673,7 @@
           installAppSettingsScreen();
           installMarineScreen();
           installMarineWorkScreen();
-          installSoonScreens();
+          installWave50Screen();
           installLoginScreen();
           installNotifyBell();
           // 認証ゲート: トークンがあればデータ取得、無ければログイン画面

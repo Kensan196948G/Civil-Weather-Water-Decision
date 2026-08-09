@@ -184,6 +184,21 @@ def test_data_sources(client):
     assert any(d["status"] == "Warning" for d in rows)
 
 
+def test_run_collectors_returns_river_demo_status(client, monkeypatch):
+    """手動再取得がプローブ結果と河川デモ収集結果を返す（ネット非依存）。"""
+    from app.services.data_collectors import source_probe
+
+    async def fake_probe(db):
+        return {"DS-OPEN-METEO": {"status": "OK", "ms": 1, "ok": True, "error": None}}
+
+    monkeypatch.setattr(source_probe, "probe_all", fake_probe)
+    r = client.post("/api/data-collectors/run")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["probed"]["DS-OPEN-METEO"] == "OK"
+    assert "river" in body
+
+
 def test_notifications_endpoint(client):
     r = client.get("/api/notifications")
     assert r.status_code == 200

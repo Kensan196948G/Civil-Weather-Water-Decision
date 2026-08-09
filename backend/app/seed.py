@@ -17,6 +17,7 @@ from .models import (
     DataSourceStatus, DecisionLog, IdCounter, Site, SiteLink, Station, User,
     UserSiteAccess, WorkPlan, WorkType,
 )
+from .services.data_collectors import river_collector
 
 # デモ用ユーザー（5ロール）。本番では各自パスワード変更／Entra ID 連携。
 USERS = [
@@ -106,6 +107,9 @@ SOURCES = [
     ("DS-NOAA", "NOAA", "公式", "OK", "—", 0, 0, "補助", "海外気象・研究・補完。国内現場では初期必須ではない。"),
     ("DS-OPEN-METEO-MARINE", "Open-Meteo Marine", "外部API", "OK", "—", 0, 0, "補完",
      "全国の波高・周期・波向・うねり予報（APIキー不要）。NOWPHAS・気象庁潮位は利用条件確認後に接続予定。"),
+    ("DS-RIVER-DEMO", "河川観測 デモ自動取得", "準公式", "OK", "—", 0, 10, "補助",
+     "デモ・シミュレーションによる自動取得（水防災オープンデータ提供サービスの接続前に"
+     "暫定運用）。退避判断は必ず公式サイトと現地確認を優先。"),
 ]
 
 HISTORY = [
@@ -152,11 +156,17 @@ def seed(db: Session) -> None:
         db.add(WorkType(id=k, name=name, color=color))
     existing_src = {s.id for s in db.scalars(select(DataSourceStatus)).all()}
     for (sidc, name, kind, status, lok, fails, ms, trust, note) in SOURCES:
+        if sidc == "DS-RIVER-DEMO" and not settings.river_demo_enabled:
+            continue  # デモ無効時はシードしない（テスト環境は自動取得未接続の検証を維持）
         if sidc in existing_src:
             continue
         db.add(DataSourceStatus(id=sidc, name=name, kind=kind, status=status, last_ok=lok,
                                 fails=fails, avg_ms=ms, trust=trust, note=note))
     if has_any_wt:
+        # 河川観測デモの観測所マスタ・現場紐付けは既存DBでも冪等に整備する
+        # （#31 拡張: 自動取得の画面・判定を本番でも動作させるための初期データ投入）。
+        if settings.river_demo_enabled:
+            river_collector.ensure_demo_stations(db)
         db.commit()
         return  # 既投入DB: 不足種別・ソースの追補のみ行い、サンプルデータは再投入しない
     for (sid, code, name, loc, lat, lon, work, proj, rflag, rstate, rnote, flood, mgr) in SITES:
@@ -171,6 +181,9 @@ def seed(db: Session) -> None:
                         planned_start=st, planned_end=en, contractor=con))
     for (lid, sid, label, url, kind, order) in SITE_LINKS:
         db.add(SiteLink(id=lid, site_id=sid, label=label, url=url, kind=kind, sort_order=order))
+    # 新規DBでは現場投入後にデモ観測所と紐付けを投入（現場が存在する状態で1回だけ実行）
+    if settings.river_demo_enabled:
+        river_collector.ensure_demo_stations(db)
     for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
         db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
                            action=act, comment=comment, decided_by=by, decided_at=dt))
