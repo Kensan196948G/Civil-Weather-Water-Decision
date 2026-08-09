@@ -1,6 +1,7 @@
 """API ルータ（詳細設計 §7）。WebUI 接続用エンドポイント。"""
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -28,12 +29,12 @@ from ..models import (
 from ..services import assessment, notifications, rules as rules_service
 from ..services import site_access
 from ..services.audit import audit, audit_add
-from ..services.data_collectors import open_meteo, source_probe, wbgt_env
+from ..services.data_collectors import marine, open_meteo, source_probe, wbgt_env
 
 # ルータ全体に認証を必須化（/auth と /health は別ルータ/main で公開）
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
-WORK_KEYS = {"river", "concrete", "earthwork", "pavement", "crane", "heat"}
+WORK_KEYS = {"river", "concrete", "earthwork", "pavement", "crane", "heat", "marine"}
 RIVER_STATES = {"none", "stable", "rising", "stale"}
 _ID_COMMIT_ATTEMPTS = 5
 
@@ -249,6 +250,7 @@ def put_rules(req: RulesUpdate, db: Session = Depends(get_db),
 # 通知Webhook自体は既存の環境変数（SLACK_/TEAMS_WEBHOOK_URL）と併存し、送信時はenv優先。
 # 本テーブルの notify は画面から編集する付随設定（宛先・条件等）を保持する将来拡張の器。
 _AI_KEY = "ai_api_key"
+_AI_PROVIDER_KEY = "ai_provider"
 _NOTIFY_KEY = "notify"
 _RETENTION_KEY = "data_retention_days"
 _USER_PREFS_KEY = "user_prefs"
@@ -256,9 +258,12 @@ _RETENTION_DEFAULT = 365
 _RETENTION_MIN, _RETENTION_MAX = 30, 3650
 # 通知/ユーザー設定JSONの肥大化・悪用の保険（厳格スキーマ済みだが直列化サイズの保険）
 _SETTINGS_JSON_MAX = 8192
-# Anthropic 疎通確認先。キー値は x-api-key ヘッダのみで送り、応答・ログ・監査には出さない
+# AI API 疎通確認先。キー値は認証ヘッダのみで送り、応答・ログ・監査には出さない
+_AI_PROVIDERS = ("deepseek", "anthropic")
+_AI_PROVIDER_DEFAULT = "deepseek"  # #72 段8: 既定を DeepSeek へ変更（2026-08-09 ユーザー指示）
+_DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models"
 _ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
-_ANTHROPIC_TIMEOUT_SECONDS = 6  # 外部呼び出しの上限（#80 medium-2: 6秒）
+_AI_TIMEOUT_SECONDS = 6  # 外部呼び出しの上限（#80 medium-2: 6秒）
 
 # ai/test のプロセス内レート制限（#80 medium-2）。ユーザー単位 5回/60秒。本番はRedis等へ。
 _AI_TEST_MAX = 5
@@ -284,9 +289,20 @@ class SettingsUpdate(BaseModel):
     """設定の部分更新リクエスト（nested・厳格）。未知トップレベルキーは422。"""
     model_config = ConfigDict(extra="forbid")
     ai_api_key: str | None = None
+    ai_provider: str | None = None
     notify: NotifySettings | None = None
     data_retention_days: int | None = None
     user_prefs: UserPrefs | None = None
+
+    @field_validator("ai_provider", mode="before")
+    @classmethod
+    def _reject_bad_provider(cls, v):
+        if v is None:
+            return v
+        v = (v or "").strip()
+        if v not in _AI_PROVIDERS:
+            raise ValueError(f"ai_provider は {sorted(_AI_PROVIDERS)} のいずれか")
+        return v
 
     @field_validator("data_retention_days", mode="before")
     @classmethod
@@ -332,16 +348,24 @@ def _mask_tail(secret: str) -> str:
     return "****" + (secret[-4:] if len(secret) >= 4 else "")
 
 
+def _current_ai_provider(db: Session) -> str:
+    row = db.get(AppSetting, _AI_PROVIDER_KEY)
+    if row is None or not row.value or row.value not in _AI_PROVIDERS:
+        return _AI_PROVIDER_DEFAULT
+    return row.value
+
+
 def _ai_status(db: Session) -> dict:
     """AI APIキーの設定状態。configured と末尾4桁マスクのみ返す（平文は返さない）。"""
     row = db.get(AppSetting, _AI_KEY)
     if row is None or not row.value:
-        return {"configured": False, "masked": None}
+        return {"configured": False, "masked": None, "provider": _current_ai_provider(db)}
     plain = crypto.decrypt(row.value)
     if plain is None:
         # JWT_SECRET変更後などで復号不能 → 未設定扱いへ安全縮退（500にしない）
-        return {"configured": False, "masked": None}
-    return {"configured": True, "masked": _mask_tail(plain)}
+        return {"configured": False, "masked": None, "provider": _current_ai_provider(db)}
+    return {"configured": True, "masked": _mask_tail(plain),
+            "provider": _current_ai_provider(db)}
 
 
 def _current_retention(db: Session) -> int:
@@ -421,6 +445,9 @@ def put_settings(req: SettingsUpdate, db: Session = Depends(get_db),
                      "本番は SETTINGS_ENCRYPTION_KEY(32バイト以上)、local は専用鍵または強い JWT_SECRET を設定してください")
         _upsert_setting(db, _AI_KEY, crypto.encrypt(secret), user.username)
         audit_keys.append(f"{_AI_KEY}(updated)")  # マスク値も載せない（tech_manager露出防止）
+    if "ai_provider" in provided:
+        _upsert_setting(db, _AI_PROVIDER_KEY, req.ai_provider, user.username)
+        audit_keys.append(f"{_AI_PROVIDER_KEY}={req.ai_provider}")
     if "data_retention_days" in provided:
         _upsert_setting(db, _RETENTION_KEY, str(req.data_retention_days), user.username)
         audit_keys.append(f"{_RETENTION_KEY}={req.data_retention_days}")
@@ -443,16 +470,21 @@ def put_settings(req: SettingsUpdate, db: Session = Depends(get_db),
     return _settings_payload(db)
 
 
-async def _anthropic_check(api_key: str) -> dict:
-    """Anthropic /v1/models へ疎通し、キーの有効性を確かめる。
+async def _provider_check(api_key: str, provider: str) -> dict:
+    """DeepSeek / Anthropic の /models へ疎通し、キーの有効性を確かめる。
 
-    キー値は x-api-key ヘッダのみで送り、戻り値・例外・ログには一切出さない。
+    キー値は認証ヘッダのみで送り、戻り値・例外・ログには一切出さない。
     ネットワーク/タイムアウト等は ok:false へ縮退させ、500 を出さない。
     """
-    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    if provider == "anthropic":
+        url = _ANTHROPIC_MODELS_URL
+        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    else:
+        url = _DEEPSEEK_MODELS_URL
+        headers = {"Authorization": "Bearer " + api_key}
     try:
-        async with httpx.AsyncClient(timeout=_ANTHROPIC_TIMEOUT_SECONDS) as client:
-            resp = await client.get(_ANTHROPIC_MODELS_URL, headers=headers)
+        async with httpx.AsyncClient(timeout=_AI_TIMEOUT_SECONDS) as client:
+            resp = await client.get(url, headers=headers)
     except Exception:  # noqa: BLE001 - 疎通不能は隠さず ok:false で返す（キー値は出さない）
         return {"ok": False, "error": "接続に失敗しました。ネットワークを確認してください。"}
     if resp.status_code == 200:
@@ -469,6 +501,17 @@ async def _anthropic_check(api_key: str) -> dict:
 class AiKeyTest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api_key: str | None = None
+    provider: str | None = None
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _provider(cls, v):
+        if v is None:
+            return v
+        v = (v or "").strip()
+        if v not in _AI_PROVIDERS:
+            raise ValueError(f"provider は {sorted(_AI_PROVIDERS)} のいずれか")
+        return v
 
 
 def _ai_test_rate_limited(username: str) -> bool:
@@ -500,7 +543,8 @@ async def test_ai_key(req: AiKeyTest | None = None, db: Session = Depends(get_db
         api_key = crypto.decrypt(row.value) if row and row.value else None
     if not api_key:
         return {"ok": False, "error": "APIキーが未設定です"}
-    result = await _anthropic_check(api_key)
+    provider = (req.provider.strip() if req and req.provider else "") or _current_ai_provider(db)
+    result = await _provider_check(api_key, provider)
     # テスト実施を監査（キー値・マスクは載せない。単独書き込みのため自己コミットの audit() 可。#80 medium-2）
     audit(db, user, "ai_key_test", "ok" if result.get("ok") else "ng")
     return result
@@ -515,7 +559,8 @@ def delete_ai_key(db: Session = Depends(get_db),
         # 削除（ドメイン変更）と監査を同一トランザクションでcommit
         audit_add(db, user, "ai_key_removed", _AI_KEY)
         db.commit()
-    return {"ok": True, "ai": {"configured": False, "masked": None}}
+    return {"ok": True, "ai": {"configured": False, "masked": None,
+                                "provider": _current_ai_provider(db)}}
 
 
 # ---------- 作業種別マスタ ----------
@@ -1438,6 +1483,28 @@ def dashboard_data_sources(db: Session = Depends(get_db)):
     return [{"id": d.id, "name": d.name, "kind": d.kind, "status": d.status,
              "lastOk": d.last_ok, "fails": d.fails, "ms": d.avg_ms,
              "trust": d.trust, "note": d.note} for d in rows]
+
+
+# ---------- 海象データ：全国版（#72 段5） ----------
+@router.get("/marine/national")
+async def marine_national(db: Session = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """全アクセス可能現場の波浪・海上風・リスク概況（Open-Meteo Marine API 補完）。
+
+    NOWPHAS / 気象庁潮位は利用条件確認前のため tide は None とし、画面側で公式リンクと
+    未接続であることを明示する（実態以上に良く見せない方針）。
+    """
+    accessible = site_access.accessible_site_ids(db, user)
+    sites = db.scalars(
+        select(Site).where(Site.status == "active", Site.id.in_(accessible))
+        .order_by(Site.id)).all()
+    rows = await asyncio.gather(
+        *[assessment.marine_site_summary(s) for s in sites])
+    return {
+        "source": {"marine": marine.SOURCE_ID, "tide": "DS-JMA-TIDE-UNCONNECTED"},
+        "sites": rows,
+        "fetchedAt": datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 # ---------- 気象 ----------

@@ -92,6 +92,27 @@ function fetchMock(u, opts) {
   else if (u.indexOf("/api/dashboard/data-sources") >= 0) data = SOURCES;
   else if (u.indexOf("/api/decision-logs") >= 0) data = HISTORY;
   else if (u.indexOf("/api/weather/timeseries") >= 0) data = { points: points24() };
+  else if (u.indexOf("/api/marine/national") >= 0) data = {
+    source: { marine: "DS-OPEN-METEO-MARINE", tide: "DS-JMA-TIDE-UNCONNECTED" },
+    sites: [
+      { id: "S01", name: "北川 下流右岸 護岸工事", loc: "X市", lat: 35.76, lon: 139.78,
+        waveHeight: 0.8, wavePeriod: 6.0, waveDirection: 120, swellHeight: 0.4,
+        windMax: 5, gust: 8, level: 0, levelLabel: "通常", status: "OK", updated: "09:00" },
+      { id: "S12", name: "大阪港 ふ頭 揚重", loc: "大阪府", lat: 34.65, lon: 135.43,
+        waveHeight: 2.4, wavePeriod: 9.0, waveDirection: 160, swellHeight: 1.2,
+        windMax: 7, gust: 12, level: 2, levelLabel: "中止検討", status: "OK", updated: "09:00" },
+    ],
+    fetchedAt: "2026-08-09 09:00:00",
+  };
+  else if (u.indexOf("/api/decisions/evaluate") >= 0 && method === "POST") {
+    lastPost = JSON.parse(opts.body);
+    data = { siteId: "S12", siteName: "大阪港 ふ頭 揚重", workType: "marine",
+      overall_level: 2, overall_label: "中止検討",
+      summary: "波高が閾値を超えています。海上作業の中止・待機を検討してください。",
+      waveHeight: 2.4, wavePeriod: 9.0, swellHeight: 1.2, windMax: 7, gust: 12,
+      reasons: [{ severity: 2, text: "有義波高が閾値を超えています", source: "DS-OPEN-METEO-MARINE", value: "有義波高 2.4m" }],
+      data_quality_summary: "主要データは取得済みです。" };
+  }
   return Promise.resolve({ ok: status < 400, status: status, json: function () { return Promise.resolve(data); } });
 }
 
@@ -195,9 +216,22 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   const t2 = await adapter.aiTest();
   ok(t2.body.ok === true && lastPost && lastPost.api_key === undefined,
     "aiTest が省略時は保存済みキーでテスト（body に api_key を含めない）");
+  const t3 = await adapter.aiTest("sk-test-456", { provider: "deepseek" });
+  ok(t3.body.ok === true && lastPost && lastPost.api_key === "sk-test-456"
+    && lastPost.provider === "deepseek",
+    "aiTest がプロバイダ指定付きで疎通テスト（DeepSeek）");
   const dc2 = await adapter.aiDisconnect();
   ok(dc2.ok && dc2.body.ai.configured === false && lastReq.method === "DELETE",
     "aiDisconnect が DELETE /api/admin/settings/ai で接続解除");
+  // ---- #72 段5: 海象データ（全国版 / 海上作業判定） ----
+  const mn = await adapter.marineNational();
+  ok(Array.isArray(mn.sites) && mn.sites.length === 2
+    && mn.sites.some(function (s) { return s.waveHeight === 2.4 && s.level === 2; }),
+    "marineNational が GET /api/marine/national で波高・レベルを取得");
+  const me = await adapter.evaluateMarine("S12");
+  ok(me.ok && me.body.workType === "marine" && me.body.overall_level === 2
+    && lastPost && lastPost.work_type === "marine",
+    "evaluateMarine が POST /api/decisions/evaluate（work_type=marine）で判定");
   const raw = await adapter.authedFetch("/api/decision-logs/export.csv");
   ok(raw && raw.ok && lastReq.url.indexOf("/api/decision-logs/export.csv") >= 0,
     "authedFetch が認証付きの素 fetch 応答を返す（CSVダウンロード用）");

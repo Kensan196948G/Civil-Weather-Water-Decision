@@ -94,6 +94,31 @@ def test_weather_timeseries(client):
     assert body["status"] == "OK" and len(body["points"]) >= 1
 
 
+def test_marine_national(client):
+    r = client.get("/api/marine/national")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["sites"]) == 16
+    for s in body["sites"]:
+        assert s["lat"] is not None and s["lon"] is not None  # 全国地図用座標
+        assert "waveHeight" in s and "wavePeriod" in s and "swellHeight" in s
+        assert "levelLabel" in s and "reasons" in s
+        assert s["tide"] is None  # 気象庁潮位は未接続（実態を隠さない）
+    assert body["source"]["marine"] == "DS-OPEN-METEO-MARINE"
+
+
+def test_marine_evaluate_decision(client):
+    r = client.post("/api/decisions/evaluate",
+                    json={"site_id": "S12", "work_type": "marine",
+                          "start": "2026-06-20T08:00", "end": "2026-06-20T12:00"})
+    assert r.status_code == 200
+    body = r.json()
+    # モックの最大有義波高2.4m ≧ wave_stop 2.0m → 中止検討
+    assert body["overall_level"] == 2
+    assert any(x["reason_code"] == "wave_stop" for x in body["reasonsRaw"])
+    assert body["waveHeight"] == 2.4  # 海上作業画面の表示用に波高も応答へ含める
+
+
 def test_evaluate_decision(client):
     r = client.post("/api/decisions/evaluate",
                     json={"site_id": "S01", "work_type": "river",
@@ -151,9 +176,10 @@ def test_export_csv(client):
 
 def test_data_sources(client):
     rows = client.get("/api/dashboard/data-sources").json()
-    assert len(rows) == 9
+    assert len(rows) == 10  # 9種 + Open-Meteo Marine（#72 段5）
     ids = {d["id"] for d in rows}
     assert {"DS-JMA-CSV", "DS-JAXA", "DS-NOAA"} <= ids
+    assert "DS-OPEN-METEO-MARINE" in ids
     assert any(d["status"] == "Error" for d in rows)
     assert any(d["status"] == "Warning" for d in rows)
 
@@ -170,8 +196,9 @@ def test_notifications_endpoint(client):
 
 def test_work_types(client):
     rows = client.get("/api/work-types").json()
-    assert len(rows) == 6
-    assert {r["id"] for r in rows} == {"river", "concrete", "earthwork", "pavement", "crane", "heat"}
+    assert len(rows) == 7  # 6種 + marine（海上作業）
+    assert {r["id"] for r in rows} == {
+        "river", "concrete", "earthwork", "pavement", "crane", "heat", "marine"}
 
 
 def test_create_site(client):

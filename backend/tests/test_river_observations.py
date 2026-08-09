@@ -257,7 +257,7 @@ def test_river_rbac_boundary(client):
                 **STATION, "station_code": f"NO-{uname}"},
                 headers=_auth_headers(client, uname))
             assert r.status_code == 403, f"{uname} は観測所作成不可であるべき"
-            r = client.post(f"/api/sites/S01/observation-stations",
+            r = client.post("/api/sites/S01/observation-stations",
                             json={"station_id": sid},
                             headers=_auth_headers(client, uname))
             assert r.status_code == 403, f"{uname} は紐付け不可であるべき"

@@ -110,6 +110,57 @@ def test_heat_wbgt_caution_and_danger():
     assert evaluate("heat", Reading(missing={"wbgt"}))["overall_level"] == 3
 
 
+def test_marine_wave_caution():
+    r = Reading(wave_height_m=1.5, wave_period_s=8.0, wind_ms=5.0, gust_ms=8.0)
+    res = evaluate("marine", r)
+    assert res["overall_label"] == "注意"
+    assert any(x["reason_code"] == "wave_caution" for x in res["reasons"])
+
+
+def test_marine_wave_stop():
+    r = Reading(wave_height_m=2.5, wave_period_s=10.0, wind_ms=4.0, gust_ms=6.0)
+    res = evaluate("marine", r)
+    assert res["overall_level"] == 2
+    assert any(x["reason_code"] == "wave_stop" for x in res["reasons"])
+
+
+def test_marine_swell_and_wind_are_caution():
+    r = Reading(wave_height_m=0.5, swell_wave_height_m=1.2, wind_ms=7.0)
+    res = evaluate("marine", r)
+    assert res["overall_label"] == "注意"
+    codes = {x["reason_code"] for x in res["reasons"]}
+    assert "swell_risk" in codes
+    assert "marine_wind" in codes
+
+
+def test_marine_gust_is_stop():
+    r = Reading(wave_height_m=0.5, gust_ms=14.0)
+    res = evaluate("marine", r)
+    assert res["overall_level"] == 2
+    assert any(x["reason_code"] == "marine_gust" for x in res["reasons"])
+
+
+def test_marine_fog_is_caution():
+    r = Reading(wave_height_m=0.5, fog=True)
+    res = evaluate("marine", r)
+    assert res["overall_level"] == 1
+    assert any(x["reason_code"] == "fog_visibility" for x in res["reasons"])
+
+
+def test_marine_missing_wave_and_wind_is_unavailable():
+    r = Reading(missing={"wave", "wind"})
+    res = evaluate("marine", r)
+    assert res["overall_level"] == 3
+    assert res["overall_label"] == "確認不能"
+
+
+def test_marine_wave_dominates_over_missing_wind():
+    # 波高が中止検討なら風欠測（確認不能）より既知リスクを優先
+    r = Reading(wave_height_m=2.5, missing={"wind"})
+    res = evaluate("marine", r)
+    assert res["overall_level"] == 2
+
+
 def test_output_shape_matches_design():
     res = evaluate("river", Reading(flood_warning=True))
     for key in ("work_type", "overall_level", "overall_label", "summary",

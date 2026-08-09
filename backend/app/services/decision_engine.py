@@ -26,6 +26,9 @@ TH = {
     "wbgt_caution": 28.0, # 厳重警戒
     "wbgt_danger": 31.0,  # 危険相当
     "upstream_rain": 4.0, # mm/h 上流雨量
+    "wave_caution": 1.0,  # m 有義波高 注意
+    "wave_stop": 2.0,     # m 有義波高 中止検討
+    "visibility_limited": 1000.0,  # m 視程 注意（現地確認推奨）
 }
 
 # 出荷時の既定閾値のエイリアス（#35: TH自体は変異させず、DB上書きは rules.effective_th() が
@@ -50,6 +53,13 @@ class Reading:
     flood_warning: bool = False              # 公式の洪水予報・水位到達情報・洪水警報等
     thunderstorm: bool = False               # 雷注意報等
     heavy_rain_warning: bool = False         # 気象庁 大雨警報
+    # 海上作業（marine）用
+    wave_height_m: Optional[float] = None     # 有義波高（最大）
+    wave_period_s: Optional[float] = None     # 有義波周期
+    swell_wave_height_m: Optional[float] = None  # うねり波高
+    visibility_m: Optional[float] = None      # 視程（現状は気象コード由来の代理値/欠測）
+    fog: bool = False                         # 濃霧・霧（気象コード45/48）
+    source_marine: str = "DS-OPEN-METEO-MARINE"
     # 主要データが欠測/遅延しているフィールド名の集合（例 {"precip","wind"}）
     missing: set[str] = field(default_factory=set)
     # 気象データが前回取得値（更新遅延・STALE）であることを示す（§5.2/§5.3）
@@ -143,6 +153,31 @@ RULES: list[Rule] = [
          lambda r, th: _has(r, "wbgt") and r.wbgt >= th["wbgt_danger"],
          "暑さ指数が高く危険域です。作業時間の変更・中止を検討してください。",
          lambda r: r.source_wbgt, lambda r: f"WBGT {r.wbgt}"),
+    # 海上作業（#72 段5: 海象データ：全国版のデータソース確定に連動）
+    Rule("wave_caution", ("marine",), 1,
+         lambda r, th: _has(r, "wave_height_m") and th["wave_caution"] <= r.wave_height_m < th["wave_stop"],
+         "有義波高が上昇しています。作業船・足場・荷役条件を確認してください。",
+         lambda r: r.source_marine, lambda r: f"有義波高 {r.wave_height_m}m"),
+    Rule("wave_stop", ("marine",), 2,
+         lambda r, th: _has(r, "wave_height_m") and r.wave_height_m >= th["wave_stop"],
+         "有義波高が閾値を超えています。海上作業の中止・待機を検討してください。",
+         lambda r: r.source_marine, lambda r: f"有義波高 {r.wave_height_m}m"),
+    Rule("swell_risk", ("marine",), 1,
+         lambda r, th: _has(r, "swell_wave_height_m") and r.swell_wave_height_m >= th["wave_caution"],
+         "うねりが入っています。作業船の動揺・係留条件を確認してください。",
+         lambda r: r.source_marine, lambda r: f"うねり {r.swell_wave_height_m}m"),
+    Rule("marine_wind", ("marine",), 1,
+         lambda r, th: _has(r, "wind_ms") and r.wind_ms >= th["wind_strong"],
+         "海上風が強まっています。作業船の運航・荷役条件を確認してください。",
+         lambda r: r.source_weather, lambda r: f"海上風 {r.wind_ms}m/s"),
+    Rule("marine_gust", ("marine",), 2,
+         lambda r, th: _has(r, "gust_ms") and r.gust_ms >= th["gust_stop"],
+         "突風リスクがあります。海上作業の中止・待機を検討してください。",
+         lambda r: r.source_weather, lambda r: f"最大瞬間 {r.gust_ms}m/s"),
+    Rule("fog_visibility", ("marine",), 1,
+         lambda r, th: r.fog,
+         "濃霧・霧が予想されます。視程が悪化するため作業船の航行・作業に注意してください。",
+         lambda r: r.source_weather, lambda r: "濃霧・霧"),
 ]
 
 # 作業種別ごとの「主要データ」。欠測時は確認不能理由を追加する。
@@ -153,6 +188,7 @@ MAIN_FIELDS = {
     "pavement": ["precip", "temp"],
     "crane": ["wind"],
     "heat": ["wbgt"],
+    "marine": ["wave", "wind"],
 }
 
 MISSING_MESSAGE = {
@@ -161,6 +197,9 @@ MISSING_MESSAGE = {
     "temp": ("主要気象データ（気温）が取得できません。公式情報と現地確認を行ってください。", "DS-OPEN-METEO"),
     "wind": ("風速データが取得できません。現地風況と公式情報を確認してください。", "DS-OPEN-METEO"),
     "wbgt": ("WBGTデータが取得できません。気温・湿度・現場環境から追加確認してください。", "DS-WBGT"),
+    "wave": ("波浪データが取得できません。NOWPHAS・気象庁等の公式情報と現地確認を優先してください。", "DS-OPEN-METEO-MARINE"),
+    "wave_period": ("波周期データが取得できません。NOWPHAS・気象庁等の公式情報を確認してください。", "DS-OPEN-METEO-MARINE"),
+    "swell": ("うねりデータが取得できません。NOWPHAS・気象庁等の公式情報を確認してください。", "DS-OPEN-METEO-MARINE"),
 }
 
 SUMMARY = {
@@ -184,6 +223,9 @@ SUMMARY = {
     "heat": {0: "暑さ指数に主要な注意条件はありません。通常の水分補給で作業を検討できます。",
              1: "暑さ指数が上昇しています。水分補給・休憩を徹底してください。",
              2: "暑さ指数が危険域です。作業時間の変更・中止を検討してください。"},
+    "marine": {0: "波浪・風に主要な注意条件はありません。通常の海上作業を検討できます。",
+               1: "波高・うねり・風に注意が必要です。作業船・足場・荷役条件を確認してください。",
+               2: "波高・突風が閾値を超えています。海上作業の中止・待機を検討してください。"},
 }
 
 

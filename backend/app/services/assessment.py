@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import rules as rules_service
-from .data_collectors import jma_warnings, open_meteo, wbgt_env
+from .data_collectors import jma_warnings, marine, open_meteo, wbgt_env
 from .decision_engine import LEVEL_LABELS, Reading, evaluate
 from ..core.config import settings
 from ..models import ObservationStation, RiverObservation, Site, SiteStation
@@ -50,6 +50,22 @@ async def _cached_fetch(lat: float, lon: float, key: str) -> dict:
         # fetched_at は前回取得時刻のまま残し、鮮度が古いことを隠さない。
         data = {**_LAST_GOOD[key], "status": "STALE", "error": data.get("error")}
     _CACHE[key] = (now, data)
+    return data
+
+
+async def _cached_marine(lat: float, lon: float, key: str) -> dict:
+    """海洋予報（Open-Meteo Marine）のキャッシュ付き取得。失敗時は STALE 縮退。"""
+    now = time.monotonic()
+    cache_key = f"marine:{key}"
+    hit = _CACHE.get(cache_key)
+    if _cache_valid(hit, now):
+        return hit[1]
+    data = await marine.fetch_marine(lat, lon)
+    if data.get("status") == "OK":
+        _LAST_GOOD[cache_key] = data
+    elif cache_key in _LAST_GOOD:
+        data = {**_LAST_GOOD[cache_key], "status": "STALE", "error": data.get("error")}
+    _CACHE[cache_key] = (now, data)
     return data
 
 
@@ -245,6 +261,18 @@ def build_reading(work_type: str, wr: dict, site: Site,
         humidity_pct=wr.get("humidity_pct"), wbgt=wr.get("wbgt"),
         missing=set(wr.get("missing") or set()),
     )
+    if work_type == "marine":
+        # 海洋データは wave/wind が主要。海上風は陸上予報の同地点風速を利用し、
+        # 視程は気象コード由来の濃霧フラグのみ（実測視程はデータソース未接続を明示）
+        r.wave_height_m = wr.get("wave_height_m")
+        r.wave_period_s = wr.get("wave_period_s")
+        r.swell_wave_height_m = wr.get("swell_wave_height_m")
+        r.source_marine = wr.get("source_marine", marine.SOURCE_ID)
+        r.fog = bool(wr.get("fog"))
+        if "wave_period" in (wr.get("missing") or set()):
+            r.missing.add("wave_period")
+        if "swell" in (wr.get("missing") or set()):
+            r.missing.add("swell")
     if work_type == "river":
         if river_view is None:
             river_view = _river_view(river_ctx, site)
@@ -312,6 +340,35 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
                             river_view=river_view)
     if status == "STALE":
         reading.stale_weather = True  # 前回取得値での参考表示を判定理由に明示（§5.3）
+    marine_view = None
+    stale_weather = status == "STALE"
+    if wt == "marine":
+        mdata = await _cached_marine(site.latitude, site.longitude, site.id)
+        mstatus = mdata.get("status", "ERROR")
+        mpoints = mdata.get("points", [])
+        mwr = marine.window_reading(mpoints, start, end) if mpoints else {
+            "wave_height_m": None, "wave_period_s": None, "wave_direction_deg": None,
+            "swell_wave_height_m": None, "swell_wave_period_s": None,
+            "swell_wave_direction_deg": None, "sea_surface_temp_c": None,
+            "missing": {"wave", "wave_period", "swell"},
+        }
+        # 視程の実測はデータソース未接続のため、気象コード45/48（霧・着氷性の霧）のみ
+        # 「濃霧」として扱う（欠測は隠さず判定理由に明示）
+        mwr["fog"] = any(p.get("weather_code") in (45, 48) for p in points)
+        mwr["source_marine"] = marine.SOURCE_ID
+        if mstatus == "ERROR":
+            mwr["missing"] = set(mwr.get("missing") or set()) | {"wave", "wave_period", "swell"}
+        if mstatus == "STALE":
+            stale_weather = True
+        marine_view = {"weather": wr, "marine": mwr, "status": mstatus,
+                       "fetched_at": mdata.get("fetched_at")}
+        wr = dict(wr)
+        wr.update(mwr)
+        wr["missing"] = set(wr.get("missing") or set()) | set(mwr.get("missing") or set())
+        reading = build_reading(wt, wr, site, pref_warnings, river_ctx=river_ctx,
+                                river_view=river_view)
+    if stale_weather:
+        reading.stale_weather = True
     # #35: 実効閾値はDBが単一の真実。永続化を伴う評価は呼び出し側が fresh 解決した
     # th を注入する(表示用は th=None → 短TTLキャッシュ解決で足りる)
     # #74 緩和: effective_th は内部で SessionLocal を生成するためスレッド化しても安全。
@@ -331,6 +388,13 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         "river": river_view[0]["river_note"] if river_view else site.river_note,
         "riverState": river_view[0]["river_state"] if river_view else site.river_state,
         "riverSource": river_view[0]["source_river"] if river_view else "DS-RIVER-GO",
+        "waveHeight": marine_view["marine"].get("wave_height_m") if marine_view else None,
+        "wavePeriod": marine_view["marine"].get("wave_period_s") if marine_view else None,
+        "waveDirection": marine_view["marine"].get("wave_direction_deg") if marine_view else None,
+        "swellHeight": marine_view["marine"].get("swell_wave_height_m") if marine_view else None,
+        "seaSurfaceTemp": marine_view["marine"].get("sea_surface_temp_c") if marine_view else None,
+        "marineStatus": marine_view["status"] if marine_view else None,
+        "marineFetchedAt": marine_view["fetched_at"] if marine_view else None,
         "reasons": [{"severity": x["severity"], "text": x["message"],
                      "source": x["source_id"], "value": x["observed_value"]}
                     for x in decision["reasons"]],
@@ -350,6 +414,60 @@ async def assess_all(sites: list[Site], *, fetch=None,
         *[assess_site(s, fetch=fetch, warnmap=warnmap, db=db) for s in sites])
 
 
+async def marine_site_summary(site: Site) -> dict:
+    """海象データ：全国版の1現場分サマリ（波浪・海上風・リスクレベル）。"""
+    data = await _cached_fetch(site.latitude, site.longitude, site.id)
+    mdata = await _cached_marine(site.latitude, site.longitude, site.id)
+    wr = open_meteo.window_reading(data.get("points", []))
+    mpoints = mdata.get("points", [])
+    mwr = marine.window_reading(mpoints) if mpoints else {
+        "wave_height_m": None, "wave_period_s": None, "wave_direction_deg": None,
+        "swell_wave_height_m": None, "swell_wave_period_s": None,
+        "swell_wave_direction_deg": None, "sea_surface_temp_c": None,
+        "missing": {"wave", "wave_period", "swell"},
+    }
+    mwr["fog"] = any(p.get("weather_code") in (45, 48) for p in data.get("points", []))
+    mwr["source_marine"] = marine.SOURCE_ID
+    merged = dict(wr)
+    merged.update(mwr)
+    merged["missing"] = set(wr.get("missing") or set()) | set(mwr.get("missing") or set())
+    reading = build_reading("marine", merged, site)
+    if data.get("status") == "STALE" or mdata.get("status") == "STALE":
+        reading.stale_weather = True
+    effective = await asyncio.to_thread(rules_service.effective_th)
+    decision = evaluate("marine", reading, th=effective)
+    weather_status = data.get("status", "ERROR")
+    marine_status = mdata.get("status", "ERROR")
+    if weather_status == "OK" and marine_status == "OK":
+        combined_status = "OK"
+    elif "STALE" in (weather_status, marine_status):
+        combined_status = "STALE"
+    else:
+        combined_status = "ERROR"
+    return {
+        "id": site.id, "name": site.name, "code": site.site_code, "loc": site.loc,
+        "lat": site.latitude, "lon": site.longitude, "work": site.work_type,
+        "waveHeight": mwr.get("wave_height_m"),
+        "wavePeriod": mwr.get("wave_period_s"),
+        "waveDirection": mwr.get("wave_direction_deg"),
+        "swellHeight": mwr.get("swell_wave_height_m"),
+        "swellPeriod": mwr.get("swell_wave_period_s"),
+        "seaSurfaceTemp": mwr.get("sea_surface_temp_c"),
+        "windMax": wr.get("wind_ms"), "gust": wr.get("gust_ms"),
+        "fog": mwr.get("fog", False),
+        "tide": None,  # 気象庁潮位は未接続（公式リンクで参照）
+        "level": decision["overall_level"], "levelLabel": decision["overall_label"],
+        "summary": decision["summary"],
+        "reasons": [{"severity": x["severity"], "text": x["message"],
+                     "source": x["source_id"], "value": x["observed_value"]}
+                    for x in decision["reasons"]],
+        "status": combined_status,
+        "weatherStatus": weather_status, "marineStatus": marine_status,
+        "fetchedAt": mdata.get("fetched_at") or data.get("fetched_at"),
+        "updated": datetime.now(JST).strftime("%H:%M"),
+    }
+
+
 async def assess_decision(site: Site, work_type: str, start: str | None, end: str | None,
                           *, fetch=None, th: dict | None = None,
                           db: Session | None = None) -> dict:
@@ -367,6 +485,11 @@ async def assess_decision(site: Site, work_type: str, start: str | None, end: st
         "reasonsRaw": card["reasonsRaw"],
         "data_quality_summary": card["dataQuality"],
         "weatherStatus": card["weatherStatus"], "fetchedAt": card["fetchedAt"],
+        "waveHeight": card.get("waveHeight"), "wavePeriod": card.get("wavePeriod"),
+        "waveDirection": card.get("waveDirection"), "swellHeight": card.get("swellHeight"),
+        "seaSurfaceTemp": card.get("seaSurfaceTemp"),
+        "windMax": card.get("windMax"), "gust": card.get("gust"),
+        "marineStatus": card.get("marineStatus"),
         "refs": ["気象: Open-Meteo",
                  f"河川: {card['riverSource']}",
                  "WBGT: 環境省(公式予報)" if not card["wbgtDerived"] else "WBGT: 環境省(推定)",
