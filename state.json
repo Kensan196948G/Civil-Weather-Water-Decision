@@ -165,6 +165,26 @@
       "related": [29, 31, 79]
     }
   },
+  "release_2026_08_09_v041": {
+    "title": "左サイドメニューのアコーディオン化",
+    "pr": 137,
+    "tag": "v0.4.1",
+    "merge_commit": "71a3743587cd5a611049be317bc139928aa34efa",
+    "merged_at": "2026-08-09T07:47:59Z",
+    "deployed_at": "2026-08-09T16:48:00+09:00",
+    "deployment": "main反映(71a3743) + cwwd-frontend再起動",
+    "migration": "なし",
+    "ci": "PR #137 全5ジョブ success",
+    "smoke": {
+      "frontend": "200 OK（data-adapter.js にアコーディオン実装反映）",
+      "public_url": "302（Cloudflare Access）",
+      "e2e": "PASS（各グループ見出し→項目の操作）",
+      "map_repro": "PASS（マーカー/パス件数変化なし）"
+    },
+    "issues": {
+      "related": [79]
+    }
+  },
   "session": {
     "last_phase": "Monitor",
     "last_audited_at": "2026-07-12",
