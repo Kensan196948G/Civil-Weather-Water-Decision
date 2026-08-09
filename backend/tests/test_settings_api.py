@@ -48,7 +48,13 @@ def _clean_settings():
 
 
 def _install_fake_httpx(monkeypatch, *, status=200, payload=None, exc=None):
-    """httpx.AsyncClient を差し替え、Anthropic 疎通確認をネット非依存にする。"""
+    """httpx.AsyncClient を差し替え、AI疎通確認をネット非依存にする。
+
+    最後のリクエスト（url / headers）は _fake_ai_calls に記録し、DeepSeek 既定と
+    Anthropic 指定の認証方式を検証できるようにする。
+    """
+    _fake_ai_calls.clear()
+
     class _Resp:
         status_code = status
 
@@ -68,9 +74,13 @@ def _install_fake_httpx(monkeypatch, *, status=200, payload=None, exc=None):
         async def get(self, url, headers=None):
             if exc is not None:
                 raise exc
+            _fake_ai_calls.append({"url": url, "headers": dict(headers or {})})
             return _Resp()
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+
+_fake_ai_calls: list[dict] = []
 
 
 # ---------- GET 初期状態 ----------
@@ -78,7 +88,7 @@ def test_get_settings_initial_defaults(client):
     r = client.get("/api/admin/settings")
     assert r.status_code == 200
     body = r.json()
-    assert body["ai"] == {"configured": False, "masked": None}
+    assert body["ai"] == {"configured": False, "masked": None, "provider": "deepseek"}
     assert body["data_retention_days"] == 365
     # notify は常に2フラグを bool で返す（未設定時は既定 false/false）
     assert body["notify"] == {"slack_enabled": False, "teams_enabled": False}
@@ -89,10 +99,11 @@ def test_get_settings_initial_defaults(client):
 def test_put_ai_key_saves_and_masks(client):
     r = client.put("/api/admin/settings", json={"ai_api_key": _SECRET})
     assert r.status_code == 200
-    assert r.json()["ai"] == {"configured": True, "masked": "****wxyz"}
+    assert r.json()["ai"] == {"configured": True, "masked": "****wxyz",
+                              "provider": "deepseek"}
 
     got = client.get("/api/admin/settings").json()
-    assert got["ai"] == {"configured": True, "masked": "****wxyz"}
+    assert got["ai"] == {"configured": True, "masked": "****wxyz", "provider": "deepseek"}
 
 
 def test_ai_key_plaintext_never_in_responses(client):
@@ -264,6 +275,40 @@ def test_ai_test_ok_with_body_key(client, monkeypatch):
     assert body["models"] == ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
 
 
+def test_ai_test_defaults_to_deepseek(client, monkeypatch):
+    """既定プロバイダは DeepSeek（#72 段8: Claude→DeepSeek 変更指示）。"""
+    _install_fake_httpx(monkeypatch, status=200, payload={"data": [
+        {"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]})
+    r = client.post("/api/admin/settings/ai/test", json={"api_key": _SECRET})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert r.json()["models"] == ["deepseek-chat", "deepseek-reasoner"]
+    assert _fake_ai_calls, "外部疎通が実行される"
+    assert _fake_ai_calls[-1]["url"] == "https://api.deepseek.com/models"
+    assert _fake_ai_calls[-1]["headers"].get("Authorization") == "Bearer " + _SECRET
+
+
+def test_ai_test_provider_anthropic_uses_x_api_key(client, monkeypatch):
+    """provider=anthropic 指定時は従来どおり x-api-key + anthropic-version で疎通。"""
+    _install_fake_httpx(monkeypatch, status=200, payload={"data": [{"id": "claude-x"}]})
+    r = client.post("/api/admin/settings/ai/test",
+                    json={"api_key": _SECRET, "provider": "anthropic"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert _fake_ai_calls[-1]["url"] == "https://api.anthropic.com/v1/models"
+    assert _fake_ai_calls[-1]["headers"].get("x-api-key") == _SECRET
+
+
+def test_ai_provider_persisted_and_validated(client):
+    r = client.put("/api/admin/settings", json={"ai_provider": "anthropic"})
+    assert r.status_code == 200
+    assert r.json()["ai"]["provider"] == "anthropic"
+    assert client.get("/api/admin/settings").json()["ai"]["provider"] == "anthropic"
+    # 未知プロバイダは422
+    assert client.put("/api/admin/settings",
+                      json={"ai_provider": "openai"}).status_code == 422
+
+
 def test_ai_test_401_returns_ok_false(client, monkeypatch):
     _install_fake_httpx(monkeypatch, status=401)
     r = client.post("/api/admin/settings/ai/test", json={"api_key": "bad-key"})
@@ -286,6 +331,7 @@ def test_ai_test_uses_stored_key_when_no_body(client, monkeypatch):
     r = client.post("/api/admin/settings/ai/test")  # body無し → 保存済みキーを使用
     assert r.status_code == 200
     assert r.json() == {"ok": True, "models": ["claude-opus-4-8"]}
+    assert _fake_ai_calls[-1]["url"] == "https://api.deepseek.com/models"
 
 
 def test_ai_test_no_key_configured(client, monkeypatch):
@@ -329,7 +375,7 @@ def test_delete_ai_key(client):
     r = client.delete("/api/admin/settings/ai")
     assert r.status_code == 200
     assert r.json()["ok"] is True
-    assert r.json()["ai"] == {"configured": False, "masked": None}
+    assert r.json()["ai"] == {"configured": False, "masked": None, "provider": "deepseek"}
     assert client.get("/api/admin/settings").json()["ai"]["configured"] is False
 
 
@@ -338,7 +384,7 @@ def test_delete_ai_key_is_idempotent(client):
     r = client.delete("/api/admin/settings/ai")
     assert r.status_code == 200
     assert r.json()["ok"] is True
-    assert r.json()["ai"]["configured"] is False
+    assert r.json()["ai"] == {"configured": False, "masked": None, "provider": "deepseek"}
 
 
 # ---------- 監査 ----------

@@ -124,6 +124,31 @@ class OpenMeteoStub(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler hook
+        if self.path.startswith("/marine"):
+            start = datetime(2026, 6, 20, 0, 0)
+            times = [(start + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(48)]
+            body = json.dumps({
+                "timezone": "Asia/Tokyo",
+                "hourly": {
+                    "time": times,
+                    "wave_height": [0.6 + (i % 5) * 0.4 for i in range(48)],
+                    "wave_period": [5.0 + (i % 3) for i in range(48)],
+                    "wave_direction": [120 + (i % 4) * 10 for i in range(48)],
+                    "wind_wave_height": [0.5 for _ in range(48)],
+                    "wind_wave_period": [4.0 for _ in range(48)],
+                    "wind_wave_direction": [110 for _ in range(48)],
+                    "swell_wave_height": [0.4 + (i % 3) * 0.3 for i in range(48)],
+                    "swell_wave_period": [9.0 + (i % 2) for i in range(48)],
+                    "swell_wave_direction": [200 for _ in range(48)],
+                    "sea_surface_temperature": [24.0 for _ in range(48)],
+                },
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if not self.path.startswith("/forecast"):
             self.send_error(404)
             return
@@ -215,6 +240,7 @@ def main() -> int:
         "APP_ENV": "local",
         "DATABASE_URL": "sqlite:///./_e2e_cw.db",
         "OPEN_METEO_BASE_URL": f"http://127.0.0.1:{open_meteo_port}",
+        "OPEN_METEO_MARINE_BASE_URL": f"http://127.0.0.1:{open_meteo_port}",
         "CORS_ORIGINS": "*",
         "ENABLE_SCHEDULER": "false",
         "ENABLE_JMA_WARNINGS": "false",
@@ -318,6 +344,29 @@ def main() -> int:
                 page.get_by_text("failed cwwd unit はありません").wait_for(timeout=10_000)
             except PlaywrightTimeoutError:
                 page.get_by_text("運用状態を取得できませんでした").wait_for(timeout=10_000)
+            # #72 段5: 海象データ：全国版（地図＋一覧）
+            page.locator("#cw-sidebar button", has_text="海象データ：全国版").click()
+            page.locator("#cw-marine-screen").wait_for(state="visible", timeout=20_000)
+            page.locator("#cw-marine-map").wait_for(state="visible", timeout=20_000)
+            page.get_by_text("有義波高").first.wait_for(timeout=20_000)
+            page.locator("#cw-marine-screen").get_by_text("未接続", exact=False).first.wait_for(timeout=20_000)
+            # 現場一覧（読込・一覧テーブル表示）
+            page.locator("#cw-sidebar button", has_text="現場一覧").click()
+            page.locator("#cw-sites-screen").wait_for(state="visible", timeout=20_000)
+            page.locator("#cw-sites-body table").wait_for(timeout=20_000)
+            page.get_by_text("登録済みの全現場").wait_for(timeout=20_000)
+            # 熱中症/WBGT 全国マップ
+            page.locator("#cw-sidebar button", has_text="熱中症・WBGT").click()
+            page.locator("#cw-wbgt-screen").wait_for(state="visible", timeout=20_000)
+            page.locator("#cw-wbgt-map").wait_for(state="visible", timeout=20_000)
+            page.locator("#cw-wbgt-rank").wait_for(timeout=20_000)
+            # #72 段5: 海上作業判定（評価実行）
+            page.locator("#cw-sidebar button", has_text="海上作業").click()
+            page.locator("#cw-mwork-screen").wait_for(state="visible", timeout=20_000)
+            page.locator("#cw-mwork-run").wait_for(timeout=20_000)
+            page.locator("#cw-mwork-run").click()
+            page.get_by_text("評価しました").wait_for(timeout=20_000)
+            page.get_by_text("全体レベル").wait_for(timeout=20_000)
             page.locator("#cw-logout").click()
             page.locator("#cw-login.on").wait_for(timeout=45_000)
             csp_violations = page.evaluate("window.__cwCspViolations")

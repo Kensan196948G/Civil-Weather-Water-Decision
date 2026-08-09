@@ -18,7 +18,8 @@
     var _fetch = opts.fetch || (typeof fetch !== "undefined" ? fetch : null);
     var bump = opts.bump || function () {};
     var _open = opts.open || function () {};
-    var CW = { sites: null, meta: null, sources: null, history: null, series: {}, stations: {}, result: null, ver: 0 };
+    var CW = { sites: null, meta: null, metaLoaded: false, dashboardError: null,
+      sources: null, history: null, series: {}, stations: {}, result: null, ver: 0 };
 
     function url(p) { return base + p; }
 
@@ -124,7 +125,13 @@
     // ---- データ取得 ----
     function loadDashboard() {
       return Promise.all([j("/api/sites"), j("/api/dashboard/site-risk")]).then(function (r) {
-        CW.meta = r[0]; CW.sites = mapDashToSites(r[1], r[0]); CW.ver++; bump();
+        CW.meta = r[0]; CW.sites = mapDashToSites(r[1], r[0]);
+        CW.metaLoaded = true; CW.dashboardError = null; CW.ver++; bump();
+      }).catch(function (e) {
+        // 現場一覧画面にエラー状態を出せるよう、失敗を記録してから再送出（表示は継続）
+        CW.dashboardError = "現場データの取得に失敗しました（API接続または権限を確認）";
+        bump();
+        throw e;
       });
     }
     function loadSources() { return j("/api/dashboard/data-sources").then(function (d) { CW.sources = d; bump(); }); }
@@ -177,7 +184,7 @@
       if (proto.__cwPatched) return;
       proto.__cwPatched = true;
       var origRender = proto.renderVals, origGen = proto.genHourly, origResult = proto.resultVM,
-        origOpen = proto.openSite, origRefresh = proto.refresh;
+        origOpen = proto.openSite, origRefresh = proto.refresh, origEnsureMaps = proto.ensureMaps;
 
       proto.renderVals = function () {
         if (CW.sites) {
@@ -231,6 +238,50 @@
       };
 
       proto.openSite = function (id) { origOpen.call(this, id); ensureSiteDetail(id); };
+
+      // Leaflet 未読込でも確実に読み込んでから地図を構築する（ヘルメット注入失敗・遅延への保険。
+      // ユーザー報告: ダッシュボード/作業判断/WBGTのマップが表示されない）
+      proto.ensureMaps = function () {
+        var self = this;
+        if (!window.L) {
+          if (typeof cwEnsureLeaflet === "function") {
+            cwEnsureLeaflet(function () {
+              try { origEnsureMaps.call(self); } catch (e) {}
+            });
+          } else {
+            try { origEnsureMaps.call(self); } catch (e) {}
+          }
+          return;
+        }
+        try { origEnsureMaps.call(this); } catch (e) {}
+      };
+
+      // 作業種別マスタに無い種別（例: marine）の現場が混入しても地図構築が落ちないよう
+      // WORK / LEVELS の欠落を既定値で補完してから元のビルダーを呼ぶ
+      var origDash = proto.buildDashMap, origSite = proto.buildSiteMap;
+      function cwSafeWorkLevels(self) {
+        var wk = self.WORK = self.WORK || {};
+        var lv = self.LEVELS = self.LEVELS || {};
+        if (!wk.marine) wk.marine = { label: "海上作業", color: "#0f6ea8" };
+        (self.SITES || []).forEach(function (s) {
+          if (s && s.work && !wk[s.work]) {
+            wk[s.work] = { label: s.work, color: "#566472" };
+          }
+        });
+        [0, 1, 2, 3, 4].forEach(function (i) {
+          if (!lv[i]) {
+            lv[i] = { label: "確認不能", tag: "?", color: "#5a6b7b", ink: "#fff", bg: "#eef1f4", border: "#c9d3db" };
+          }
+        });
+      }
+      proto.buildDashMap = function (L, el) {
+        cwSafeWorkLevels(this);
+        return origDash.call(this, L, el);
+      };
+      proto.buildSiteMap = function (L, el, siteId) {
+        cwSafeWorkLevels(this);
+        return origSite.call(this, L, el, siteId);
+      };
 
       proto.evaluate = function () {
         var df = this.state.dform, self = this;
@@ -312,12 +363,15 @@
           return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
         });
       },
-      aiTest: function (apiKey) {
+      aiTest: function (apiKey, opts) {
         // api_key 省略時はサーバ保存済みキーで接続テスト（HTTP 200 で {ok:bool} が返る契約）
+        var body = {};
+        if (apiKey) body.api_key = apiKey;
+        if (opts && opts.provider) body.provider = opts.provider;
         return _fetch(url("/api/admin/settings/ai/test"), {
           method: "POST",
           headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
-          body: JSON.stringify(apiKey ? { api_key: apiKey } : {})
+          body: JSON.stringify(body)
         }).then(function (r) {
           return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
         });
@@ -325,6 +379,18 @@
       aiDisconnect: function () {
         return _fetch(url("/api/admin/settings/ai"), {
           method: "DELETE", headers: authHeaders()
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
+      // ---- #72 段5: 海象データ（全国版 / 海上作業判定） ----
+      marineNational: function () { return j("/api/marine/national"); },
+      evaluateMarine: function (siteId, start, end) {
+        return _fetch(url("/api/decisions/evaluate"), {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+          body: JSON.stringify({ site_id: siteId, work_type: "marine",
+            start: start || null, end: end || null })
         }).then(function (r) {
           return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
         });
@@ -781,6 +847,27 @@
     function cwTileAttribution() {
       return window.__CW_TILE_ATTRIBUTION__ || "";
     }
+    // Leaflet を確実に読み込む（dc-runtime の helmet 注入が遅い/失敗した場合の保険）。
+    // vendor/ は自己ホスト済みのため外部CDN依存はない（frontend/test/vendor-assets-policy.cjs）
+    var cwLeafletLoading = false;
+    function cwEnsureLeaflet(cb) {
+      if (window.L) { cb(); return; }
+      if (cwLeafletLoading) { setTimeout(function () { cwEnsureLeaflet(cb); }, 120); return; }
+      cwLeafletLoading = true;
+      var css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "./vendor/leaflet/leaflet.css";
+      document.head.appendChild(css);
+      var s = document.createElement("script");
+      s.src = "./vendor/leaflet/leaflet.js";
+      s.async = false;
+      s.onload = function () { cwLeafletLoading = false; cb(); };
+      s.onerror = function () {
+        cwLeafletLoading = false;
+        setTimeout(function () { cwEnsureLeaflet(cb); }, 500);
+      };
+      document.head.appendChild(s);
+    }
     function buildWbgtScreen() {
       var CW = adapter._state; // 外からは _state 経由で参照
       if (!CW.sites) return;
@@ -788,6 +875,10 @@
       if (!mapEl) return;
       buildWbgtRank();
       if (!window.L) { // Leaflet 未ロードなら再試行（dc の ensureMaps と同じ作法）
+        if (typeof cwEnsureLeaflet === "function") {
+          cwEnsureLeaflet(function () { wbgtBuildTries = 0; buildWbgtScreen(); });
+          return;
+        }
         if (wbgtBuildTries++ < 50) setTimeout(buildWbgtScreen, 150);
         return;
       }
@@ -994,9 +1085,23 @@
     function cwRenderSites() {
       var box = document.getElementById("cw-sites-body");
       if (!box) return;
-      var meta = adapter._state.meta;
-      if (!meta || !meta.length) {
+      var st = adapter._state;
+      var meta = st.meta;
+      if (!st.metaLoaded && st.dashboardError) {
+        box.innerHTML = '<div class="cw-empty" style="color:#c62828">' + esc(st.dashboardError)
+          + '<br><button type="button" class="cw-btn" style="margin-top:10px" id="cw-sites-retry">再読込</button></div>';
+        var retry = box.querySelector("#cw-sites-retry");
+        if (retry) retry.addEventListener("click", function () {
+          adapter.loadDashboard().then(cwRenderSites).catch(function () { cwRenderSites(); });
+        });
+        return;
+      }
+      if (!meta || (!st.metaLoaded && !meta.length)) {
         box.innerHTML = '<div class="cw-empty">現場データを読込中です（数秒後に再読込してください）</div>';
+        return;
+      }
+      if (!meta.length) {
+        box.innerHTML = '<div class="cw-empty">現場がまだ登録されていません。「＋現場登録」から登録してください。</div>';
         return;
       }
       var dash = {};
@@ -1063,8 +1168,17 @@
     function cwRenderWx() {
       var box = document.getElementById("cw-wx-body");
       if (!box) return;
-      var sites = adapter._state.sites;
+      var st = adapter._state;
+      var sites = st.sites;
+      if (!st.metaLoaded && st.dashboardError) {
+        box.innerHTML = '<div class="cw-empty" style="color:#c62828">' + esc(st.dashboardError) + "</div>";
+        return;
+      }
       if (!sites || !sites.length) {
+        if (st.metaLoaded) {
+          box.innerHTML = '<div class="cw-empty">現場がまだ登録されていません。</div>';
+          return;
+        }
         box.innerHTML = '<div class="cw-empty">気象データを読込中です（数秒後に再読込してください）</div>';
         return;
       }
@@ -1523,16 +1637,21 @@
         + '<input type="number" id="cw-as-days" min="30" max="3650" step="1" style="width:110px"> '
         + '<span style="font-size:11px;color:#7e8c99">30〜3650日。判定結果・監査ログ等の保持期間（クリーンアップジョブは今後実装）。</span></div></div>'
 
-        + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">🤖 AI設定（Claude API）</h3>'
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">🤖 AI設定（DeepSeek API）</h3>'
         + '<div class="cw-as-row"><label>状態</label><span id="cw-as-ai-status" style="font-weight:700">—</span></div>'
+        + '<div class="cw-as-row"><label>プロバイダ</label>'
+        + '<select id="cw-as-ai-provider" style="padding:9px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif">'
+        + '<option value="deepseek">DeepSeek（既定）</option>'
+        + '<option value="anthropic">Anthropic（Claude）</option></select></div>'
         + '<div class="cw-as-row"><label>APIキー</label>'
-        + '<input type="password" id="cw-as-ai-key" class="cw-as-key" placeholder="sk-ant-..." autocomplete="off"></div>'
+        + '<input type="password" id="cw-as-ai-key" class="cw-as-key" placeholder="sk-..." autocomplete="off"></div>'
         + '<div class="cw-as-row" style="justify-content:flex-end;gap:8px">'
         + '<button type="button" class="cw-btn" id="cw-as-ai-test">API接続テスト</button>'
         + '<button type="button" class="cw-btn cw-btn-pri" id="cw-as-ai-save">API設定保存</button>'
         + '<button type="button" class="cw-btn cw-btn-danger" id="cw-as-ai-del">API接続解除</button></div>'
         + '<div class="cw-msg" id="cw-as-ai-msg"></div>'
-        + '<div style="font-size:11px;color:#7e8c99">キーは暗号化してDBに保存され、画面には末尾4桁のみ表示されます。判定結果の現場向け文章生成（#68）で使用予定。</div></div>'
+        + '<div style="font-size:11px;color:#7e8c99">キーは暗号化してDBに保存され、画面には末尾4桁のみ表示されます。'
+        + '判定結果の現場向け文章生成（#68）で使用予定。接続テストは DeepSeek（既定）または Anthropic の /models へ疎通します。</div></div>'
 
         + '<div class="cw-pg-bar" style="justify-content:flex-end">'
         + '<span class="cw-msg" id="cw-as-msg" style="flex:1"></span>'
@@ -1548,13 +1667,16 @@
     function cwSetAiStatus(ai) {
       var st = document.getElementById("cw-as-ai-status");
       if (!st) return;
+      var providerLabel = ai && ai.provider === "anthropic" ? "Anthropic（Claude）" : "DeepSeek";
       if (ai && ai.configured) {
-        st.textContent = "接続設定済み（" + (ai.masked || "****") + "）";
+        st.textContent = "接続設定済み（" + providerLabel + " ・ " + (ai.masked || "****") + "）";
         st.style.color = "#2e7d32";
       } else {
-        st.textContent = "未設定";
+        st.textContent = "未設定（" + providerLabel + "）";
         st.style.color = "#8a99a5";
       }
+      var sel = document.getElementById("cw-as-ai-provider");
+      if (sel && ai && ai.provider) sel.value = ai.provider;
     }
     function cwLoadAppSettings() {
       var u = document.getElementById("cw-as-user");
@@ -1615,8 +1737,11 @@
     function cwAiTest() {
       var msg = document.getElementById("cw-as-ai-msg");
       var key = document.getElementById("cw-as-ai-key").value.trim();
+      var provider = document.getElementById("cw-as-ai-provider");
       if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "接続テスト中…"; }
-      adapter.aiTest(key || undefined).then(function (res) {
+      var body = { provider: provider ? provider.value : "deepseek" };
+      if (key) body.api_key = key;
+      adapter.aiTest(key || undefined, body).then(function (res) {
         var b = res.body || {};
         if (res.ok && b.ok) {
           if (msg) {
@@ -1635,12 +1760,14 @@
       var msg = document.getElementById("cw-as-ai-msg");
       var input = document.getElementById("cw-as-ai-key");
       var key = input.value.trim();
+      var provider = document.getElementById("cw-as-ai-provider");
       if (!key) {
         if (msg) { msg.style.color = "#c62828"; msg.textContent = "APIキーを入力してください"; }
         return;
       }
       if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "保存中…"; }
-      adapter.saveAppSettings({ ai_api_key: key }).then(function (res) {
+      adapter.saveAppSettings({ ai_api_key: key,
+        ai_provider: provider ? provider.value : "deepseek" }).then(function (res) {
         if (res.ok) {
           input.value = "";
           if (res.body && res.body.ai) cwSetAiStatus(res.body.ai);
@@ -1670,7 +1797,248 @@
       });
     }
 
-    // ---- 準備中画面（海象全国版・海上作業・50年確率波） ----
+    // ---- 海象データ：全国版（#72 段5: 正式画面化） ----
+    function cwMarineMeta(v) {
+      if (v == null) return { label: "欠測", color: "#5a6b7b" };
+      if (v < 1.0) return { label: "穏やか", color: "#2e7d32" };
+      if (v < 2.0) return { label: "注意", color: "#e07d12" };
+      return { label: "高波", color: "#c62828" };
+    }
+    function installMarineScreen() {
+      var el = cwMakeScreen("cw-marine-screen",
+        '<div class="cw-pg"><h2>海象データ：全国版</h2>'
+        + '<p class="sub">全登録現場の波高・周期・波向・うねり概況（Open-Meteo Marine API 補完）。'
+        + 'NOWPHAS・気象庁潮位は利用条件確認後に接続予定のため、潮位は公式サイトで確認してください。</p>'
+        + '<div class="cw-pg-bar"><button type="button" class="cw-btn" id="cw-marine-reload">再読込</button>'
+        + '<span class="cw-msg" id="cw-marine-msg"></span></div>'
+        + '<div class="cw-pg-card" style="padding:12px 14px">'
+        + '<div id="cw-marine-map" style="height:44vh;min-height:300px;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1)"></div>'
+        + '<div class="cw-wbgt-scale" style="margin:10px 0 0">'
+        + '<span style="background:#2e7d32">~1.0m 穏やか</span>'
+        + '<span style="background:#e07d12">1.0-2.0m 注意</span>'
+        + '<span style="background:#c62828">2.0m~ 高波</span>'
+        + '<span style="background:#5a6b7b">欠測</span></div></div>'
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(100vh - 300px)" id="cw-marine-body"></div>'
+        + '<div class="cw-pg-card" style="border-left:4px solid #c2920a;font-size:11.5px;color:#5f7081;line-height:1.8">'
+        + '<b style="color:#8a6410">データソースの状況（実態を明示）</b><br>'
+        + '波浪・うねり: Open-Meteo Marine API（補完・検証中）　／　潮位: 気象庁潮位表・観測情報（未接続）　／　'
+        + 'NOWPHAS: 利用条件確認中。<a href="https://www.mlit.go.jp/kowan/nowphas/index.html" target="_blank" rel="noopener noreferrer" style="color:#16527d">NOWPHAS（国交省）</a>・'
+        + '<a href="https://www.data.jma.go.jp/gmd/kaiyou/db/tide/suisan/suisan.php" target="_blank" rel="noopener noreferrer" style="color:#16527d">気象庁 潮位表</a>を参照してください。</div></div>');
+      if (!el) return;
+      el.querySelector("#cw-marine-reload").addEventListener("click", cwRenderMarine);
+    }
+    function cwRenderMarine() {
+      var box = document.getElementById("cw-marine-body");
+      var mapEl = document.getElementById("cw-marine-map");
+      var msg = document.getElementById("cw-marine-msg");
+      if (!box) return;
+      box.innerHTML = '<div class="cw-empty">読込中…</div>';
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "取得中…"; }
+      adapter.marineNational().then(function (d) {
+        if (!d || !d.sites) {
+          var detail = (d && d.detail) || "APIエラー（権限または接続を確認）";
+          box.innerHTML = '<div class="cw-empty" style="color:#c62828">海象データを取得できませんでした: ' + esc(detail) + "</div>";
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "取得失敗"; }
+          return;
+        }
+        var rows = d.sites;
+        box.innerHTML = '<table class="cw-tbl"><thead><tr>'
+          + "<th>現場</th><th>有義波高</th><th>周期</th><th>波向</th><th>うねり</th>"
+          + "<th>海上風</th><th>突風</th><th>判定</th><th>潮位</th><th>更新</th></tr></thead><tbody>"
+          + rows.map(function (s) {
+            var m = cwMarineMeta(s.waveHeight);
+            var lvOk = s.level != null && CW_LV[s.level] != null;
+            return "<tr><td><b>" + esc(s.name) + '</b><div style="font-size:10.5px;color:#7e8c99">' + esc(s.loc || "") + "</div></td>"
+              + '<td class="cw-num"><b style="color:' + m.color + '">' + (s.waveHeight == null ? "—" : esc(s.waveHeight)) + "</b> "
+              + '<span style="font-size:10.5px;color:' + m.color + '">' + m.label + "</span></td>"
+              + '<td class="cw-num">' + (s.wavePeriod == null ? "—" : esc(s.wavePeriod) + " s") + "</td>"
+              + '<td class="cw-num">' + (s.waveDirection == null ? "—" : esc(s.waveDirection) + "°") + "</td>"
+              + '<td class="cw-num">' + (s.swellHeight == null ? "—" : esc(s.swellHeight) + " m") + "</td>"
+              + '<td class="cw-num">' + (s.windMax == null ? "—" : esc(s.windMax) + " m/s") + "</td>"
+              + '<td class="cw-num">' + (s.gust == null ? "—" : esc(s.gust) + " m/s") + "</td>"
+              + "<td>" + (lvOk ? '<span class="cw-badge" style="background:' + CW_LVC[s.level] + '18;color:' + CW_LVC[s.level] + '">' + CW_LV[s.level] + "</span>" : "—") + "</td>"
+              + '<td><span style="color:#8a99a5">未接続</span></td>'
+              + '<td class="cw-num" style="white-space:nowrap">' + esc(s.updated || "") + "</td></tr>";
+          }).join("") + "</tbody></table>";
+        if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "更新しました（" + rows.length + "現場）"; }
+        marineMapVer = -1; // 再取得時はマーカーも最新データで再構築
+        cwBuildMarineMap(mapEl, rows);
+      }).catch(function () {
+        box.innerHTML = '<div class="cw-empty" style="color:#c62828">海象データの取得に失敗しました（通信エラー）</div>';
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラー"; }
+      });
+    }
+    var marineMap = null, marineMarkers = null, marineMapVer = -1;
+    function cwBuildMarineMap(mapEl, rows) {
+      if (!mapEl) return;
+      if (!window.L) {
+        cwEnsureLeaflet(function () { cwBuildMarineMap(mapEl, rows); });
+        return;
+      }
+      var L = window.L;
+      if (!marineMap) {
+        marineMap = L.map(mapEl, { scrollWheelZoom: false }).setView([37.5, 137.0], 4);
+        var tileUrl = cwTileUrl();
+        if (tileUrl) L.tileLayer(tileUrl, { maxZoom: 18, attribution: cwTileAttribution() }).addTo(marineMap);
+        marineMarkers = L.layerGroup().addTo(marineMap);
+      }
+      marineMap.invalidateSize();
+      if (marineMapVer !== adapter._state.ver || marineMapVer === -1) {
+        marineMapVer = adapter._state.ver;
+        marineMarkers.clearLayers();
+        var pts = [];
+        rows.forEach(function (s) {
+          if (s.lat == null || s.lon == null) return;
+          var m = cwMarineMeta(s.waveHeight);
+          var mk = L.circleMarker([s.lat, s.lon], { radius: 9, color: "#fff", weight: 2, fillColor: m.color, fillOpacity: 0.95 });
+          mk.bindPopup("<b>" + esc(s.name) + "</b><br>有義波高 "
+            + (s.waveHeight == null ? "—" : esc(s.waveHeight) + " m") + " ・ 周期 "
+            + (s.wavePeriod == null ? "—" : esc(s.wavePeriod) + " s")
+            + '<br><b style="color:' + m.color + '">' + m.label + "</b>"
+            + (s.windMax == null ? "" : "<br>海上風 " + esc(s.windMax) + " m/s"));
+          marineMarkers.addLayer(mk); pts.push([s.lat, s.lon]);
+        });
+        if (pts.length) { try { marineMap.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch (e) {} }
+      }
+      setTimeout(function () { try { marineMap.invalidateSize(); } catch (e) {} }, 150);
+    }
+
+    // ---- 海上作業判定（#72 段5: 正式画面化） ----
+    var cwMarineWorkResult = null;
+    var cwMworkMap = null, cwMworkMapSite = null;
+    function installMarineWorkScreen() {
+      var el = cwMakeScreen("cw-mwork-screen",
+        '<div class="cw-pg"><h2>海上作業判定</h2>'
+        + '<p class="sub">有義波高・うねり・海上風・突風・濃霧の閾値判定。最終判断は現場責任者（公式情報・現地確認を優先）。</p>'
+        + '<div class="cw-pg-card"><h3 style="margin:0 0 10px;font-size:13.5px;color:#13344f">作業条件</h3>'
+        + '<div class="cw-as-row"><label>現場</label><select id="cw-mwork-site" style="flex:1;min-width:240px;padding:9px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif"></select></div>'
+        + '<div class="cw-as-row"><label>開始</label><input type="datetime-local" id="cw-mwork-start" style="flex:1;min-width:220px;padding:9px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif"></div>'
+        + '<div class="cw-as-row"><label>終了</label><input type="datetime-local" id="cw-mwork-end" style="flex:1;min-width:220px;padding:9px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif"></div>'
+        + '<div class="cw-pg-bar" style="margin:8px 0 0;justify-content:flex-end">'
+        + '<span class="cw-msg" id="cw-mwork-msg" style="flex:1"></span>'
+        + '<button type="button" class="cw-btn cw-btn-pri" id="cw-mwork-run">海象データで評価する</button></div></div>'
+        + '<div class="cw-pg-card" style="padding:12px 14px"><div id="cw-mwork-map" style="height:260px;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1)"></div></div>'
+        + '<div id="cw-mwork-result"></div>'
+        + '<div class="cw-pg-card" style="border-left:4px solid #c2920a;font-size:11.5px;color:#5f7081;line-height:1.8">'
+        + '波浪データは Open-Meteo Marine API（補完・検証中）。視程は実測未接続のため濃霧予報（気象コード45/48）のみ判定し、'
+        + 'それ以外の視程は現地確認で補完してください。潮位判定はデータソース確定後に追加予定（要件書追補で管理）。</div></div>');
+      if (!el) return;
+      el.querySelector("#cw-mwork-run").addEventListener("click", cwRunMarineWork);
+    }
+    function cwMarineWorkSiteOptions() {
+      var sel = document.getElementById("cw-mwork-site");
+      if (!sel) return;
+      var meta = adapter._state.meta || [];
+      if (!meta.length) {
+        adapter.loadDashboard().then(function () {
+          meta = adapter._state.meta || [];
+          sel.innerHTML = meta.map(function (s) {
+            return '<option value="' + esc(s.id) + '">' + esc(s.name) + "（" + esc(s.loc || "") + "）</option>";
+          }).join("");
+        }).catch(function () {});
+        return;
+      }
+      sel.innerHTML = meta.map(function (s) {
+        return '<option value="' + esc(s.id) + '">' + esc(s.name) + "（" + esc(s.loc || "") + "）</option>";
+      }).join("");
+    }
+    function cwRenderMarineWork() {
+      cwMarineWorkSiteOptions();
+      var sel = document.getElementById("cw-mwork-site");
+      if (sel && cwMarineWorkResult && cwMarineWorkResult.siteId === sel.value) {
+        cwRenderMarineWorkResult(cwMarineWorkResult.body);
+      }
+    }
+    function cwRunMarineWork() {
+      var msg = document.getElementById("cw-mwork-msg");
+      var sel = document.getElementById("cw-mwork-site");
+      if (!sel || !sel.value) {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "現場を選択してください"; }
+        return;
+      }
+      var start = document.getElementById("cw-mwork-start");
+      var end = document.getElementById("cw-mwork-end");
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "評価中…"; }
+      adapter.evaluateMarine(sel.value, start && start.value || null, end && end.value || null)
+        .then(function (res) {
+          if (res.ok && res.body) {
+            cwMarineWorkResult = { siteId: sel.value, body: res.body };
+            cwRenderMarineWorkResult(res.body);
+            if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "評価しました"; }
+          } else {
+            var detail = (res.body && (res.body.detail || res.body.error)) || ("HTTP " + res.status);
+            if (msg) { msg.style.color = "#c62828"; msg.textContent = "評価失敗: " + (Array.isArray(detail) ? detail.map(function (x) { return x.msg; }).join(" / ") : detail); }
+          }
+        }).catch(function () {
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "通信エラー（バックエンド未起動の可能性）"; }
+        });
+    }
+    function cwRenderMarineWorkResult(body) {
+      var box = document.getElementById("cw-mwork-result");
+      var mapEl = document.getElementById("cw-mwork-map");
+      if (!box || !body) return;
+      var lvOk = body.overall_level != null && CW_LVC[body.overall_level] != null;
+      var color = lvOk ? CW_LVC[body.overall_level] : "#5a6b7b";
+      var reasons = body.reasons || [];
+      var chips = [];
+      if (body.waveHeight != null) chips.push("有義波高 " + esc(body.waveHeight) + " m");
+      if (body.wavePeriod != null) chips.push("周期 " + esc(body.wavePeriod) + " s");
+      if (body.swellHeight != null) chips.push("うねり " + esc(body.swellHeight) + " m");
+      if (body.windMax != null) chips.push("海上風 " + esc(body.windMax) + " m/s");
+      if (body.gust != null) chips.push("突風 " + esc(body.gust) + " m/s");
+      box.innerHTML =
+        '<div class="cw-pg-card" style="border-top:6px solid ' + color + '">'
+        + '<div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap">'
+        + '<div style="flex:none;text-align:center;background:' + color + ';color:#fff;border-radius:11px;padding:10px 16px;min-width:110px">'
+        + '<div style="font-size:10px;font-weight:700;opacity:.85">全体レベル</div>'
+        + '<div style="font-size:22px;font-weight:900;line-height:1.2">' + esc(body.overall_label || CW_LV[body.overall_level] || "—") + "</div></div>"
+        + '<div style="font-size:13px;color:#3a4854;line-height:1.7;flex:1;min-width:240px">' + esc(body.summary || "") + "</div></div>"
+        + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px">'
+        + chips.map(function (c) { return '<span style="font-size:11px;color:#13344f;background:#eef4f9;border:1px solid #d5e2ec;padding:4px 9px;border-radius:6px">' + c + "</span>"; }).join("")
+        + "</div>"
+        + '<div style="font-size:12.5px;font-weight:800;color:#566472;margin-bottom:8px">判定理由</div>'
+        + (reasons.length ? reasons.map(function (r) {
+          var sev = r.severity == null ? 1 : r.severity;
+          var c = sev === 3 ? "#5a6b7b" : sev === 2 ? "#c62828" : sev === 1 ? "#e07d12" : "#2e7d32";
+          return '<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:#f6f8fa;border:1px solid #e2e8ee;border-radius:9px;margin-bottom:7px">'
+            + '<span style="flex:none;font-size:10px;font-weight:900;color:#fff;background:' + c + ';border-radius:6px;padding:4px 7px">'
+            + (sev === 3 ? "確認不能" : sev === 2 ? "中止検討" : sev === 1 ? "注意" : "通常") + "</span>"
+            + '<div style="font-size:12px;color:#2c3a46;line-height:1.5">' + esc(r.text || r.message || "")
+            + (r.source ? '<div style="font-size:10.5px;color:#8693a0;margin-top:2px">' + esc(r.source) + " ・ " + esc(r.value || "") + "</div>" : "")
+            + "</div></div>";
+        }).join("") : '<div class="cw-empty">判定理由がありません</div>')
+        + '<div style="font-size:11px;color:#7e8c99;margin-top:8px">' + esc(body.data_quality_summary || "") + "</div></div>";
+      // 対象現場の地図
+      if (!mapEl) return;
+      var meta = adapter._state.meta || [];
+      var site = null;
+      for (var i = 0; i < meta.length; i++) { if (meta[i].id === cwMarineWorkResult.siteId) site = meta[i]; }
+      if (!window.L) { cwEnsureLeaflet(function () { cwRenderMarineWorkResult(body); }); return; }
+      var L = window.L;
+      var map = cwMworkMap;
+      if (!map || !document.body.contains(map._container) || map._container !== mapEl) {
+        if (map) { try { map.remove(); } catch (e) {} }
+        map = L.map(mapEl, { scrollWheelZoom: false }).setView([37.5, 137.0], 4);
+        var tileUrl = cwTileUrl();
+        if (tileUrl) L.tileLayer(tileUrl, { maxZoom: 18, attribution: cwTileAttribution() }).addTo(map);
+        cwMworkMap = map;
+      }
+      if (site && site.lat != null && site.lon != null) {
+        var needMarker = cwMworkMapSite !== site.id;
+        if (needMarker) {
+          map.eachLayer(function (layer) { if (layer instanceof L.CircleMarker) map.removeLayer(layer); });
+          L.circleMarker([site.lat, site.lon], { radius: 10, color: "#fff", weight: 2, fillColor: color, fillOpacity: 0.95 })
+            .addTo(map).bindPopup("<b>" + esc(site.name) + "</b><br>海上作業判定: <b style=\"color:" + color + "\">"
+              + esc(body.overall_label || "") + "</b>");
+          cwMworkMapSite = site.id;
+        }
+        map.setView([site.lat, site.lon], 8);
+      }
+      map.invalidateSize();
+      setTimeout(function () { try { map.invalidateSize(); } catch (e) {} }, 150);
+    }
+
+    // ---- 準備中画面（50年確率波） ----
     function cwInstallSoon(id, emoji, title, desc, plans, issueNote) {
       cwMakeScreen(id,
         '<div class="cw-pg"><h2>' + esc(title) + "</h2>"
@@ -1680,14 +2048,6 @@
         + '<p style="margin-top:12px;font-size:11px">' + esc(issueNote) + "</p></div></div></div>");
     }
     function installSoonScreens() {
-      cwInstallSoon("cw-marine-screen", "🌊", "海象データ：全国版",
-        "全国の波高・周期・潮位の概況を提供予定です。",
-        ["国交省 NOWPHAS（全国港湾海洋波浪情報網）", "気象庁 潮位表・潮位観測情報", "Open-Meteo Marine API（補完・検証中）"],
-        "対応計画: Issue #72 段5（データソース調査→取り込み→画面）");
-      cwInstallSoon("cw-mwork-screen", "⚓", "海上作業判定",
-        "判定エンジンへ海上作業種別（波高・風速・視程の閾値判定）を追加予定です。",
-        ["有義波高・うねりの閾値判定", "海上風・突風の閾値判定", "海象データ：全国版のデータソース確定が前提"],
-        "対応計画: Issue #72 段5 連動（スコープ変更は要件書追補で管理）");
       cwInstallSoon("cw-wave50-screen", "📈", "50年確率波",
         "極値統計（Gumbel / Weibull 等）による再現期間波高の解析機能を提供予定です。",
         ["NOWPHAS 長期観測データの蓄積（Neon PostgreSQL）", "年最大値法・POT法による極値解析", "地点別の50年確率波高・設計波条件の参照"],
@@ -1698,8 +2058,8 @@
     CW_SCREENS["sites-list"] = { id: "cw-sites-screen", show: cwRenderSites, live: true };
     CW_SCREENS["wx-national"] = { id: "cw-wx-screen", show: cwRenderWx, live: true };
     CW_SCREENS["river-obs"] = { id: "cw-river-screen", show: cwRenderRiver, live: true };
-    CW_SCREENS["marine-national"] = { id: "cw-marine-screen" };
-    CW_SCREENS["marine-work"] = { id: "cw-mwork-screen" };
+    CW_SCREENS["marine-national"] = { id: "cw-marine-screen", show: cwRenderMarine, live: true };
+    CW_SCREENS["marine-work"] = { id: "cw-mwork-screen", show: cwRenderMarineWork, live: true };
     CW_SCREENS["analytics"] = { id: "cw-analytics-screen", show: cwRenderAnalytics, live: true };
     CW_SCREENS["wave50"] = { id: "cw-wave50-screen" };
     CW_SCREENS["reports"] = { id: "cw-reports-screen", show: cwRenderReports };
@@ -1813,7 +2173,13 @@
         + ".cw-as-row label{font-weight:700;color:#3a4854;min-width:130px;font-size:12px}"
         + ".cw-as-row input[type=number],.cw-as-row input[type=password],.cw-as-row input[type=text]{"
         + "padding:9px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px 'Noto Sans JP',sans-serif;box-sizing:border-box}"
-        + ".cw-as-key{flex:1;min-width:220px}";
+        + ".cw-as-key{flex:1;min-width:220px}"
+        // タイル未設定（本番は外部タイル抑止のため none）でも地図領域が「地図」と
+        // 判別できるようグリッド背景を付与（ユーザー報告: マップが表示されない）
+        + ".leaflet-container{background:#dbe4ea;"
+        + "background-image:linear-gradient(rgba(115,140,160,.16) 1px,transparent 1px),"
+        + "linear-gradient(90deg,rgba(115,140,160,.16) 1px,transparent 1px);"
+        + "background-size:46px 46px}";
       document.head.appendChild(css);
       mountHeaderTools();
       // ヘッダ再レンダーでツールが外れたら自動復元（コールバックは no-op 主体で軽量）
@@ -1990,6 +2356,8 @@
           installOpsScreen();
           installAuditScreen();
           installAppSettingsScreen();
+          installMarineScreen();
+          installMarineWorkScreen();
           installSoonScreens();
           installLoginScreen();
           installNotifyBell();

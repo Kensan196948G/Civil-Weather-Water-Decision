@@ -47,6 +47,7 @@ SAMPLE = {
 @pytest.fixture
 def client(monkeypatch):
     from app.services.data_collectors import open_meteo
+    from app.services.data_collectors import marine
 
     async def fake_fetch(lat, lon, **kw):
         norm = open_meteo.normalize(SAMPLE)
@@ -54,6 +55,30 @@ def client(monkeypatch):
         return norm
 
     monkeypatch.setattr(open_meteo, "fetch_forecast", fake_fetch)
+
+    MARINE_SAMPLE = {
+        "timezone": "Asia/Tokyo",
+        "hourly": {
+            "time": ["2026-06-20T08:00", "2026-06-20T09:00", "2026-06-20T10:00"],
+            "wave_height": [0.6, 1.1, 2.4],
+            "wave_period": [5.0, 7.0, 9.0],
+            "wave_direction": [120.0, 140.0, 160.0],
+            "wind_wave_height": [0.5, 0.9, 1.6],
+            "wind_wave_period": [4.0, 5.5, 7.0],
+            "wind_wave_direction": [110.0, 130.0, 150.0],
+            "swell_wave_height": [0.3, 0.7, 1.2],
+            "swell_wave_period": [8.0, 10.0, 12.0],
+            "swell_wave_direction": [200.0, 210.0, 220.0],
+            "sea_surface_temperature": [24.0, 24.5, 25.0],
+        },
+    }
+
+    async def fake_marine(lat, lon, **kw):
+        norm = marine.normalize(MARINE_SAMPLE)
+        norm.update(status="OK", fetched_at="2026-06-20T08:00:00Z", error=None)
+        return norm
+
+    monkeypatch.setattr(marine, "fetch_marine", fake_marine)
 
     from app.services import assessment
     assessment.clear_cache()

@@ -32,6 +32,7 @@ WORK_TYPES = [
     ("river", "河川内作業", "#0e7d8f"), ("concrete", "コンクリート打設", "#7a5cc0"),
     ("earthwork", "土工", "#8a6d3b"), ("pavement", "舗装", "#566472"),
     ("crane", "クレーン作業", "#c0682c"), ("heat", "熱中症対策", "#cc4444"),
+    ("marine", "海上作業", "#0f6ea8"),
 ]
 
 SITES = [
@@ -103,6 +104,8 @@ SOURCES = [
     ("DS-JMA-CSV", "気象庁 気象データ高度利用", "公式", "OK", "—", 0, 0, "公式", "アメダス・気温・雨量・風速（CSV/機械判読）。"),
     ("DS-JAXA", "JAXA G-Portal / Earth API", "公式", "OK", "—", 0, 0, "補助", "衛星データ・水循環。初期は将来拡張扱い。"),
     ("DS-NOAA", "NOAA", "公式", "OK", "—", 0, 0, "補助", "海外気象・研究・補完。国内現場では初期必須ではない。"),
+    ("DS-OPEN-METEO-MARINE", "Open-Meteo Marine", "外部API", "OK", "—", 0, 0, "補完",
+     "全国の波高・周期・波向・うねり予報（APIキー不要）。NOWPHAS・気象庁潮位は利用条件確認後に接続予定。"),
 ]
 
 HISTORY = [
@@ -139,11 +142,23 @@ def _sync_production_users(db: Session) -> None:
 def seed(db: Session) -> None:
     if settings.app_env != "local":
         _sync_production_users(db)
-    if db.scalar(select(WorkType).limit(1)):
-        db.commit()
-        return  # 既に投入済み
+    # 作業種別・データソースは「既投入でも不足分を追補」する冪等 upsert（#72 段5:
+    # 既存本番DBへ marine 種別・海洋ソースを追加してもシード済み判定で無視されない）
+    has_any_wt = db.scalar(select(WorkType).limit(1)) is not None
+    existing_wt = {w.id for w in db.scalars(select(WorkType)).all()}
     for k, name, color in WORK_TYPES:
+        if k in existing_wt:
+            continue
         db.add(WorkType(id=k, name=name, color=color))
+    existing_src = {s.id for s in db.scalars(select(DataSourceStatus)).all()}
+    for (sidc, name, kind, status, lok, fails, ms, trust, note) in SOURCES:
+        if sidc in existing_src:
+            continue
+        db.add(DataSourceStatus(id=sidc, name=name, kind=kind, status=status, last_ok=lok,
+                                fails=fails, avg_ms=ms, trust=trust, note=note))
+    if has_any_wt:
+        db.commit()
+        return  # 既投入DB: 不足種別・ソースの追補のみ行い、サンプルデータは再投入しない
     for (sid, code, name, loc, lat, lon, work, proj, rflag, rstate, rnote, flood, mgr) in SITES:
         db.add(Site(id=sid, site_code=code, name=name, loc=loc, latitude=lat, longitude=lon,
                     work_type=work, project_type=proj, river_work_flag=rflag, river_state=rstate,
@@ -156,9 +171,6 @@ def seed(db: Session) -> None:
                         planned_start=st, planned_end=en, contractor=con))
     for (lid, sid, label, url, kind, order) in SITE_LINKS:
         db.add(SiteLink(id=lid, site_id=sid, label=label, url=url, kind=kind, sort_order=order))
-    for (sidc, name, kind, status, lok, fails, ms, trust, note) in SOURCES:
-        db.add(DataSourceStatus(id=sidc, name=name, kind=kind, status=status, last_ok=lok,
-                                fails=fails, avg_ms=ms, trust=trust, note=note))
     for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
         db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
                            action=act, comment=comment, decided_by=by, decided_at=dt))

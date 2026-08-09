@@ -47,6 +47,12 @@ RULE_META = {
                      "desc": "WBGTがこの値以上で熱中症「中止検討」"},
     "upstream_rain": {"label": "上流雨量 注意",  "unit": "mm/h", "min": 0.0,   "max": 100.0,
                       "desc": "上流域の雨量がこの値以上で水位上昇「注意」（河川内作業）"},
+    "wave_caution": {"label": "有義波高 注意",   "unit": "m",    "min": 0.0,   "max": 20.0,
+                     "desc": "有義波高がこの値以上で「注意」（海上作業）"},
+    "wave_stop":    {"label": "有義波高 中止検討", "unit": "m",   "min": 0.0,   "max": 20.0,
+                     "desc": "有義波高がこの値以上で「中止検討」（海上作業）"},
+    "visibility_limited": {"label": "視程 注意",  "unit": "m",    "min": 0.0,   "max": 10000.0,
+                           "desc": "視程がこの値未満で「注意」（海上作業・現状は濃霧予報の代理判定）"},
 }
 
 # 大小関係の整合制約（(小さい方, 大きい方) — 等号は不可）
@@ -55,6 +61,7 @@ _ORDER_CONSTRAINTS = [
     ("wind_strong", "gust_stop"),
     ("temp_low", "temp_high"),
     ("wbgt_caution", "wbgt_danger"),
+    ("wave_caution", "wave_stop"),
 ]
 
 # 書き込み直列化: プロセス内ロック（PUTハンドラが apply〜commit を包む）

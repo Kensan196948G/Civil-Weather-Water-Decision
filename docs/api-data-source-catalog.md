@@ -9,6 +9,7 @@
 |---|---|---|---|---|---|---|---|---|
 | DS-JMA-XML | 気象庁 防災情報XML | 公式・最優先 | 警報・注意報を判定に反映（公式優先） | atomフィード `www.data.jma.go.jp/developer/xml/feed/extra.xml` → 個別警報XML | 不要 | 無料・登録不要（気象庁利用規約の範囲で二次利用可）。高頻度取得は避ける運用が望ましく本実装は10分キャッシュ | **実装済み・実接続**（10分キャッシュ） | `jma_warnings.py` |
 | DS-OPEN-METEO | Open-Meteo | 外部API・補完 | 気象予報の補完・時系列生成 | `api.open-meteo.com/v1/forecast` | 不要（APIキー不要） | 非商用利用は無料枠（10,000 calls/日・SLAなし）。**商用利用・SLA保証には有償プラン契約が必要**（[確認書](./open-meteo-commercial-terms-review.md)・要承認） | **実装済み・実接続**（予報キャッシュ5分毎ウォーム） | `open_meteo.py` |
+| DS-OPEN-METEO-MARINE | Open-Meteo Marine | 外部API・補完 | 全国の波高・周期・波向・うねり予報（海上作業判定・海象全国版） | `marine-api.open-meteo.com/v1/marine` | 不要（APIキー不要） | Open-Meteo 利用条件に準ずる（非商用無料枠・商用は契約要確認）。NOWPHAS・気象庁潮位とは別ソース | **実装済み・実接続（補完・検証中）**。潮位・NOWPHAS は未接続を明示 | `marine.py` / `assessment.marine_site_summary` |
 | DS-WBGT | 環境省 暑さ指数(WBGT) | 公式 | 熱中症対策の判定材料 | 全地点予報CSV `www.wbgt.env.go.jp/prev15WG/dl/yohou_all.csv`（フォールバック: `yohou_{地点コード}.csv`）、地点マスタCSV | 不要 | 公開サイト。提供は夏期（概ね4月下旬〜10月、期間外は404）。**出典明記（環境省）必須**。大量・商用取得は個別に利用条件確認が望ましい | **実装済み・実接続（現場別自動選定）**: 地点マスタ同期（`observation_stations` kind=wbgt）から現場ごとに最近傍を自動選択（明示リンク優先）。全地点CSVを優先し、対象外・失敗時は地点別CSVへフォールバック。`WBGT_STATION_CODE` は最終フォールバック | `wbgt_env.py` / `open_meteo.py: estimate_wbgt()` |
 | DS-RIVER-GO | 川の防災情報（国交省） | 公式（参照） | 河川水位情報の参照案内 | `www.river.go.jp` | 不要 | 無認証の機械可読APIは非公開（Webサイト参照のみ想定） | 疎通プローブのみ。無認証の実測水位APIが無いため公式サイト参照リンク案内に留める | `source_probe.py` |
 | DS-WATER-OPEN | 水防災オープンデータ提供サービス | 準公式（契約制） | 河川観測所の実測データ（将来） | ― | 要契約 | **本格利用には利用者登録・契約が必要**（有償プランあり）。再配布・SLA等は契約条件に依存 | **意図的にプローブ対象外**。未接続・シードのError状態を保持（契約・利用条件確認が必要） | `seed.py: SOURCES` |
@@ -32,6 +33,7 @@
 | 変数 | 既定値 | 説明 |
 |---|---|---|
 | `OPEN_METEO_BASE_URL` | `https://api.open-meteo.com/v1` | Open-Meteo エンドポイント |
+| `OPEN_METEO_MARINE_BASE_URL` | `https://marine-api.open-meteo.com/v1` | Open-Meteo Marine エンドポイント（波高・周期・うねり） |
 | `JMA_FEED_URL` | `https://www.data.jma.go.jp/developer/xml/feed/extra.xml` | 気象庁防災情報XML atomフィード |
 | `WBGT_BASE_URL` | `https://www.wbgt.env.go.jp` | 環境省WBGT予報CSVのベースURL |
 | `WBGT_STATION_CODE` | （空＝無効） | 環境省WBGT予報の地点コード（例: 44132=東京）。設定時のみ公式予報値を採用 |
@@ -47,6 +49,9 @@
 
 - **Open-Meteo（DS-OPEN-METEO）の商用利用条件は未承認**（[確認書](./open-meteo-commercial-terms-review.md)）。
   社内業務利用として有償プラン契約の要否・帰属表示（CC BY 4.0）・SLAを法務/ITへ確認中。
+- **海象データ（DS-OPEN-METEO-MARINE）**: 波浪・うねりは Open-Meteo Marine API で実接続済み
+  （#72 段5 の第1段階）。**潮位（気象庁潮位表・観測情報）と NOWPHAS は未接続**で、画面では
+  公式リンクと「未接続」を明示。視程は実測未接続のため気象コード45/48（濃霧）のみ代理判定。
 - WBGT（DS-WBGT）は地点マスタ（`WBGT-ENV`）の同期と現場別最近傍自動選定を実装済み（#113）。
   実況値CSV（`wbgt_{地点番号}_{YYYYMM}.csv`）は未実装、地点移設時のコード差異はマスタ再同期で対応。
 - 河川（DS-RIVER-GO, DS-WATER-OPEN）は実測水位の自動取得が未接続（`#31` 残課題）。

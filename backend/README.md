@@ -28,6 +28,7 @@ backend/
 │   │   ├── decision_engine.py        # 判定ルール（設計§8/§9）★中核
 │   │   ├── assessment.py             # 気象取得→Reading→判定 のオーケストレーション
 │   │   └── data_collectors/open_meteo.py  # Open-Meteo 取得・正規化・WBGT推定
+│   │   └── data_collectors/marine.py      # Open-Meteo Marine（波高・周期・うねり）
 │   └── api/routes.py                 # エンドポイント（設計§7）
 ├── tests/                            # 71 tests（engine/collector/api/auth/audit/notifications/jma_warnings/source_probe 等）
 ├── requirements.txt / pyproject.toml
@@ -83,6 +84,7 @@ docker compose up -d            # backend 起動時に alembic upgrade head ＋ 
 | GET | `/api/dashboard/site-risk` | 現場別リスク（ライブ判定） |
 | GET | `/api/dashboard/data-sources` | データソース状態 |
 | GET | `/api/weather/timeseries?site_id=` | 気象時系列（24h） |
+| GET | `/api/marine/national` | 海象データ：全国版（波高・周期・うねり・海上風） |
 | POST | `/api/decisions/evaluate` | 作業判断評価（判定エンジン §8.2） |
 | GET/POST | `/api/decision-logs` | 判断履歴 取得/記録 |
 | GET | `/api/decision-logs/export.csv` | 判断履歴CSV（BOM付） |
@@ -130,7 +132,22 @@ cd backend && python3 -m pytest      # 71 passed
 > データソース状態は **5分ごとに自動更新**（フロントの「データソース」画面にも明記）。サンプル現場は全国16件（札幌〜那覇）。
 
 - `app/services/data_collectors/source_probe.py` が実プローブ。OK / Warning(遅延・3xx/4xx) / Error(5xx・接続失敗) を判定。
-- プローブ対象（公開・認証不要, 8件）: Open-Meteo / 気象庁XML / 気象庁CSV(アメダス) / WBGT / 川の防災情報 / NASA POWER / JAXA G-Portal / NOAA。
+- プローブ対象（公開・認証不要, 9件）: Open-Meteo / Open-Meteo Marine / 気象庁XML / 気象庁CSV(アメダス) / WBGT / 川の防災情報 / NASA POWER / JAXA G-Portal / NOAA。
+
+## 海象データ：全国版・海上作業判定（#72 段5）
+
+- `data_collectors/marine.py`: Open-Meteo Marine API（波高・周期・波向・うねり・海水温）を
+  取得・正規化（物理範囲チェック・MISSING/OUTLIER フラグ）。
+- `GET /api/marine/national`: 全アクセス可能現場の海象サマリ＋波高リスクレベル。
+- 判定エンジンに `marine`（海上作業）を追加: 有義波高（注意1.0m / 中止検討2.0m）・うねり・
+  海上風・突風・濃霧（気象コード45/48）の閾値判定。視程は実測未接続のため代理判定であることを明示。
+- 潮位（気象庁）・NOWPHAS は利用条件確認前のため未接続（画面・カタログに明示）。
+
+## AI設定（DeepSeek 既定）
+
+- `PUT /api/admin/settings` で `ai_provider`（`deepseek` / `anthropic`）を保存・監査。
+- `POST /api/admin/settings/ai/test` は既定 DeepSeek の `/models` へ Bearer 認証で疎通。
+  `provider=anthropic` 指定時は従来どおり `x-api-key` で Anthropic へ疎通。
 
 ## 気象庁 防災情報XML 警報の実反映（#26）
 

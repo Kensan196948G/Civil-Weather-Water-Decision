@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./civil_weather_water.db"
 
     open_meteo_base_url: str = "https://api.open-meteo.com/v1"
+    # 海洋予報（波高・周期・波向・うねり等）。Open-Meteo Marine API（無料・APIキー不要）。
+    # NOWPHAS / 気象庁潮位の正式接続は利用条件確認後に別ソースとして追加する。
+    open_meteo_marine_base_url: str = "https://marine-api.open-meteo.com/v1"
     data_fetch_timeout_seconds: int = 20
     data_fetch_retry_count: int = 3
 
