@@ -82,6 +82,7 @@ def main() -> int:
             print("site stations markers:", markers("#cw-map-site .leaflet-marker-icon:nth-child(n)"))
             page.screenshot(path="/tmp/map_site.png")
             # 作業判断（コンクリート打設）
+            page.locator('#cw-sidebar .cw-sb-h[data-group="施工判定"]').click()
             page.locator("#cw-sidebar button", has_text="コンクリート打設").click()
             page.locator("#cw-map-dec").wait_for(state="visible", timeout=15000)
             page.wait_for_timeout(1500)
@@ -92,6 +93,7 @@ def main() -> int:
                 " + ' icons, ' + document.querySelectorAll('#cw-map-dec .leaflet-container').length + ' containers'"))
             page.screenshot(path="/tmp/map_dec.png")
             # 海象全国
+            page.locator('#cw-sidebar .cw-sb-h[data-group="気象・海象データ"]').click()
             page.locator("#cw-sidebar button", has_text="海象データ：全国版").click()
             page.locator("#cw-marine-map").wait_for(state="visible", timeout=15000)
             page.wait_for_timeout(2500)

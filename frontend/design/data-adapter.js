@@ -1076,14 +1076,26 @@
       document.body.appendChild(el);
       el.addEventListener("click", function (e) {
         var t = e.target;
+        // グループ見出し（アコーディオン開閉）の判定
+        var h = t;
+        while (h && h !== el && !(h.classList && h.classList.contains("cw-sb-h"))) h = h.parentNode;
+        if (h && h !== el && h.getAttribute("data-group")) {
+          var g = h.getAttribute("data-group");
+          cwSbOpen = (cwSbOpen === g) ? null : g; // 同一グループは折りたたみ、他グループは1つだけ開く
+          cwRenderSidebar(regInst);
+          return;
+        }
+        // メニュー項目の判定
         while (t && t !== el && !(t.classList && t.classList.contains("cw-sb-i"))) t = t.parentNode;
         if (t && t !== el && t.getAttribute("data-key")) cwMenuGo(t.getAttribute("data-key"));
       });
     }
     var cwSbSig = "";
+    var cwSbOpen = null; // アコーディオンで開いているグループのキー（null=全て閉じる）
+    var cwSbLastAct = null;
     function cwRenderSidebar(inst) {
       var el = document.getElementById("cw-sidebar");
-      if (!el) return;
+      if (!el || !inst) return;
       var screen = inst.state.screen;
       var act = screen; // 通常は screen キーがそのまま選択項目
       if (cwActiveKey) { // プリセット項目（例: コンクリート打設→decision）は明示クリックを優先表示
@@ -1091,7 +1103,18 @@
         if (ai && (ai.go || ai.key) === screen) act = cwActiveKey;
       }
       var role = cwUser ? cwUser.role : "";
-      var sig = screen + "|" + act + "|" + role;
+      // アクティブ項目を含むグループは自動で開く（外部遷移・プリセット遷移時も迷子にしない）
+      var actGroup = null;
+      CW_MENU.forEach(function (g) {
+        g.items.forEach(function (it) {
+          if (it.key === act) actGroup = g.title || g.items[0].key || null;
+        });
+      });
+      // 画面遷移があった場合のみアクティブグループを自動で開く
+      // （ユーザーが手動で開閉したアコーディオン状態を遷移以外で上書きしない）
+      if (cwSbLastAct !== act && actGroup) cwSbOpen = actGroup;
+      cwSbLastAct = act;
+      var sig = screen + "|" + act + "|" + role + "|" + (cwSbOpen || "");
       if (sig === cwSbSig) return; // 変化がなければ再構築しない（afterRender毎の負荷回避）
       cwSbSig = sig;
       el.innerHTML = CW_MENU.map(function (g) {
@@ -1099,11 +1122,23 @@
           return !it.roles || (role && it.roles.indexOf(role) >= 0);
         });
         if (!items.length) return "";
-        return (g.title ? '<div class="cw-sb-h">' + esc(g.title) + "</div>" : "")
-          + items.map(function (it) {
+        // ダッシュボード（先頭グループ・titleなし）は常時表示の固定項目
+        if (!g.title) {
+          return items.map(function (it) {
             return '<button type="button" class="cw-sb-i' + (act === it.key ? " on" : "")
               + '" data-key="' + esc(it.key) + '">' + esc(it.label) + "</button>";
           }).join("");
+        }
+        var open = cwSbOpen === g.title;
+        return '<button type="button" class="cw-sb-h" data-group="' + esc(g.title) + '">'
+          + '<span class="cw-sb-h-t">' + esc(g.title) + "</span>"
+          + '<span class="cw-sb-arrow">' + (open ? "▾" : "▸") + "</span></button>"
+          + '<div class="cw-sb-body' + (open ? " on" : "") + '">'
+          + items.map(function (it) {
+            return '<button type="button" class="cw-sb-i' + (act === it.key ? " on" : "")
+              + '" data-key="' + esc(it.key) + '">' + esc(it.label) + "</button>";
+          }).join("")
+          + "</div>";
       }).join("");
     }
 
@@ -1172,6 +1207,8 @@
       cwAuditRows = null;
       cwUser = null;
       cwSbSig = "";       // サイドバーをロールなし状態で再構築させる
+      cwSbOpen = null;     // アコーディオン開閉状態もリセット（前ユーザーの状態を残さない）
+      cwSbLastAct = null;
       cwScreenVer = {};   // 次回表示時に必ず再読込させる
       var audit = document.getElementById("cw-audit-body");
       if (audit) audit.innerHTML = "";
@@ -2451,7 +2488,16 @@
         + "flex-direction:column;gap:1px;padding:10px 8px 20px;background:#fff;border-right:1px solid #dce3ea;"
         + "overflow:hidden auto;box-shadow:1px 0 3px rgba(20,40,60,.05);"
         + "font-family:'Noto Sans JP',system-ui,sans-serif;box-sizing:border-box}"
-        + ".cw-sb-h{margin:12px 6px 4px;font-size:10.5px;font-weight:800;color:#8a99a5;letter-spacing:.06em;flex:none}"
+        // アコーディオン見出し（#79 派生: ダッシュボード以外は開閉式グループ）
+        + ".cw-sb-h{display:flex;align-items:center;justify-content:space-between;width:100%;"
+        + "margin:10px 0 2px;padding:8px 10px;font-size:10.5px;font-weight:800;color:#8a99a5;"
+        + "letter-spacing:.06em;background:transparent;border:none;border-radius:8px;cursor:pointer;"
+        + "flex:none;box-sizing:border-box}"
+        + ".cw-sb-h:hover{background:rgba(19,52,79,.05);color:#697A88}"
+        + ".cw-sb-h-t{font-size:10.5px;font-weight:800;letter-spacing:.06em}"
+        + ".cw-sb-arrow{font-size:9px;color:#a2afba;margin-left:6px}"
+        + ".cw-sb-body{display:none}"
+        + ".cw-sb-body.on{display:block}"
         + ".cw-sb-i{display:block;width:100%;text-align:left;background:transparent;border:none;border-radius:8px;"
         + "padding:10px 12px;font:600 13px 'Noto Sans JP',sans-serif;color:#697A88;cursor:pointer;flex:none}"
         + ".cw-sb-i:hover{background:rgba(19,52,79,.05)}"

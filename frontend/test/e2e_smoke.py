@@ -333,6 +333,8 @@ def main() -> int:
             page.locator("#cw-user-name").wait_for(timeout=20_000)
             page.get_by_text("システム管理者（管理者）").wait_for(timeout=20_000)
             page.get_by_text("北川 下流右岸 護岸工事").first.wait_for(timeout=45_000)
+            # サイドバーはアコーディオン式（ダッシュボード以外はグループ見出しで開く）
+            page.locator('#cw-sidebar .cw-sb-h[data-group="管理"]').click()
             page.locator("#cw-sidebar button", has_text="運用状態").click()
             page.locator("#cw-ops-screen").wait_for(state="visible", timeout=20_000)
             # /api/admin/ops/status-snapshot の実装は Issue #95 (PR #96) 側にあり、
@@ -345,17 +347,20 @@ def main() -> int:
             except PlaywrightTimeoutError:
                 page.get_by_text("運用状態を取得できませんでした").wait_for(timeout=10_000)
             # #72 段5: 海象データ：全国版（地図＋一覧）
+            page.locator('#cw-sidebar .cw-sb-h[data-group="気象・海象データ"]').click()
             page.locator("#cw-sidebar button", has_text="海象データ：全国版").click()
             page.locator("#cw-marine-screen").wait_for(state="visible", timeout=20_000)
             page.locator("#cw-marine-map").wait_for(state="visible", timeout=20_000)
             page.get_by_text("有義波高").first.wait_for(timeout=20_000)
             page.locator("#cw-marine-screen").get_by_text("未接続", exact=False).first.wait_for(timeout=20_000)
             # 現場一覧（読込・一覧テーブル表示）
+            page.locator('#cw-sidebar .cw-sb-h[data-group="現場管理"]').click()
             page.locator("#cw-sidebar button", has_text="現場一覧").click()
             page.locator("#cw-sites-screen").wait_for(state="visible", timeout=20_000)
             page.locator("#cw-sites-body table").wait_for(timeout=20_000)
             page.get_by_text("登録済みの全現場").wait_for(timeout=20_000)
             # 熱中症/WBGT 全国マップ
+            page.locator('#cw-sidebar .cw-sb-h[data-group="施工判定"]').click()
             page.locator("#cw-sidebar button", has_text="熱中症・WBGT").click()
             page.locator("#cw-wbgt-screen").wait_for(state="visible", timeout=20_000)
             page.locator("#cw-wbgt-map").wait_for(state="visible", timeout=20_000)
