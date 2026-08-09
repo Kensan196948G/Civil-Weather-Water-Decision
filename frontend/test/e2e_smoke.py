@@ -47,7 +47,7 @@ CSP_REPORT_ONLY_TOKENS = (
     "frame-ancestors 'none'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "connect-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*",
+    "connect-src 'self' http://127.0.0.1:* http://localhost:*",
     "frame-src 'none'",
     "worker-src 'none'",
 )

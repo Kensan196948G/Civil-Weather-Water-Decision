@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from ..core import crypto, ops_status, readiness
+from ..core.config import settings
 from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
 from ..models import (
@@ -26,10 +27,12 @@ from ..models import (
     IdCounter, ObservationStation, RiverObservation, Site, SiteLink, SiteStation,
     User, UserSiteAccess, WorkPlan, WorkType,
 )
-from ..services import assessment, notifications, rules as rules_service
+from ..services import assessment, extreme, notifications, rules as rules_service
 from ..services import site_access
 from ..services.audit import audit, audit_add
-from ..services.data_collectors import marine, open_meteo, source_probe, wbgt_env
+from ..services.data_collectors import (
+    marine, open_meteo, river_collector, source_probe, wbgt_env,
+)
 
 # ルータ全体に認証を必須化（/auth と /health は別ルータ/main で公開）
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -1300,9 +1303,19 @@ def list_site_observation_stations(site_id: str, db: Session = Depends(get_db),
         item["sortOrder"] = link.sort_order
         item["latest"] = _latest_observation(db, st.id)
         stations.append(item)
+    auto = any(
+        (it.get("latest") or {}).get("source")
+        and it["latest"]["source"] not in ("", "MANUAL")
+        for it in stations
+    )
+    if auto:
+        provider = ("デモ自動取得（DEMO-RIVER・シミュレーション）。"
+                    "公式の水防災オープンデータ提供サービスは未接続")
+    else:
+        provider = "未接続（自動取得は未実装。水防災オープンデータ提供サービス等の接続が未設定）"
     return {
-        "automatic": False,
-        "provider": "未接続（自動取得は未実装。水防災オープンデータ提供サービス等の接続が未設定）",
+        "automatic": auto,
+        "provider": provider,
         "stations": stations,
     }
 
@@ -1382,9 +1395,15 @@ def list_river_observations(site_id: str, limit: int = Query(24, ge=1, le=500),
             select(ObservationStation).where(ObservationStation.id.in_(station_ids))
         ).all()
     }
+    auto = any(r.source and r.source != "MANUAL" for r in rows)
+    if auto:
+        provider = ("デモ自動取得（DEMO-RIVER・シミュレーション）。"
+                    "公式の水防災オープンデータ提供サービスは未接続")
+    else:
+        provider = "未接続（自動取得は未実装。現在は手動入力のみ）"
     return {
-        "automatic": False,
-        "provider": "未接続（自動取得は未実装。現在は手動入力のみ）",
+        "automatic": auto,
+        "provider": provider,
         "observations": [{
             "id": r.id, "stationId": r.station_id,
             "stationName": station_names.get(r.station_id, ""),
@@ -1505,6 +1524,25 @@ async def marine_national(db: Session = Depends(get_db),
         "sites": rows,
         "fetchedAt": datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+@router.get("/marine/return-periods")
+def marine_return_periods(db: Session = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """50年・100年再現期間波高の極値解析（デモ・シミュレーション版）。
+
+    NOWPHAS 長期観測の蓄積前は地点IDから決定的に生成した年最大波高へ
+    Gumbel / Weibull を当てはめる。warnings / dataType=synthetic で
+    設計利用不可であることを明示する。
+    """
+    accessible = site_access.accessible_site_ids(db, user)
+    sites = db.scalars(
+        select(Site).where(Site.status == "active", Site.id.in_(accessible))
+        .order_by(Site.id)).all()
+    return extreme.analyze_sites([
+        {"siteId": s.id, "name": s.name, "loc": s.loc,
+         "latitude": s.latitude, "longitude": s.longitude} for s in sites
+    ])
 
 
 # ---------- 気象 ----------
@@ -1860,10 +1898,18 @@ async def run_collectors(db: Session = Depends(get_db),
     sites = db.scalars(select(Site).where(Site.status == "active")).all()
     cards = await assessment.assess_all(list(sites), db=db)
     ok = sum(1 for c in cards if c["weatherStatus"] == "OK")
+    # 河川観測デモ自動取得も手動再取得に含める（観測所未投入でも冪等に整備）
+    if settings.river_demo_enabled:
+        river_collector.ensure_demo_stations(db)
+        river = river_collector.collect_demo_observations(db)
+        river_collector.refresh_demo_source_status(db)
+    else:
+        river = {"written": 0, "stations": 0}
     # 全データソースを実プローブして状態を更新（Open-Meteo含む）
     probed = await source_probe.probe_all(db)
     return {"refetched": len(cards), "weatherOk": ok, "total": len(cards),
-            "probed": {k: v["status"] for k, v in probed.items()}}
+            "probed": {k: v["status"] for k, v in probed.items()},
+            "river": river}
 
 
 # ---------- 通知（設計§14） ----------

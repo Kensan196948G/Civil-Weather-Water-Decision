@@ -83,6 +83,14 @@ function fetchMock(u, opts) {
       data_retention_days: 365, user_prefs: {} };
   } else if (u.indexOf("/api/admin/audit-logs") >= 0) {
     data = [{ id: 1, timestamp: "2026-07-12 21:00:00", user: "admin", action: "login", message: "ログイン成功", siteId: null }];
+  } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/observation-stations") >= 0) {
+    data = { automatic: true, provider: "デモ自動取得（DEMO-RIVER・シミュレーション）", stations: [
+      { id: "OS1", sourceId: "DEMO-RIVER", stationCode: "DEMO-S01-NEAR",
+        name: "北川 護岸地点 水位観測所", agency: "", basinName: "北川", kind: "water_rain",
+        latitude: 35.766, longitude: 139.776, status: "active", updatedAt: "",
+        rel: "nearest", sortOrder: 1,
+        latest: { waterLevelM: 1.82, rainfallMmH: 0.0, observedAt: "2026-08-09 12:30:00",
+                  source: "DEMO-RIVER" } }] };
   } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/stations") >= 0) {
     data = [{ id: "ST1", name: "北川 護岸地点 水位観測所", type: "river", rel: "最寄り", lat: 35.766, lon: 139.776 }];
   } else if (u.indexOf("/api/sites/") >= 0) {
@@ -103,6 +111,20 @@ function fetchMock(u, opts) {
         windMax: 7, gust: 12, level: 2, levelLabel: "中止検討", status: "OK", updated: "09:00" },
     ],
     fetchedAt: "2026-08-09 09:00:00",
+  };
+  else if (u.indexOf("/api/marine/return-periods") >= 0) data = {
+    source: "DEMO-EXTREME", note: "デモ解析", generatedAt: "2026-08-09 09:00:00",
+    sites: [
+      { siteId: "S01", name: "北川 下流右岸 護岸工事", loc: "X市", latitude: 35.76,
+        longitude: 139.78, dataType: "synthetic", sampleYears: 30, primaryMethod: "weibull",
+        h50: 4.12, h100: 4.98,
+        methods: { gumbel: { loc: 2.1, scale: 0.8, h50: 4.2, h100: 5.1, rmse: 0.4 },
+                   weibull: { shape: 2.1, scale: 3.2, h50: 4.12, h100: 4.98, rmse: 0.3 } },
+        warnings: ["デモ"] },
+      { siteId: "S12", name: "大阪港 ふ頭 揚重", loc: "大阪府", latitude: 34.65,
+        longitude: 135.43, dataType: "synthetic", sampleYears: 30, primaryMethod: "gumbel",
+        h50: 3.4, h100: 4.1, methods: {}, warnings: ["デモ"] },
+    ],
   };
   else if (u.indexOf("/api/decisions/evaluate") >= 0 && method === "POST") {
     lastPost = JSON.parse(opts.body);
@@ -171,6 +193,12 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
     && c.STATIONS.S01[0].d[0] === 35.766 && c.STATIONS.S01[0].d[1] === 139.776,
     "観測所の lat/lon が d:[lat,lon] 形式にマッピングされる");
   ok(Array.isArray(c.STATIONS.S06), "未取得の現場は既存(モック)の STATIONS を保持（S06="+ (c.STATIONS.S06 && c.STATIONS.S06.length) +"件）");
+
+  // 50年確率波: API 由来の H50/H100 を取得
+  const rp = await adapter.returnPeriods();
+  ok(Array.isArray(rp.sites) && rp.sites.length === 2 && rp.sites[0].h50 > 0
+    && rp.sites[0].primaryMethod === "weibull",
+    "returnPeriods が Gumbel/Weibull 解析結果（H50/H100）を返す");
 
   // 判定結果: API result を resultVM が返す
   adapter._state.result = { key: "river|S01", level: 2, summary: "中止・退避を検討してください。",

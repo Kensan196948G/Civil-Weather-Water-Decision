@@ -52,21 +52,26 @@ CSP_REPORT_ONLY = (
     "object-src 'none'; "
     "frame-ancestors 'none'; "
     "form-action 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; "
     "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data: blob:; "
+    "img-src 'self' data: blob: https://cyberjapandata.gsi.go.jp; "
     "font-src 'self' data:; "
-    "connect-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*; "
+    "connect-src 'self' http://127.0.0.1:* http://localhost:*; "
     "frame-src 'none'; "
     "worker-src 'none'; "
     "manifest-src 'self'"
 )
 
+# 国土地理院 標準地図（APIキー不要・公式）。外部タイル未設定時に既定として使用し、
+# マップ非表示（背景タイル欠落）を解消する。利用規約: https://maps.gsi.go.jp/development/ichiran.html
+GSI_TILE_URL = "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png"
+GSI_TILE_ATTRIBUTION = "国土地理院"
+
 
 def _tile_url_setting():
     raw = os.environ.get("CW_TILE_URL")
     if raw is None:
-        return None
+        return GSI_TILE_URL  # 未設定時は国土地理院を既定（本番systemdも明示設定に更新済み）
     raw = raw.strip()
     if raw.lower() in {"", "none", "off", "disabled"}:
         return ""
@@ -76,16 +81,15 @@ def _tile_url_setting():
 def _tile_attribution_setting():
     raw = os.environ.get("CW_TILE_ATTRIBUTION")
     if raw is None:
-        return None
+        return GSI_TILE_ATTRIBUTION
     return raw.strip()
 
 
 def config_script():
     tile = _tile_url_setting()
     tile_attr = _tile_attribution_setting()
-    tile_js = "" if tile is None else "window.__CW_TILE_URL__=" + json.dumps(tile) + ";"
-    if tile_attr is not None:
-        tile_js += "window.__CW_TILE_ATTRIBUTION__=" + json.dumps(tile_attr) + ";"
+    tile_js = "window.__CW_TILE_URL__=" + json.dumps(tile) + ";"
+    tile_js += "window.__CW_TILE_ATTRIBUTION__=" + json.dumps(tile_attr) + ";"
     return CFG_TEMPLATE % tile_js
 
 

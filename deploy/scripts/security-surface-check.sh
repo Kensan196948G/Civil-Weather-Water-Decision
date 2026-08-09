@@ -132,6 +132,10 @@ assert_frontend_security_headers() {
   assert_header_contains "$name" "$headers" "^content-security-policy-report-only:.*default-src 'self'"
   assert_header_contains "$name" "$headers" "^content-security-policy-report-only:.*frame-ancestors 'none'"
   assert_header_contains "$name" "$headers" '^content-security-policy-report-only:.*connect-src .*http://127\.0\.0\.1:\*'
+  assert_header_contains "$name" "$headers" '^content-security-policy-report-only:.*img-src .*https://cyberjapandata\.gsi\.go\.jp'
+  if tr -d '\r' < "$headers" | grep -Eq '\[\:\:1\]'; then
+    fail "$name CSP contains invalid IPv6 loopback source '[::1]'" 3
+  fi
 }
 
 while [[ $# -gt 0 ]]; do

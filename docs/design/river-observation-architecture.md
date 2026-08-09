@@ -4,14 +4,15 @@
 
 プロジェクト名の中核である「河川・水位」の自動取得を、段階的に実装するための設計。
 
-2026-08 時点の到達点:
+2026-08-09 時点の到達点:
 
 - ✅ 観測所マスタ（`observation_stations`）
 - ✅ 現場との多対多紐付け（`site_stations`。上流/最寄り/参照 の区分）
 - ✅ 実測値の保存・時系列API（`river_observations`。手動入力）
 - ✅ API応答とUIで「自動取得は未接続」を明示
 - ✅ 判定エンジンへの実測値組み込み（#112: 水位トレンド・上流雨量・STALE→レベル3）
-- ❌ 自動取得プロバイダ（水防災オープンデータ提供サービス等）の接続
+- ✅ デモ自動取得プロバイダ（`DEMO-RIVER`・10分間隔・`data_source_statuses` 反映）
+- ❌ 公式自動取得プロバイダ（水防災オープンデータ提供サービス等）の接続
 
 ## 2. 設計原則
 
@@ -90,6 +91,8 @@ inactive にし、`site_stations` を張り替える運用とする（履歴は�
 ```text
 ObservationProvider (interface)
   ├─ ManualProvider      … 現行（API経由の手動入力）
+  ├─ DemoRiverProvider   … デモ・シミュレーション（2026-08-09 実装。決定的な水位・雨量を
+  │                         10分間隔で自動投入。`source=DEMO-RIVER`、UI/APIに「デモ」と明示）
   ├─ SuibosaiOpenProvider … 水防災オープンデータ提供サービス（本番候補・有償契約）
   └─ (将来) PrefectureProvider … 都道府県が公開するAPI/XML
 ```
@@ -113,6 +116,16 @@ ObservationProvider (interface)
   最終取得成功・失敗連続回数・応答時間を `data_source_statuses` へ記録する。
 - 取得失敗・遅延時は `quality=STALE/ERROR` の行を保存し、判定エンジンは「確認不能」へ導く。
 - 契約・利用条件・コストの確定までは接続しない（Open-Meteo と同様に法務確認が必要）。
+
+### デモ自動取得（2026-08-09 追加）
+
+- `backend/app/services/data_collectors/river_collector.py` に実装。
+- デモ観測所（`source_id=DEMO-RIVER`・`station_code=DEMO-Sxx-*`）を seed とスケジューラで
+  冪等に整備し、河川現場（S01/S05/S07/S09/S13）へ上流・最寄りで紐付け。
+- 10分粒度の決定的なシミュレーション値（水位・雨量）を upsert し、`DS-RIVER-DEMO` を OK に更新。
+- API応答は `automatic=true` かつ provider に「デモ自動取得（DEMO-RIVER・シミュレーション）。
+  公式の水防災オープンデータ提供サービスは未接続」と明示。画面にも同旨を表示する。
+- 公式サービス接続後は、デモプロバイダを無効化（`RIVER_DEMO_ENABLED=false`）して切替える。
 
 ## 6. 判定エンジンへの組み込み（#112: 実装済み）
 
@@ -138,15 +151,16 @@ ObservationProvider (interface)
 - [x] 観測所マスタ CRUD＋一意制約＋無効化
 - [x] 現場紐付け（upstream/nearest/reference）と重複・上限制御
 - [x] RBAC（書き込み admin/tech_manager、削除 admin）と監査
-- [ ] 自動取得プロバイダの接続
-- [ ] 観測所マスタの初期データ投入（対象河川・観測所コードの現地調査）
+- [x] デモ自動取得プロバイダ（DEMO-RIVER）とデモ観測所の初期投入
+- [ ] 公式自動取得プロバイダの接続（有償契約）
+- [ ] 公式観測所マスタの初期データ投入（対象河川・観測所コードの現地調査）
 
 ### #31 河川観測取り込み・時系列API・画面
 
 - [x] 実測値の保存・時系列API（手動入力）
-- [x] 河川観測画面（自動取得未接続の明示＋手動登録）
+- [x] 河川観測画面（全国マップ・デモ自動取得明示・最新値・手動登録）
 - [x] 判定エンジンへの実測値組み込み（水位トレンド・上流雨量・STALE→レベル3）
-- [ ] 自動取得ジョブと `data_source_statuses` への反映
+- [x] デモ自動取得ジョブと `data_source_statuses` への反映（DS-RIVER-DEMO）
 - [ ] 水位基準線（氾濫注意/避難判断/氾濫危険）の表示
 - [ ] 上流雨量の到達時間表示（流域・距離・流速からの概算）
 

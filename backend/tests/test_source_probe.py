@@ -56,3 +56,30 @@ async def test_probe_all_updates_rows(client):
             # プローブ対象外（水防災オープン）は更新されない
             wo = db.get(DataSourceStatus, "DS-WATER-OPEN")
             assert wo.status == "Error"
+
+
+@pytest.mark.asyncio
+async def test_probe_all_without_client_creates_fresh_client(client, monkeypatch):
+    """プローブは実行ごとに新しいクライアントを使う（共有クライアント劣化対策）。"""
+    import app.services.data_collectors.source_probe as sp
+    from app.core.db import SessionLocal
+
+    calls = {"n": 0}
+    captured_headers = {}
+    orig = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        calls["n"] += 1
+        captured_headers.update(kwargs.get("headers") or {})
+
+        def handler(req):
+            return httpx.Response(200)
+
+        return orig(transport=httpx.MockTransport(handler), *args, **kwargs)
+
+    monkeypatch.setattr(sp.httpx, "AsyncClient", factory)
+    with SessionLocal() as db:
+        res = await sp.probe_all(db)
+    assert calls["n"] == 1
+    assert "DS-OPEN-METEO" in res
+    assert "User-Agent" in captured_headers

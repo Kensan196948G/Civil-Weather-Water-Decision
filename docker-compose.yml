@@ -43,7 +43,8 @@ services:
     environment:
       PORT: "3000"
       HOST: "0.0.0.0"
-      CW_TILE_URL: "none"
+      CW_TILE_URL: "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png"
+      CW_TILE_ATTRIBUTION: "国土地理院"
       CW_BACKEND_PROXY_BASE: "http://backend:8000"
       CW_BACKEND_PROXY_ALLOWED_HOSTS: "backend"
     ports:

@@ -16,6 +16,12 @@ from ...models import DataSourceStatus
 
 JST = timezone(timedelta(hours=9))
 SLOW_MS = 1500  # これを超える応答は Warning（遅延）
+PROBE_HEADERS = {
+    # 一部の公式サイト（river.go.jp 等）はbot既定UAを拒否するため、ブラウザ相当UAで
+    # トップページ疎通のみ行う（スクレイピングはしない。プローブはliveness確認のみ）
+    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 CWWD-Probe/0.3"),
+}
 
 # source_id -> liveness 確認用 公開URL（認証不要）。ここに無いソースはプローブしない。
 PROBE_TARGETS = {
@@ -54,7 +60,11 @@ async def probe_all(db, client: httpx.AsyncClient | None = None) -> dict:
     """PROBE_TARGETS を順に疎通し DataSourceStatus を更新。結果サマリを返す。"""
     own = client is None
     if own:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(
+            timeout=settings.probe_timeout_seconds,
+            follow_redirects=True,
+            headers=PROBE_HEADERS,
+        )
     now = datetime.now(JST).strftime("%m/%d %H:%M")
     results = {}
     try:

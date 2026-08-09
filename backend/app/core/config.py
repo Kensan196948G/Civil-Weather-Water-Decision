@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     notification_dispatch_seconds: int = Field(default=300, gt=0)  # 外部通知/ログ通知も5分ごと
     notification_dedup_seconds: int = Field(default=3600, ge=0)  # 同一通知は1時間抑止（0で無効化）
     probe_timeout_seconds: int = 8
+    # 河川観測デモ自動取得（#31 拡張）。水防災オープンデータ提供サービスの接続前は
+    # 決定的シミュレーション値を自動投入し、公式未接続であることをUI/APIで明示する。
+    river_demo_enabled: bool = True
+    river_refresh_seconds: int = 600
 
     # 運用監視スナップショット（#95）。deploy/scripts/ops-status-json-export.sh が書き出す
     # secret-free な systemd 状態JSONの読み出し元。鮮度チェックの許容秒数も併せて設定。
