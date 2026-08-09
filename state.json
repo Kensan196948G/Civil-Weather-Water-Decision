@@ -45,8 +45,8 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 432,
-    "frontend_tests_total": 74,
+    "backend_tests_total": 454,
+    "frontend_tests_total": 77,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
@@ -112,6 +112,31 @@
     "issues": {
       "fixed": [74],
       "tightened": ["run_collectors RBAC"]
+    }
+  },
+  "release_2026_08_09": {
+    "title": "海象データ全国版・海上作業判定の正式画面化とAI設定DeepSeek化",
+    "pr": 133,
+    "tag": "v0.3.0",
+    "merge_commit": "edb61252c30c734ef7b66ef936b4dd0e1291b249",
+    "merged_at": "2026-08-09T05:19:43Z",
+    "deployed_at": "2026-08-09T14:18:00+09:00",
+    "deployment": "main反映(edb6125) + systemd再起動(cwwd-backend/cwwd-frontend) + app-health-check PASS",
+    "migration": "なし（汎用key-value利用。seedがmarine作業種別とDS-OPEN-METEO-MARINEを本番DBへ冪等追補、alembic_version=h1i2j3k4l5m6）",
+    "ci": "PR #133 全5ジョブ success / main merge commit CI success",
+    "smoke": {
+      "health": "200 OK",
+      "readyz": "200 OK",
+      "frontend": "200 OK（data-adapterにmarineNational/evaluateMarine/AI provider反映）",
+      "public_url": "302（Cloudflare Access）",
+      "work_types": "marine（海上作業）を含む7種",
+      "marine_national": "16現場・waveHeight/wavePeriod/levelLabel取得、source=DS-OPEN-METEO-MARINE",
+      "ai_settings": "provider=deepseek（キー未設定のためconfigured=false）",
+      "monitoring": "failed cwwd units 0件、ops-status ok"
+    },
+    "incident": "再起動直後にcwwd-app-health-checkがタイムアウト1回（再起動ウィンドウの一時事象）。手動再実行でSUCCESS、以降failedなし",
+    "issues": {
+      "advanced": [72]
     }
   },
   "session": {
