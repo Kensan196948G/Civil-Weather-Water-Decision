@@ -4,7 +4,7 @@
     "repository": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision.git",
     "registered_at": "2026-06-19",
     "release_deadline": "2026-12-19",
-    "current_phase": "Phase 2 進行中（本番運用準備整備済み・v0.2.1反映。外部連携・受入試験は残）",
+    "current_phase": "Phase 2 進行中（v0.4.0反映: マップ詳細表示・河川観測デモ自動取得・50年確率波・データソースプローブ修正。外部連携・受入試験は残）",
     "milestones": {
       "M0_foundation_ready": "2026-07-02 (達成済み)",
       "M1_poc_demoable": "2026-07-30",
@@ -45,8 +45,8 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 454,
-    "frontend_tests_total": 77,
+    "backend_tests_total": 461,
+    "frontend_tests_total": 78,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
@@ -137,6 +137,32 @@
     "incident": "再起動直後にcwwd-app-health-checkがタイムアウト1回（再起動ウィンドウの一時事象）。手動再実行でSUCCESS、以降failedなし",
     "issues": {
       "advanced": [72]
+    }
+  },
+  "release_2026_08_09_v040": {
+    "title": "マップ詳細表示・河川観測デモ自動取得・50年確率波・データソースプローブ修正",
+    "pr": 135,
+    "tag": "v0.4.0",
+    "merge_commit": "5da68f4a361f502344e83f16de3944008abefa43",
+    "merged_at": "2026-08-09T07:31:02Z",
+    "deployed_at": "2026-08-09T16:31:00+09:00",
+    "deployment": "main反映(5da68f4) + systemd unit再適用(フロントCW_TILE_URL=国土地理院) + cwwd-backend/cwwd-frontend再起動 + 管理者でcollectors/run実行",
+    "migration": "なし（既存テーブル利用。seedがデモ観測所10件とDS-RIVER-DEMOを本番DBへ冪等追補、alembic_version不変）",
+    "ci": "PR #135 全5ジョブ success / main merge commit CI success",
+    "smoke": {
+      "health": "200 OK",
+      "readyz": "200 OK",
+      "frontend": "200 OK（GSIタイルURL注入・CSP修正反映）",
+      "public_url": "302（Cloudflare Access）",
+      "data_sources": "プローブ9系統すべてOK（fails=0、lastOk=08/09 16:33）。DS-WATER-OPENのみ意図的にError（有償未契約）",
+      "river_demo": "DS-RIVER-DEMO OK / S01 automatic=true、DEMO-RIVER実測（水位1.26/1.42m）",
+      "return_periods": "16地点・H50/H100取得（Gumbel/Weibull・dataType=synthetic）",
+      "ai_settings": "provider=deepseek / configured=true / ****979c / ai/test ok=true（deepseek-v4-flash/pro）",
+      "monitoring": "systemd drift changed_units=0（missing_units=4は既知のオフサイト転送unit未適用）"
+    },
+    "issues": {
+      "advanced": [72],
+      "related": [29, 31, 79]
     }
   },
   "session": {

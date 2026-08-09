@@ -1,5 +1,46 @@
 # リリースノート / Release Notes
 
+## 2026-08-09 — マップ詳細表示・河川観測デモ自動取得・50年確率波・データソース修正（PR #135 / v0.4.0）
+
+### 変更内容
+
+- **マップ表示の全面改善**: 本番 systemd / docker-compose / serve.py に
+  国土地理院 標準地図タイル（APIキー不要・公式）を設定し、タイル背景なしによる
+  「マップが表示されない」状態を解消。ダッシュボード・現場詳細・作業判断
+  （コンクリート打設）・海象全国版・WBGT・河川観測・50年確率波の全マップを
+  詳細出力化（現場の気象/河川/観測所最新値ポップアップ・観測所凡例・リスク色）。
+- **河川観測（#31 拡張）**: `DEMO-RIVER` デモ自動取得プロバイダを実装。
+  10分間隔で決定的な水位・雨量を自動投入し、`DS-RIVER-DEMO` を OK 表示。
+  観測所マスタ（S01/S05/S07/S09/S13）を冪等シードし、API/UI に「デモ自動取得
+  （公式の水防災オープンデータ提供サービスは未接続）」と明示。
+- **50年確率波（#72 段7）**: Gumbel / Weibull 極値統計解析（デモ・シミュレーション）を
+  `GET /api/marine/return-periods` として実装し、「50年確率波」画面を正式化
+  （全国マップ・H50/H100 表・手法説明・設計利用不可の警告）。
+- **データソース状態の修正**: スケジューラの共有 HTTPX クライアント再利用による
+  接続プール劣化で全ソース Error 化（fails≈823）していた問題を修正。
+  プローブは実行ごとに新規クライアント＋ブラウザ相当 UA で実施。
+- **CSP 修正**: 無効な `http://[::1]:*` ソースを除去し、国土地理院タイル
+  （img-src）と Cloudflare Insights beacon（script-src）を許可（report-only 維持）。
+
+### 検証結果
+
+| 項目 | 結果 |
+| --- | --- |
+| backend pytest | 461 passed |
+| frontend node tests | adapter契約 51 passed / logic 21 passed / policy系 6 passed |
+| E2E / 地図回帰 | e2e smoke PASS / map_repro（ダッシュ16・現場詳細5+path・判断・海象16）PASS |
+| CI（PR #135） | 全5ジョブ success |
+| 本番反映 | 2026-08-09 16:31 JST、main反映（5da68f4）＋ systemd再起動 |
+| 本番スモーク | health/readyz 200、frontend 200、public 302（Access）、
+  データソース9系統OK（fails=0）、DS-RIVER-DEMO OK、河川 automatic=true（DEMO-RIVER）、
+  return-periods 16地点、ai_provider=deepseek / ai/test ok=true（deepseek-v4-flash/pro） |
+| 本番DB | マイグレーションなし。seed がデモ観測所10件・DS-RIVER-DEMO を冪等追補 |
+
+### 残課題
+
+- 公式の水防災オープンデータ提供サービス（有償・契約）の接続
+- NOWPHAS 実測データの蓄積と実測ベースの50年確率波・潮位（気象庁）接続
+
 ## 2026-08-09 — 海象データ全国版・海上作業判定の正式画面化と地図表示改善（PR #133 / v0.3.0）
 
 ### 変更内容
