@@ -1,6 +1,6 @@
 # リリースノート / Release Notes
 
-## 2026-08-09 — 海象データ全国版・海上作業判定の正式画面化と地図表示改善（Draft PR）
+## 2026-08-09 — 海象データ全国版・海上作業判定の正式画面化と地図表示改善（PR #133 / v0.3.0）
 
 ### 変更内容
 
@@ -26,6 +26,10 @@
 | backend pytest | 454 passed |
 | frontend node tests | adapter 50 passed / logic 21 passed / policies PASS |
 | セキュリティ | 秘密値・APIキーの応答/監査非露出をテストで継続確認 |
+| CI（PR #133） | 全5ジョブ success（main merge commit も success） |
+| 本番反映 | 2026-08-09 14:18 JST、main反映（edb6125）＋ systemd再起動（cwwd-backend/cwwd-frontend） |
+| 本番スモーク | health/readyz 200、frontend 200、public 302（Access）、marine/national 16現場・waveHeight取得、ai_provider=deepseek、health-check PASS |
+| 本番DB | `marine` 作業種別・`DS-OPEN-METEO-MARINE` 追加（migrationなし、alembic_version=h1i2j3k4l5m6） |
 
 ### 残課題
 
