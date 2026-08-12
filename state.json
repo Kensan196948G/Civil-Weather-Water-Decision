@@ -33,8 +33,8 @@
       "note": "2026-07-12 Tunnel開通(人間実行)→同日夜にsystemd常駐化完了(Issue #77/PR #78・CTO実行・OS起動時自動起動・unit正本はdeploy/systemd/)。ポートは55019/34979で固定化済み(config-cwwd.ymlと一致)。Cloudflare Accessアプリ(cwwd)/ポリシー(CWWD)でエッジ防御(未認証302実測済)。残: 本番チェックリスト適用(APP_ENV=production/JWT_SECRET/SETTINGS_ENCRYPTION_KEY(#80新設)/ADMIN_PASSWORD/CORS絞り込み — 秘密登録のため人間実行)。注意: route dns/runは必ず--configでconfig-cwwd.ymlを明示(デフォルトconfig.ymlのonegate指定が優先される罠・実害確認済み)。",
       "systemd_persistent": true,
       "systemd_units": [
-        "cwwd-backend(0.0.0.0:55019)",
-        "cwwd-frontend(0.0.0.0:34979)",
+        "cwwd-backend(127.0.0.1:55019)",
+        "cwwd-frontend(127.0.0.1:34979)",
         "cwwd-tunnel"
       ],
       "systemd_applied_at": "2026-07-12"
@@ -45,7 +45,7 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 461,
+    "backend_tests_total": 462,
     "frontend_tests_total": 78,
     "security_critical": 0,
     "blocker_count": 0,
@@ -63,16 +63,47 @@
     "ci_main": "run 30995473428 全5ジョブ success",
     "incident": "alembic upgrade headをテストDB指定なしで実行し本番Neonへ先行適用(2026-08-05)。追加のみで無害・隠蔽せずPR #120へ記載。再発防止: DBコマンドはテストDB明示を必須化",
     "issues": {
-      "redesigned": [29, 31],
-      "created": [112, 113, 114, 115, 116, 117, 118, 119]
+      "redesigned": [
+        29,
+        31
+      ],
+      "created": [
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119
+      ]
     }
   },
   "release_2026_08_05_roadmap": {
     "title": "外部評価P0ロードマップ（#112〜#119）一括実装・本番反映",
-    "prs": [123, 122, 124, 125, 128, 129, 126, 127],
+    "prs": [
+      123,
+      122,
+      124,
+      125,
+      128,
+      129,
+      126,
+      127
+    ],
     "issues": {
-      "implemented": [112, 113, 117, 118],
-      "external_pending": [114, 115, 116, 119]
+      "implemented": [
+        112,
+        113,
+        117,
+        118
+      ],
+      "external_pending": [
+        114,
+        115,
+        116,
+        119
+      ]
     },
     "merged_at": "2026-08-05T21:35:00+09:00",
     "deployed_at": "2026-08-05T21:40:00+09:00",
@@ -110,8 +141,12 @@
     "deployment": "main反映(3cd3e34) + backend再起動 + smoke PASS",
     "monitoring": "drift-check ignore対応でオフサイトunit未適用でも監視OKに修正。failed_units=0を本番確認",
     "issues": {
-      "fixed": [74],
-      "tightened": ["run_collectors RBAC"]
+      "fixed": [
+        74
+      ],
+      "tightened": [
+        "run_collectors RBAC"
+      ]
     }
   },
   "release_2026_08_09": {
@@ -136,7 +171,9 @@
     },
     "incident": "再起動直後にcwwd-app-health-checkがタイムアウト1回（再起動ウィンドウの一時事象）。手動再実行でSUCCESS、以降failedなし",
     "issues": {
-      "advanced": [72]
+      "advanced": [
+        72
+      ]
     }
   },
   "release_2026_08_09_v040": {
@@ -161,8 +198,14 @@
       "monitoring": "systemd drift changed_units=0（missing_units=4は既知のオフサイト転送unit未適用）"
     },
     "issues": {
-      "advanced": [72],
-      "related": [29, 31, 79]
+      "advanced": [
+        72
+      ],
+      "related": [
+        29,
+        31,
+        79
+      ]
     }
   },
   "release_2026_08_09_v041": {
@@ -182,8 +225,35 @@
       "map_repro": "PASS（マーカー/パス件数変化なし）"
     },
     "issues": {
-      "related": [79]
+      "related": [
+        79
+      ]
     }
+  },
+  "session_2026_08_12_production_evaluation": {
+    "trigger": "プロジェクト総合評価と本番運用水準への改善（前セッションの未コミット差分を仕上げ・検証・PR化）",
+    "changes": [
+      "CIハードニング: 全ジョブへ timeout-minutes と permissions: contents: read を追加",
+      ".env.example: CORS本番制約コメントと SETTINGS_ENCRYPTION_KEY 案内を追加",
+      "systemd/cloudflared手順: loopback bind(127.0.0.1)と固定ポート55019/34979へ文書同期",
+      "docs/implementation-plan.md: 技術スタックを2026-08実態（ClaudeDesign/Neon/systemd/Tunnel）へ更新",
+      ".gitignore: .omo/ を追加（agentセッション状態をリポジトリ外へ）"
+    ],
+    "verification": {
+      "backend_pytest": "PASS (462 passed・隔離DBで並行プロセス影響なし)",
+      "ruff": "PASS",
+      "frontend_tests": "PASS (logic 21 + adapter 51 + api-config 3 + policy系)",
+      "docker_compose_config": "PASS",
+      "docker_build": "PASS (backend/frontend)",
+      "pip_audit": "PASS (known vulnerabilities 0)",
+      "ci_yml_yaml": "PASS"
+    },
+    "notes": "初回ローカル実行で23件失敗したが、並行エージェントが同一 backend/_test_cw.db を共有した状態汚染と判明。隔離ディレクトリで再実行し全PASS。",
+    "pr": "PR #139（Ready for Review・CI全green）",
+    "residual": [
+      "AGENTS.md / CLAUDE.md はユーザー所有の未追跡ファイルとして残置（本PR対象外）",
+      "OIDC切替・通知webhook・外部死活監視・オフサイト転送・Open-Meteo契約確定は従来どおり残課題"
+    ]
   },
   "session": {
     "last_phase": "Monitor",
@@ -402,5 +472,31 @@
       "main_ci": "PASS (#110/#98マージ後のmain CI green)",
       "ops": "PASS (failed units 0, ops-status ok, edge 302)"
     }
+  },
+  "evaluation_2026_08_12": {
+    "title": "統合評価・改善（18基準スコア・競合代替率・本番seedガード・#85現場別リンク・Open-Meteo帰属表示・評価書）",
+    "score_before": 64.8,
+    "score_after": 65.7,
+    "replacement_rate": "50.5% -> 53.1% (加重)",
+    "overall_judgment": "条件付き利用可",
+    "changes": [
+      "本番シードガード: SEED_DEMO_DATA 未設定時は local のみデモデータ投入（本番新規DBへのデモ現場・履歴・リンク投入を抑止）",
+      "現場詳細の公式リンクを GET /api/sites/{id}/links から表示（#85・静的フォールバック付き）",
+      "Open-Meteo 帰属表示（CC BY 4.0）をUI右下へ追加（#114のギャップ解消）",
+      "並行pytestの共有テストDB競合を flock で直列化",
+      "docs/evaluation/2026-08-12-integrated-evaluation.md 追加（スコア・競合比較・改善計画・ロードマップ）"
+    ],
+    "verification": {
+      "backend_pytest": "PASS (463 passed)",
+      "ruff": "PASS",
+      "frontend_tests": "PASS (logic 21 + adapter-contract 53 + policy系)",
+      "docker_build": "PASS (backend/frontend)",
+      "pip_audit": "PASS (known vulnerabilities 0)"
+    },
+    "pr": "PR #139（本番運用水準改善: CI/文書/seedガード/#85リンク/帰属表示/評価書）",
+    "residual": [
+      "#114 Open-Meteo商用契約承認 / #115 オフサイト転送 / #116 外部死活監視 / #119 P0受入試験",
+      "河川公式データ接続・通知実送信・Entra OIDC有効化・モバイル/PWA・AI機能は次フェーズ"
+    ]
   }
 }

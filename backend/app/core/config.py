@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     ops_status_json_path: str = "/var/lib/cwwd/ops-status.json"
     ops_status_json_max_age_seconds: int = 3600
 
+    # デモ・サンプルデータ（現場・作業予定・判断履歴・公式リンク等）を seed するか。
+    # 未設定(None)の場合は local のみ true、本番(app_env != local)は false と解釈する。
+    # 本番の新規DBへデモ現場を誤投入しないための安全側既定（評価 2026-08-12 対応）。
+    # 検証環境で明示的にデモデータが必要な場合は SEED_DEMO_DATA=true を設定する。
+    seed_demo_data: bool | None = None
+
     @model_validator(mode="after")
     def _guard_production(self):
         previous_keys = [

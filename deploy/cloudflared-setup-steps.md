@@ -43,14 +43,14 @@ cloudflared tunnel create cwwd-civil-weather-water
 
 ## 2. backend / frontend のポート固定
 
-現状は両サーバーとも起動のたびに空きポートが動的採番される（衝突回避のための意図的な設計。
-`backend/README.md` 参照）。systemd 常駐化する場合は固定ポートに切り替える。
+本番は systemd 常駐（`deploy/systemd/`）により固定ポートで起動している。手動起動時も
+Tunnel ingress と一致する固定ポートを指定すること。
 
 - backend: `python3 -m uvicorn app.main:app --host 127.0.0.1 --port <BACKEND_PORT>`
 - frontend: `PORT=<FRONTEND_PORT> python3 serve.py`
 
-他プロジェクトのポート使用状況と衝突しない値を選ぶこと（8000はCivilPDF-DX使用中で使用不可、
-本セッションでは backend=55019 / frontend=34979 が一時的に空いていたがこれは固定割当ではない）。
+本プロジェクトの固定値は backend=55019 / frontend=34979（`deploy/systemd/` と
+`~/.cloudflared/config-cwwd.yml` の実値。8000はCivilPDF-DX使用中で使用不可）。
 
 ## 3. cloudflared-config.yml の本番化
 

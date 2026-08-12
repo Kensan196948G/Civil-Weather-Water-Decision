@@ -19,7 +19,7 @@
     var bump = opts.bump || function () {};
     var _open = opts.open || function () {};
     var CW = { sites: null, meta: null, metaLoaded: false, dashboardError: null,
-      sources: null, history: null, series: {}, stations: {}, result: null, ver: 0 };
+      sources: null, history: null, series: {}, stations: {}, links: {}, result: null, ver: 0 };
 
     function url(p) { return base + p; }
     function esc(s) {
@@ -105,6 +105,21 @@
       for (var id in stations) { if (stations[id]) s[id] = stations[id]; }
       return s;
     }
+    // 公式リンク種別 → 補足説明（#85: 現場別 site_links を UI へ反映）
+    function linkNote(kind) {
+      return {
+        river: "川の防災情報 — 水位・洪水予報",
+        weather: "気象庁等 — 警報・注意報",
+        wbgt: "環境省 — 暑さ指数",
+        disaster: "防災情報",
+        other: "公式サイト"
+      }[kind] || "公式サイト";
+    }
+    function mapSiteLinks(list) {
+      return (list || []).map(function (x) {
+        return { label: x.label, url: x.url, note: linkNote(x.kind) };
+      });
+    }
     function mapSources(src) {
       return (src || []).map(function (d) {
         var m = d.status === "OK" ? { color: "#2e7d32", bg: "#e7f3e9", border: "#bcdcc0", dot: "#2e7d32" }
@@ -159,6 +174,10 @@
           });
         }
       }).catch(function () {});
+      // 現場別 公式リンク（#85: API site_links を公式情報リンク一覧へ反映）
+      var links = j("/api/sites/" + id + "/links")
+        .then(function (list) { CW.links[id] = mapSiteLinks(list); })
+        .catch(function () { CW.links[id] = null; });
       // 観測所は正規化マスタ（observation-stations: 最新実測・コード・種別付き）を優先し、
       // 旧 stations API をフォールバックに使う（#29/#31 対応。詳細マップ出力用）
       var stations = j("/api/sites/" + id + "/observation-stations")
@@ -189,7 +208,7 @@
             }).filter(function (st) { return st.d && st.d[0] != null && st.d[1] != null; });
           }).catch(function () {});
         }); // 観測所ピンは補助表示のため、取得失敗時も現場詳細自体は表示を継続
-      return Promise.all([detail, stations]).then(bump);
+      return Promise.all([detail, stations, links]).then(bump);
     }
     function loadAll() {
       return loadDashboard().then(function () {
@@ -210,6 +229,20 @@
       });
     }
 
+    // Open-Meteo 帰属表示（CC BY 4.0）。利用条件確認書 #114 の「帰属表示」ギャップ解消。
+    // 画面右下へ一度だけ注入する（DOM の無い Node テストでは何もしない）。
+    function ensureOpenMeteoAttribution() {
+      if (typeof document === "undefined" || !document.body) return;
+      if (document.getElementById("cw-open-meteo-attribution")) return;
+      var el = document.createElement("div");
+      el.id = "cw-open-meteo-attribution";
+      el.style.cssText = "position:fixed;right:8px;bottom:6px;z-index:9999;" +
+        "font-size:9px;line-height:1.35;color:#5f7081;background:rgba(255,255,255,.88);" +
+        "padding:3px 7px;border-radius:6px;border:1px solid #e2e8ee;pointer-events:none;";
+      el.textContent = "気象・海象データの一部: Open-Meteo (CC BY 4.0) ／ 地図タイル: 国土地理院";
+      document.body.appendChild(el);
+    }
+
     // ---- プロトタイプ・パッチ ----
     function patch(proto) {
       if (proto.__cwPatched) return;
@@ -226,6 +259,13 @@
         if (CW.history) this.state.history = CW.history; // 判断履歴
         var vals = origRender.call(this);
         if (CW.sources) vals.sources = mapSources(CW.sources); // データソース状態
+        // 現場詳細の公式リンクは API site_links を優先（#85）。未登録/取得失敗は
+        // dc.html 既定の静的公式リンクへフォールバック（導線を消さない）。
+        var sid = this.state.siteId;
+        if (sid && CW.links && CW.links[sid] && CW.links[sid].length) {
+          vals.links = CW.links[sid];
+        }
+        ensureOpenMeteoAttribution();
         vals.exportCsv = function () { try { _open(url("/api/decision-logs/export.csv"), "_blank"); } catch (e) {} };
         // 指定ラベルのナビを非表示（例: 「現場詳細」はナビタブを廃しダッシュボードからのドリルダウン専用に）
         if (opts.hideNav && vals.nav && vals.nav.filter) {

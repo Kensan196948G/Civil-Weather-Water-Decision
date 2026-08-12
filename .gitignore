@@ -53,3 +53,6 @@ logs/
 *.log
 tmp/
 .cache/
+
+# ---- Codex / agent session state ----
+.omo/

@@ -91,6 +91,11 @@ function fetchMock(u, opts) {
         rel: "nearest", sortOrder: 1,
         latest: { waterLevelM: 1.82, rainfallMmH: 0.0, observedAt: "2026-08-09 12:30:00",
                   source: "DEMO-RIVER" } }] };
+  } else if (u.indexOf("/api/sites/S05/links") >= 0) {
+    data = []; // リンク未登録現場: 静的公式リンクへフォールバックする検証用
+  } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/links") >= 0) {
+    data = [{ id: "SL901", siteId: "S01", label: "川の防災情報（現場別）",
+              url: "https://www.river.go.jp/", kind: "river", sortOrder: 1 }];
   } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/stations") >= 0) {
     data = [{ id: "ST1", name: "北川 護岸地点 水位観測所", type: "river", rel: "最寄り", lat: 35.766, lon: 139.776 }];
   } else if (u.indexOf("/api/sites/") >= 0) {
@@ -193,6 +198,17 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
     && c.STATIONS.S01[0].d[0] === 35.766 && c.STATIONS.S01[0].d[1] === 139.776,
     "観測所の lat/lon が d:[lat,lon] 形式にマッピングされる");
   ok(Array.isArray(c.STATIONS.S06), "未取得の現場は既存(モック)の STATIONS を保持（S06="+ (c.STATIONS.S06 && c.STATIONS.S06.length) +"件）");
+
+  // 現場別 公式リンク（#85）: API site_links を表示し、未登録は静的公式リンクへフォールバック
+  c.state = Object.assign({}, c.state, { screen: "site", siteId: "S01" });
+  v = c.renderVals();
+  ok(v.links && v.links.length === 1 && v.links[0].label === "川の防災情報（現場別）"
+    && v.links[0].url.indexOf("river.go.jp") >= 0,
+    "site links が GET /api/sites/{id}/links 由来（#85）: " + (v.links && v.links[0].label));
+  c.state = Object.assign({}, c.state, { siteId: "S05" });
+  v = c.renderVals();
+  ok(v.links && v.links.length === 4,
+    "リンク未登録の現場は静的公式リンクへフォールバック（S05=" + (v.links && v.links.length) + "件）");
 
   // 50年確率波: API 由来の H50/H100 を取得
   const rp = await adapter.returnPeriods();

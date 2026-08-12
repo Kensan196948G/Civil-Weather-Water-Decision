@@ -64,6 +64,7 @@ Construction Weather & Water Decision Support
 - [インシデント対応 Runbook](./docs/ops/runbook.md)
 - [定期保守・ライフサイクル管理](./docs/ops/maintenance.md)
 - [リリースノート](./docs/release-notes.md)
+- [統合評価・改善報告書（2026-08-12）](./docs/evaluation/2026-08-12-integrated-evaluation.md)
 
 ## システム構成 / Architecture
 
@@ -149,7 +150,7 @@ LAN 直アクセスは不要な公開面になるため既定で無効です（�
 | フェーズ | Phase 2 進行中（Phase 1 MVP完了・Phase 3 認証/監査/通知は大幅先行・Phase 4 CI/CD着手済み） |
 | 登録日 | 2026-06-19 |
 | 本番リリース期限 | 2026-12-19（登録から6ヶ月） |
-| テスト状況 | backend 461 / frontend 78（logic 21 + adapter契約 51 + policy系 6）、全pass（2026-08-09時点） |
+| テスト状況 | backend 462 / frontend 78（logic 21 + adapter契約 51 + policy系 6）、全pass（2026-08-12時点） |
 | CI | GitHub Actions（backend lint+test / 依存脆弱性スキャン / frontend test / docker build） |
 
 ### 河川観測のステータス

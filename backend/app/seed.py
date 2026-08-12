@@ -146,6 +146,13 @@ def _sync_production_users(db: Session) -> None:
 def seed(db: Session) -> None:
     if settings.app_env != "local":
         _sync_production_users(db)
+    # デモ・サンプルデータ投入の可否。未設定は local のみ true（本番の新規DBに
+    # デモ現場・判断履歴を入れない安全側既定。評価 2026-08-12 対応）。
+    demo_ok = (
+        settings.seed_demo_data
+        if settings.seed_demo_data is not None
+        else settings.app_env == "local"
+    )
     # 作業種別・データソースは「既投入でも不足分を追補」する冪等 upsert（#72 段5:
     # 既存本番DBへ marine 種別・海洋ソースを追加してもシード済み判定で無視されない）
     has_any_wt = db.scalar(select(WorkType).limit(1)) is not None
@@ -169,24 +176,25 @@ def seed(db: Session) -> None:
             river_collector.ensure_demo_stations(db)
         db.commit()
         return  # 既投入DB: 不足種別・ソースの追補のみ行い、サンプルデータは再投入しない
-    for (sid, code, name, loc, lat, lon, work, proj, rflag, rstate, rnote, flood, mgr) in SITES:
-        db.add(Site(id=sid, site_code=code, name=name, loc=loc, latitude=lat, longitude=lon,
-                    work_type=work, project_type=proj, river_work_flag=rflag, river_state=rstate,
-                    river_note=rnote, flood_info=flood, manager=mgr))
-        for i, (sname, stype, srel, slat, slon) in enumerate(STATIONS.get(sid, []), 1):
-            db.add(Station(id=f"{sid}-ST{i}", site_id=sid, name=sname, type=stype, rel=srel,
-                           latitude=slat, longitude=slon))
-    for (pid, sid, wt, title, st, en, con) in PLANS:
-        db.add(WorkPlan(id=pid, site_id=sid, work_type=wt, title=title,
-                        planned_start=st, planned_end=en, contractor=con))
-    for (lid, sid, label, url, kind, order) in SITE_LINKS:
-        db.add(SiteLink(id=lid, site_id=sid, label=label, url=url, kind=kind, sort_order=order))
-    # 新規DBでは現場投入後にデモ観測所と紐付けを投入（現場が存在する状態で1回だけ実行）
-    if settings.river_demo_enabled:
-        river_collector.ensure_demo_stations(db)
-    for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
-        db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
-                           action=act, comment=comment, decided_by=by, decided_at=dt))
+    if demo_ok:
+        for (sid, code, name, loc, lat, lon, work, proj, rflag, rstate, rnote, flood, mgr) in SITES:
+            db.add(Site(id=sid, site_code=code, name=name, loc=loc, latitude=lat, longitude=lon,
+                        work_type=work, project_type=proj, river_work_flag=rflag, river_state=rstate,
+                        river_note=rnote, flood_info=flood, manager=mgr))
+            for i, (sname, stype, srel, slat, slon) in enumerate(STATIONS.get(sid, []), 1):
+                db.add(Station(id=f"{sid}-ST{i}", site_id=sid, name=sname, type=stype, rel=srel,
+                               latitude=slat, longitude=slon))
+        for (pid, sid, wt, title, st, en, con) in PLANS:
+            db.add(WorkPlan(id=pid, site_id=sid, work_type=wt, title=title,
+                            planned_start=st, planned_end=en, contractor=con))
+        for (lid, sid, label, url, kind, order) in SITE_LINKS:
+            db.add(SiteLink(id=lid, site_id=sid, label=label, url=url, kind=kind, sort_order=order))
+        # 新規DBでは現場投入後にデモ観測所と紐付けを投入（現場が存在する状態で1回だけ実行）
+        if settings.river_demo_enabled:
+            river_collector.ensure_demo_stations(db)
+        for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
+            db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
+                               action=act, comment=comment, decided_by=by, decided_at=dt))
     # デモユーザー(admin/admin123 等)は local のみ。本番管理者は本関数冒頭の
     # _sync_production_users() で既に同期済み（#90 対抗レビュー critical-1: ここで再度
     # 呼ぶと同一主キー U01 の User が2件 pending になり commit 時に IntegrityError となる）。

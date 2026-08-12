@@ -10,6 +10,9 @@ jobs:
   backend:
     name: backend (lint + test)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
@@ -30,6 +33,7 @@ jobs:
   security:
     name: security (dependency scan)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     defaults:
@@ -51,6 +55,9 @@ jobs:
   frontend:
     name: frontend (logic + adapter tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -72,6 +79,9 @@ jobs:
   e2e-smoke:
     name: e2e smoke (browser login)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -88,6 +98,9 @@ jobs:
   docker-build:
     name: docker compose + build (smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
       - name: Validate compose config

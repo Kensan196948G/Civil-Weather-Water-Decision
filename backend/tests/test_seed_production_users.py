@@ -7,6 +7,7 @@ from app.core.db import Base
 from app.core.security import verify_password
 from app.models import User
 from app import seed as seed_module
+from app.models import DecisionLog, Site, SiteLink, WorkPlan
 
 
 def test_sync_production_users_updates_admin_and_disables_demo_users(monkeypatch):
@@ -60,4 +61,29 @@ def test_seed_production_first_boot_does_not_duplicate_admin(monkeypatch):
         assert admin.is_active is True
         assert verify_password("prod-boot-password", admin.password_hash)
         # 本番はデモユーザー(tanaka等)を作成しない
+        assert db.get(User, "U02") is None
+        # 本番の新規DBにはデモ現場・作業予定・判断履歴・公式リンクも投入しない
+        # （安全側既定: SEED_DEMO_DATA 未設定なら local のみデモデータ。評価 2026-08-12）
+        assert db.query(Site).count() == 0
+        assert db.query(WorkPlan).count() == 0
+        assert db.query(DecisionLog).count() == 0
+        assert db.query(SiteLink).count() == 0
+
+
+def test_seed_production_explicit_demo_data_is_allowed(monkeypatch):
+    """本番でも SEED_DEMO_DATA=true ならデモ現場は投入されるが、デモユーザーは作らない。"""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False)
+
+    monkeypatch.setattr(seed_module.settings, "app_env", "production")
+    monkeypatch.setattr(seed_module.settings, "admin_password", "prod-boot-password")
+    monkeypatch.setattr(seed_module.settings, "seed_demo_data", True)
+    with Session() as db:
+        seed_module.seed(db)
+
+        assert db.query(Site).count() == len(seed_module.SITES)
+        assert db.query(WorkPlan).count() == len(seed_module.PLANS)
+        assert db.query(DecisionLog).count() == len(seed_module.HISTORY)
+        # デモユーザーは local 限定のまま（本番は Entra 連携/個別管理を前提）
         assert db.get(User, "U02") is None
