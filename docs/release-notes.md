@@ -1,5 +1,39 @@
 # リリースノート / Release Notes
 
+## 2026-08-12 — 総合評価と本番運用水準へのブラッシュアップ（PR #139 / 評価改善PR）
+
+### 変更内容
+
+- **CI ハードニング**: 全ジョブに `timeout-minutes` と `permissions: contents: read` を追加（最小権限化）
+- **文書同期**: loopback バインド・固定ポート（55019/34979）・2026-08 実態の技術スタック
+  （ClaudeDesign / Neon / systemd / Cloudflare Tunnel+Access）を README・deploy・実装計画へ反映
+- **env 案内**: `SETTINGS_ENCRYPTION_KEY`（32バイト以上・JWT_SECRET と分離）のコメントを追加
+- **本番シードガード**: `SEED_DEMO_DATA` 未設定時は local のみデモデータを投入。
+  本番の新規DBにデモ現場・判断履歴・公式リンクを自動投入しない安全側既定に変更
+- **現場別 公式リンク表示（#85）**: 現場詳細の「公式情報の確認リンク」を
+  `GET /api/sites/{id}/links`（`site_links` マスタ）から表示。未登録現場は静的公式リンクへフォールバック
+- **Open-Meteo 帰属表示（CC BY 4.0）**: 画面右下へ「気象・海象データの一部: Open-Meteo
+  (CC BY 4.0) ／ 地図タイル: 国土地理院」を固定表示（利用条件確認書 #114 のギャップ解消）
+- **テスト安定化**: 並行 pytest 実行時の共有テストDB競合を flock で直列化
+- **評価書**: `docs/evaluation/2026-08-12-integrated-evaluation.md` を追加
+  （18基準スコア・競合比較・代替率・改善計画・ロードマップ）
+
+### 検証結果
+
+| 項目 | 結果 |
+|---|---|
+| backend pytest | 463 passed |
+| ruff | PASS |
+| frontend tests | logic 21 / adapter-contract 53 / policy系 PASS |
+| docker build / compose | PASS |
+| pip-audit | 既知脆弱性 0 |
+| CI（PR #139） | 5/5 success |
+
+### 残課題
+
+- Open-Meteo 商用利用条件の承認（#114）・外部死活監視（#116）・オフサイト転送（#115）・P0受入試験（#119）
+- 河川公式データ接続・通知実送信・Entra ID OIDC 有効化・モバイル/PWA・AI 機能
+
 ## 2026-08-09 — 左サイドメニューのアコーディオン化（PR #137 / v0.4.1）
 
 ### 変更内容

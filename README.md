@@ -64,6 +64,7 @@ Construction Weather & Water Decision Support
 - [インシデント対応 Runbook](./docs/ops/runbook.md)
 - [定期保守・ライフサイクル管理](./docs/ops/maintenance.md)
 - [リリースノート](./docs/release-notes.md)
+- [統合評価・改善報告書（2026-08-12）](./docs/evaluation/2026-08-12-integrated-evaluation.md)
 
 ## システム構成 / Architecture
 
