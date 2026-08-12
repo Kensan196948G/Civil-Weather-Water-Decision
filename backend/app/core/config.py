@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # 海洋予報（波高・周期・波向・うねり等）。Open-Meteo Marine API（無料・APIキー不要）。
     # NOWPHAS / 気象庁潮位の正式接続は利用条件確認後に別ソースとして追加する。
     open_meteo_marine_base_url: str = "https://marine-api.open-meteo.com/v1"
+    # NOWPHAS（国土交通省 全国港湾海洋波浪情報網）リアルタイム波浪・潮位。
+    # WMCDSS 統合（2026-08-12）で海象の公的一次情報として優先利用する。
+    nowphas_base_url: str = "https://nowphas.mlit.go.jp"
+    # 現場から最近傍観測局を選ぶ最大距離（km）。超過時は Open-Meteo へフォールバック。
+    nowphas_max_distance_km: float = 200.0
     data_fetch_timeout_seconds: int = 20
     data_fetch_retry_count: int = 3
 

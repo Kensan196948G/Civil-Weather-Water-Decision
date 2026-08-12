@@ -70,6 +70,7 @@ SAMPLE = {
 def client(monkeypatch):
     from app.services.data_collectors import open_meteo
     from app.services.data_collectors import marine
+    from app.services.data_collectors import nowphas
 
     async def fake_fetch(lat, lon, **kw):
         norm = open_meteo.normalize(SAMPLE)
@@ -101,6 +102,14 @@ def client(monkeypatch):
         return norm
 
     monkeypatch.setattr(marine, "fetch_marine", fake_marine)
+
+    async def fake_nowphas(lat, lon, **kw):
+        # テストでは NOWPHAS は「対象局なし」にし、既存経路（Open-Meteo）を維持。
+        # NOWPHAS 優先の検証は test_nowphas_collector.py 側で個別に行う。
+        return {"source_id": nowphas.SOURCE_ID, "points": [], "fetched_at": "2026-06-20T08:00:00Z",
+                "status": "NO_STATION", "error": "test stub"}
+
+    monkeypatch.setattr(nowphas, "fetch_nowphas", fake_nowphas)
 
     from app.services import assessment
     assessment.clear_cache()
