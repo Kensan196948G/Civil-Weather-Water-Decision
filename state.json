@@ -204,7 +204,7 @@
       "ci_yml_yaml": "PASS"
     },
     "notes": "初回ローカル実行で23件失敗したが、並行エージェントが同一 backend/_test_cw.db を共有した状態汚染と判明。隔離ディレクトリで再実行し全PASS。",
-    "pr": "chore/production-evaluation-20260812（Draft PR）",
+    "pr": "PR #139（Ready for Review・CI全green）",
     "residual": [
       "AGENTS.md / CLAUDE.md はユーザー所有の未追跡ファイルとして残置（本PR対象外）",
       "OIDC切替・通知webhook・外部死活監視・オフサイト転送・Open-Meteo契約確定は従来どおり残課題"
