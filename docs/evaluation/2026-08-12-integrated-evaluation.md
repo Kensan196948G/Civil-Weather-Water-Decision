@@ -3,7 +3,7 @@
 > 対象: Civil-Weather-Water-Decision（気象・河川・施工判断支援システム）
 > 評価日: 2026-08-12 / 評価者: Codex（CTO代行）＋ SubAgent（セキュリティ監査・競合調査）
 > 対象環境: 本番 `https://cwwd.mirai-dx-platform.com`（Cloudflare Access + Tunnel）、Neon PostgreSQL、systemd 常駐
-> 証跡: 本レポート末尾の「検証証跡」および git 履歴・PR #139 / 評価改善PR・CI 結果
+> 証跡: 本レポート末尾の「検証証跡」および git 履歴・PR #139・CI 結果
 
 ## 1. エグゼクティブサマリ
 
@@ -313,5 +313,5 @@ DTN（dtn.com/weather/outdoor-safety/）、環境省 WBGT（wbgt.env.go.jp）、
 ## 16. マージ判定（本セッション成果）
 
 - PR #139（chore: CIハードニング・文書同期・env案内）: Ready for Review / MERGEABLE / CI 5/5 green
-- 評価改善PR（seedガード・#85リンク・帰属表示・評価書）: 作成後 CI 確認予定
+- 評価改善PR（seedガード・#85リンク・帰属表示・評価書）: PR #139 へ追記済み・CI 確認中
 - マージ判定: **Y / N**

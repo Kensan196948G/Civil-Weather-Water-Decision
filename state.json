@@ -493,7 +493,7 @@
       "docker_build": "PASS (backend/frontend)",
       "pip_audit": "PASS (known vulnerabilities 0)"
     },
-    "pr": "PR #139（文書・CI）+ 評価改善PR（機能・評価書）",
+    "pr": "PR #139（本番運用水準改善: CI/文書/seedガード/#85リンク/帰属表示/評価書）",
     "residual": [
       "#114 Open-Meteo商用契約承認 / #115 オフサイト転送 / #116 外部死活監視 / #119 P0受入試験",
       "河川公式データ接続・通知実送信・Entra OIDC有効化・モバイル/PWA・AI機能は次フェーズ"
