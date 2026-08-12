@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.services.data_collectors import nowphas
+
+_JST = ZoneInfo("Asia/Tokyo")
 
 STATION_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <NowphasWeb><PointSetup>
@@ -14,15 +17,23 @@ STATION_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <point code="222" area="3" name="Tokyo" lat="35.6450" lon="139.7700" />
 </PointSetup></NowphasWeb>"""
 
-MAP_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
-<DataMap time20min="202608122300">
+def _map_xml_fresh() -> bytes:
+    """鮮度ガード（2h）を通すため、現在時刻（JST）の実況XMLを生成する。
+
+    固定時刻の fixture は CI 実行時刻によって鮮度判定が反転し flaky になる
+    （2026-08-13 main CI で実測: NO_STATION 化）。時刻を実行時に生成して
+    壁時計依存を排除する。
+    """
+    stamp = datetime.now(_JST).strftime("%Y%m%d%H%M")
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<DataMap time20min="{stamp}">
   <mapdata code="221">
     <yugiha>0.55</yugiha><shiyuki>4.6</shiyuki><namimuki>E</namimuki>
   </mapdata>
   <mapdata code="222">
     <yugiha>99999</yugiha><shiyuki>99999</shiyuki><namimuki></namimuki>
   </mapdata>
-</DataMap>"""
+</DataMap>""".encode("utf-8")
 
 TIDE_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <DataMap datatime="202608122320">
@@ -35,7 +46,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
     if "choui_mapxml" in path:
         return httpx.Response(200, content=TIDE_XML)
     if "mapxml" in path:
-        return httpx.Response(200, content=MAP_XML)
+        return httpx.Response(200, content=_map_xml_fresh())
     return httpx.Response(200, content=STATION_XML)
 
 
