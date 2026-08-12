@@ -117,6 +117,11 @@ CW_BACKEND_PROXY_BASE="http://127.0.0.1:$BPORT" python3 frontend/serve.py
 - **ログイン/RBAC**: 未認証時はログイン画面を表示。全 fetch に `Authorization: Bearer` を付与し、401 でローカルトークンを削除。右上ログアウトは `POST /api/auth/logout` でサーバ側JWT失効台帳へ登録してからローカルトークンを削除。デモ: `admin/admin123`（管理者）, `yamada/pass1234`（現場管理者）, `viewer/pass1234`（閲覧。現場登録は403）。
 - **通知ベル**: 右上の🔔に要対応件数（中止検討/河川/障害＝severity≥2）のバッジ。クリックで通知一覧（`GET /api/notifications` を判定結果から導出）。5分ごと更新。Slack/Teams 外部送信は管理画面の通知フラグとサーバ側 `SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` の両方が有効な場合のみ行う。
 - **運用状態画面**: 管理メニューの「運用状態」（admin/技術管理者限定）が `opsStatusSnapshot()` で `GET /api/admin/ops/status-snapshot` を認証付き取得。allowlist 済み systemd service / timer / failed unit snapshot を表形式で表示し、再読込できる。
+- **現場別 公式リンク（#85）**: 現場詳細の「公式情報の確認リンク」を `GET /api/sites/{id}/links`
+  （`site_links` マスタ）から表示。未登録の現場は従来の静的公式リンク（気象庁/川の防災情報/
+  環境省WBGT/Open-Meteo）へフォールバックして導線を維持する。
+- **Open-Meteo 帰属表示（CC BY 4.0）**: 画面右下へ「気象・海象データの一部: Open-Meteo
+  (CC BY 4.0)」を固定表示（利用条件確認書 #114 のギャップ解消）。
 
 > **ネイティブ ClaudeDesign 画面化への移行**: 現状の登録画面はアダプタ注入。正式に ClaudeDesign の画面にしたい場合は、ClaudeDesign で「現場登録」画面（フォーム）を1枚追加し `POST /api/sites`（body は上記payload）を呼ぶだけ。API は完成済みなので、デザイン側にフォームができたらアダプタの注入版は外せる。
 
@@ -139,7 +144,7 @@ CW_BACKEND_PROXY_BASE="http://127.0.0.1:$BPORT" python3 frontend/serve.py
 | `exportCsv()` | CSV出力 | `GET /api/decision-logs/export.csv` |
 | `sources`（データソース状態） | データソース状態画面 | `GET /api/dashboard/data-sources` |
 | `refresh()` | 手動再取得 | `POST /api/data-collectors/run` |
-| `links` | 公式リンク | 静的（気象庁/川の防災情報/環境省WBGT/Open-Meteo） |
+| `links` | 公式リンク | `GET /api/sites/{id}/links`（#85 実装済み。未登録は静的公式リンクへフォールバック） |
 
 ### 接続時の設計原則（要件・詳細設計より厳守）
 
