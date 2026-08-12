@@ -7,12 +7,13 @@
 
 | ユニット | 役割 | ポート/接続先 |
 |---|---|---|
-| `cwwd-backend.service` | FastAPI/uvicorn（Neon PostgreSQL 接続） | `0.0.0.0:55019` |
-| `cwwd-frontend.service` | ClaudeDesign 静的サーバ（`serve.py`、`PORT` で固定） | `0.0.0.0:34979` |
+| `cwwd-backend.service` | FastAPI/uvicorn（Neon PostgreSQL 接続） | `127.0.0.1:55019` |
+| `cwwd-frontend.service` | ClaudeDesign 静的サーバ（`serve.py`、`PORT` で固定） | `127.0.0.1:34979` |
 | `cwwd-tunnel.service` | cloudflared（`~/.cloudflared/config-cwwd.yml`） | `https://cwwd.mirai-dx-platform.com` |
 
 - 依存順序: `cwwd-tunnel` は `cwwd-backend` / `cwwd-frontend` に `After=` / `Wants=`（OS 起動時に3点セットで自動起動）
-- バインドは `0.0.0.0` のため、DHCP で LAN IP が変わってもポート番号は不変（例: `http://<LAN-IP>:34979/?api=http://<LAN-IP>:55019`）
+- バインドは `127.0.0.1`（loopback 限定）。公開は Cloudflare Tunnel 経路のみ。LAN 直アクセス不可。
+- 開発時に LAN 内からアクセスしたい場合は、一時的に `HOST=0.0.0.0` を env に設定する（`network-exposure-check` が検出して失敗するため、終了後は戻すこと）。
 
 ## 🚀 適用手順（更新時）
 
@@ -27,7 +28,7 @@ sudo systemctl enable --now cwwd-backend cwwd-frontend cwwd-tunnel
 ```bash
 systemctl is-active cwwd-backend cwwd-frontend cwwd-tunnel   # → active ×3
 curl -s http://127.0.0.1:55019/health                        # → {"status":"ok",...}
-curl -s -o /dev/null -w "%{http_code}" http://<LAN-IP>:34979/ # → 200
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:34979/ # → 200（LAN直アクセスは不可）
 curl -s -o /dev/null -w "%{http_code}" https://cwwd.mirai-dx-platform.com/  # → 302 (Cloudflare Access ログインへ)
 ```
 

@@ -55,25 +55,38 @@ M4  Production Release        due 2026-12-19   ← 絶対厳守
 
 ---
 
-## 2. 技術スタック確定（設計書 §2.2 PoC候補を採用）
+## 2. 技術スタック確定（2026-08 現在の実態に更新。元設計 §2.2 から変更あり）
+
+### 2.1 実装済みスタック（本番稼働中）
 
 | レイヤー | 採用技術 | 備考 |
 |---|---|---|
-| フロントエンド | React + Vite + TypeScript | 設計 §2.2 PoC候補 |
-| UI | Tailwind CSS + shadcn/ui 系 | |
-| 状態/データ取得 | TanStack Query | API キャッシュと取得時刻表示に好適 |
-| グラフ | Recharts または ECharts | 気象・河川時系列（SC-004/005） |
-| バックエンド | FastAPI (Python 3.12) | 設計 §2.2 |
-| ORM / Migration | SQLAlchemy 2.x + Alembic | 13テーブル（設計 §6） |
-| DB | PostgreSQL 16 | PoC は Docker、本番候補 Azure DB for PostgreSQL |
-| バッチ | APScheduler | JOB-001〜007（設計 §11） |
-| キャッシュ | In-memory（PoC）→ Redis（本番候補） | |
-| 認証 | 簡易トークン（PoC）→ Entra ID OIDC（本番候補） | Phase 3 で導入 |
-| テスト | pytest（backend）/ Vitest + Playwright（frontend） | |
-| コンテナ | Docker Compose | 設計 §21 |
-| CI | GitHub Actions（lint/test/build） | Phase 0 で雛形 |
+| フロントエンド | ClaudeDesign 生成 UI（React 18 + `support.js` dc-runtime） | 元計画の React+Vite+TypeScript から変更（ClaudeDesign プロトタイプの発展） |
+| フロントアダプタ | `data-adapter.js`（Vanilla JS） | `.dc.html` を無改修で実 API 接続。prototype ラップ方式 |
+| UI | ClaudeDesign 内蔵スタイリング | Tailwind CSS / shadcn は不使用 |
+| グラフ | 手書き SVG 生成（`data-adapter.js`） | 気象・河川・WBGT 時系列 |
+| 地図 | Leaflet 1.9.4（self-host） | 国土地理院タイル既定 |
+| バックエンド | FastAPI (Python 3.12) | 設計 §2.2 → 変更なし |
+| ORM / Migration | SQLAlchemy 2.x + Alembic | 同一マイグレーションが SQLite（テスト）/ PostgreSQL（本番）両対応 |
+| DB | **Neon PostgreSQL**（`shiny-frog-23437883`, us-east-2） | 本番: 2026-07-12 切替済み。元計画の Azure DB から変更 |
+| バッチ | APScheduler（5分周期） | 設計 §11 準拠 |
+| 認証 | JWT + RBAC（アプリ内ユーザー） + Entra ID OIDC 対応（#118、設計完了・env 変数実装済み） | 元計画の「簡易トークン→OIDC」から先行実装 |
+| テスト | pytest（backend 462件）/ Node 素実行（frontend logic+adapter+policy 78件）/ Playwright Firefox E2E | 元計画の Vitest は不使用 |
+| 公開基盤 | systemd 常駐 + Cloudflare Tunnel + Cloudflare Access | 元計画の Docker Compose / Azure Static Web Apps から変更 |
+| CI/CD | GitHub Actions（lint/test/security/docker-build） | デプロイ自動化なし。手動 systemd 再起動 |
 
-> 確定理由: 設計書がすでに FastAPI / React / PostgreSQL / Docker を前提に DB スキーマ・API・`.env`・compose まで具体化しているため、PoC候補をそのまま採用するのが最短。本番候補スタック（Azure）への移行は Phase 4 で評価。
+### 2.2 元計画からの乖離と理由
+
+- **フロントエンド**: PoC 当初計画（React+Vite+TypeScript+Tailwind）は ClaudeDesign プロトタイプの
+  発展によりデータアダプタ方式へ移行。`.dc.html` 無改修での実 API 接続を優先した。
+- **DB**: Neon PostgreSQL 採用。無料枠から開始し、Docker 運用の負荷削減とスケーラビリティを考慮。
+- **公開基盤**: Cloudflare Tunnel + Access で本番公開。systemd 常駐で安定稼働。
+- **認証**: JWT + RBAC を Phase 3 前に先行実装。Entra ID OIDC も設定完了（有効化待ち）。
+- **CI/CD**: CD（デプロイ自動化）は未実装。systemd 再起動による手動デプロイ。
+
+> 今後の方向性: フロントエンドは ClaudeDesign のデザイン更新を DesignSync で継続取り込み、
+> 本格的な自前書き換えはデータアダプタの負債化が深刻になった場合に判断する。
+> DB は引き続き Neon を使用し、Azure 移行計画は棚卸し。
 
 ---
 
