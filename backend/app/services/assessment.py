@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import rules as rules_service
-from .data_collectors import jma_warnings, marine, open_meteo, wbgt_env
+from .data_collectors import jma_warnings, marine, nowphas, open_meteo, wbgt_env
 from .decision_engine import LEVEL_LABELS, Reading, evaluate
 from ..core.config import settings
 from ..models import ObservationStation, RiverObservation, Site, SiteStation
@@ -54,13 +54,20 @@ async def _cached_fetch(lat: float, lon: float, key: str) -> dict:
 
 
 async def _cached_marine(lat: float, lon: float, key: str) -> dict:
-    """海洋予報（Open-Meteo Marine）のキャッシュ付き取得。失敗時は STALE 縮退。"""
+    """海洋実況/予報のキャッシュ付き取得。
+
+    NOWPHAS（公的・実況）を優先し、対象局なし・欠測・取得失敗時は
+    Open-Meteo Marine（予報）へフォールバックする。失敗時は STALE 縮退。
+    """
     now = time.monotonic()
     cache_key = f"marine:{key}"
     hit = _CACHE.get(cache_key)
     if _cache_valid(hit, now):
         return hit[1]
-    data = await marine.fetch_marine(lat, lon)
+    data = await nowphas.fetch_nowphas(lat, lon)
+    if data.get("status") != "OK":
+        # 公的実況が使えない場合は Open-Meteo 予報で補完（source_id で出所を明示）
+        data = await marine.fetch_marine(lat, lon)
     if data.get("status") == "OK":
         _LAST_GOOD[cache_key] = data
     elif cache_key in _LAST_GOOD:
@@ -355,7 +362,7 @@ async def assess_site(site: Site, *, fetch=None, work_type: str | None = None,
         # 視程の実測はデータソース未接続のため、気象コード45/48（霧・着氷性の霧）のみ
         # 「濃霧」として扱う（欠測は隠さず判定理由に明示）
         mwr["fog"] = any(p.get("weather_code") in (45, 48) for p in points)
-        mwr["source_marine"] = marine.SOURCE_ID
+        mwr["source_marine"] = mdata.get("source_id", marine.SOURCE_ID)
         if mstatus == "ERROR":
             mwr["missing"] = set(mwr.get("missing") or set()) | {"wave", "wave_period", "swell"}
         if mstatus == "STALE":
@@ -427,7 +434,7 @@ async def marine_site_summary(site: Site) -> dict:
         "missing": {"wave", "wave_period", "swell"},
     }
     mwr["fog"] = any(p.get("weather_code") in (45, 48) for p in data.get("points", []))
-    mwr["source_marine"] = marine.SOURCE_ID
+    mwr["source_marine"] = mdata.get("source_id", marine.SOURCE_ID)
     merged = dict(wr)
     merged.update(mwr)
     merged["missing"] = set(wr.get("missing") or set()) | set(mwr.get("missing") or set())

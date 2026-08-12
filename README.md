@@ -34,6 +34,8 @@ Construction Weather & Water Decision Support
 - 水防災オープンデータ提供サービス
 - Open-Meteo（予報・補完）
 - 環境省 暑さ指数 WBGT（地点マスタ同期・現場別最近傍自動選定）
+- 国土交通省 NOWPHAS（全国港湾海洋波浪情報網）: リアルタイム波高・周期・波向・潮位
+  （2026-08-12 統合。海象の一次情報として Open-Meteo より優先）
 - NASA POWER / JAXA G-Portal・Earth API（将来拡張）
 
 ## 判断レベル / Decision Levels

@@ -1,5 +1,28 @@
 # リリースノート / Release Notes
 
+## 2026-08-12 — WMCDSS 統合（NOWPHAS 海象・公的データ優先）
+
+### 変更内容
+
+- **NOWPHAS コレクタ新規**（`data_collectors/nowphas.py`）: 国土交通省 全国港湾海洋
+  波浪情報網のリアルタイム XML（局マスタ/波浪実況/潮位）を取得・正規化。
+  品質フラグ（OK/MISSING/OUTLIER）、鮮度ガード（2時間超は欠測扱い）、最近傍局選定
+  （最大200km）、プロセス内キャッシュ（局1h/実況5min）を実装
+- **海象判定の優先順位変更**: NOWPHAS（公的・実況）を優先し、利用不可時のみ
+  Open-Meteo Marine（予報）へフォールバック。`source_marine` に出所を明示
+- **データソース監視**: DS-NOWPHAS をプローブ対象・シード状態に追加
+- **文書**: `docs/evaluation/2026-08-12-wmcdss-integration.md` を追加
+  （WMCDSS 統合の経緯・移植内容・残課題）
+
+### 検証結果
+
+| 項目 | 結果 |
+|---|---|
+| backend pytest | **471 passed** |
+| ruff | PASS |
+| frontend tests | logic 21 / adapter-contract 53 / policy系 PASS |
+| NOWPHAS 実測 | 121局・東京湾→京浜港(横浜) 潮位 1.16m |
+
 ## 2026-08-12 — 総合評価と本番運用水準へのブラッシュアップ（PR #139）
 
 ### 変更内容

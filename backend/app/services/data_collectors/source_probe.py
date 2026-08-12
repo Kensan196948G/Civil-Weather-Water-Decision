@@ -29,6 +29,7 @@ PROBE_TARGETS = {
     + "/forecast?latitude=35&longitude=139&hourly=temperature_2m&forecast_days=1",
     "DS-OPEN-METEO-MARINE": settings.open_meteo_marine_base_url
     + "/marine?latitude=35&longitude=139&hourly=wave_height&forecast_days=1",
+    "DS-NOWPHAS": settings.nowphas_base_url + "/PROG/xml/POINT_SETUP.xml",
     "DS-JMA-XML": "https://www.data.jma.go.jp/developer/xml/feed/regular.xml",
     "DS-WBGT": "https://www.wbgt.env.go.jp/",
     "DS-RIVER-GO": "https://www.river.go.jp/",

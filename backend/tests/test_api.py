@@ -176,10 +176,11 @@ def test_export_csv(client):
 
 def test_data_sources(client):
     rows = client.get("/api/dashboard/data-sources").json()
-    assert len(rows) == 10  # 9種 + Open-Meteo Marine（#72 段5）
+    assert len(rows) == 11  # 9種 + Open-Meteo Marine + NOWPHAS（2026-08-12 統合）
     ids = {d["id"] for d in rows}
     assert {"DS-JMA-CSV", "DS-JAXA", "DS-NOAA"} <= ids
     assert "DS-OPEN-METEO-MARINE" in ids
+    assert "DS-NOWPHAS" in ids
     assert any(d["status"] == "Error" for d in rows)
     assert any(d["status"] == "Warning" for d in rows)
 
