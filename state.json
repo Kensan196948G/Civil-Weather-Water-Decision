@@ -498,5 +498,25 @@
       "#114 Open-Meteo商用契約承認 / #115 オフサイト転送 / #116 外部死活監視 / #119 P0受入試験",
       "河川公式データ接続・通知実送信・Entra OIDC有効化・モバイル/PWA・AI機能は次フェーズ"
     ]
+  },
+  "release_2026_08_12": {
+    "title": "総合評価と本番運用水準改善（CI/seedガード/#85リンク/帰属表示/評価書）",
+    "pr": 139,
+    "tag": "v0.4.2",
+    "merge_commit": "a9b0710e990b62c192f192917faf6680fd4ff205",
+    "merged_at": "2026-08-12T03:40:43Z",
+    "deployed_at": "2026-08-12T12:43:00+09:00",
+    "deployment": "main反映(a9b0710) + cwwd-backend/cwwd-frontend再起動",
+    "migration": "なし",
+    "ci": "PR #139 5/5 success・main CI success",
+    "smoke": {
+      "health": "200 OK",
+      "readyz": "ok（database/migrations/tables/config true）",
+      "frontend": "200 OK",
+      "public": "302（Cloudflare Access）",
+      "api_auth": "/api/auth/me 401（認証ガード）",
+      "data_adapter": "cw-open-meteo-attribution / mapSiteLinks 反映",
+      "logs": "ERROR/Traceback なし"
+    }
   }
 }
