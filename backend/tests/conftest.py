@@ -1,10 +1,17 @@
 """テスト共通設定: テスト用SQLite＋Open-Meteoのモック（ネット非依存）。"""
+import atexit
 import os
 import pathlib
 
+# テスト用DBはプロセスごとに一意なファイル名にする。並行エージェントが同じ backend で
+# pytest を同時実行しても、互いの _test_cw.db を削除・再作成して
+# 「alembic_version already exists」等の疑似失敗を起こさない（2026-08-12 実測）。
+# flock による直列化は同一プロセス内の二重 import で自己デッドロックするため使わない。
+_TEST_DB_STEM = f"_test_cw_{os.getpid()}"
+
 # app インポート前にテスト用DBへ差し替え（本番DBを汚さない）＋スケジューラ無効化（ネット非依存）
 os.environ["APP_ENV"] = "local"
-os.environ["DATABASE_URL"] = "sqlite:///./_test_cw.db"
+os.environ["DATABASE_URL"] = f"sqlite:///./{_TEST_DB_STEM}.db"
 # ローカル実行時、稼働中サービスの backend/.env（APP_ENV=production 等）を
 # pydantic-settings が拾ってしまい、デモユーザー未投入・JWT鍵不一致でテストが
 # 総崩れになるのを防ぐ。CI には .env が存在せずコード既定値がそのまま使われるため
@@ -25,10 +32,22 @@ os.environ["JWT_SECRET"] = "dev-secret-change-in-production-please-32+"
 # 設定暗号化の専用鍵（#80 high-2）。テストでは適正構成（32バイト以上）を既定にし、
 # ai_api_key 保存の正常系を成立させる。弱鍵拒否は該当テストで settings を差し替えて検証。
 os.environ["SETTINGS_ENCRYPTION_KEY"] = "test-only-settings-encryption-key-32bytes-plus-000"
-_db = pathlib.Path("_test_cw.db")
-for _path in (_db, pathlib.Path("_test_cw.db-wal"), pathlib.Path("_test_cw.db-shm")):
+
+for _suffix in ("", "-wal", "-shm"):
+    _path = pathlib.Path(f"{_TEST_DB_STEM}.db{_suffix}")
     if _path.exists():
         _path.unlink()
+
+
+def _cleanup_test_db() -> None:
+    """このプロセス専用のテストDBを終了時に片付ける（並行実行中の他プロセスには影響なし）。"""
+    for suffix in ("", "-wal", "-shm"):
+        path = pathlib.Path(f"{_TEST_DB_STEM}.db{suffix}")
+        if path.exists():
+            path.unlink()
+
+
+atexit.register(_cleanup_test_db)
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
