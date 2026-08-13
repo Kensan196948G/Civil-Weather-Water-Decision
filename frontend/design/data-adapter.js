@@ -531,6 +531,49 @@
       auditLogs: function (limit) {
         return j("/api/admin/audit-logs" + (limit ? "?limit=" + limit : ""));
       },
+      // ---- 2026-08-13: ユーザー管理（admin）と判断履歴の検索・類似参照・PDF ----
+      listUsers: function () { return j("/api/admin/users"); },
+      createUser: function (payload) {
+        return _fetch(url("/api/admin/users"), {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+          body: JSON.stringify(payload)
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
+      updateUser: function (id, payload) {
+        return _fetch(url("/api/admin/users/" + encodeURIComponent(id)), {
+          method: "PUT",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+          body: JSON.stringify(payload)
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
+      deleteUser: function (id) {
+        return _fetch(url("/api/admin/users/" + encodeURIComponent(id)), {
+          method: "DELETE", headers: authHeaders()
+        }).then(function (r) {
+          return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+        });
+      },
+      searchHistory: function (params) {
+        var qs = [];
+        Object.keys(params || {}).forEach(function (k) {
+          var v = params[k];
+          if (v != null && v !== "") qs.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
+        });
+        return j("/api/decision-logs" + (qs.length ? "?" + qs.join("&") : ""));
+      },
+      similarHistory: function (params) {
+        var qs = [];
+        Object.keys(params || {}).forEach(function (k) {
+          var v = params[k];
+          if (v != null && v !== "") qs.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
+        });
+        return j("/api/decision-logs/similar" + (qs.length ? "?" + qs.join("&") : ""));
+      },
       opsStatusSnapshot: function () { return j("/api/admin/ops/status-snapshot"); },
       appSettings: function () { return j("/api/admin/settings"); },
       saveAppSettings: function (updates) {
@@ -666,6 +709,7 @@
         { key: "ops-status", label: "運用状態", roles: ["admin", "tech_manager"] },
         { key: "reports", label: "レポート出力" },
         { key: "audit", label: "監査ログ", roles: ["admin", "tech_manager"] },
+        { key: "users", label: "ユーザー管理", roles: ["admin"] },
         { key: "app-settings", label: "設定", roles: ["admin"] }] },
     ];
     function cwFindItem(key) {
@@ -737,6 +781,7 @@
           inst._dashMap = null; inst.__cwDashVer = adapter._state.ver;
         }
         cwToggleSourceNote(inst.state.screen === "source"); // データソース画面の更新間隔注記
+        cwToggleHistoryTools(inst.state.screen === "history"); // 判断履歴: 検索・類似・PDFツールバー
         cwToggleSettingsScreen(inst.state.screen === "settings"); // 閾値管理画面（#34）
         cwSyncWbgtScreen(inst);                              // WBGT画面の地図
         cwSyncScreens(inst);                                 // #79 新画面群の表示同期
@@ -960,6 +1005,154 @@
     function cwToggleSourceNote(show) {
       var el = document.getElementById("cw-src-note");
       if (el) el.style.display = show ? "block" : "none";
+    }
+
+    // ---- 判断履歴: 検索・類似判断・PDF帳票（native history 画面への注入。.dc.html 無改修） ----
+    function cwBump() {
+      try {
+        var rn = (window.__dcRootName && window.__dcRootName()) || "Root";
+        window.__dcSetProps(rn, { __cw: Date.now() });
+      } catch (e) {}
+    }
+    function cwHistSearch() {
+      var msg = document.getElementById("cw-hist-msg");
+      var qEl = document.getElementById("cw-hist-q");
+      var siteEl = document.getElementById("cw-hist-site");
+      var wtEl = document.getElementById("cw-hist-wt");
+      var q = qEl ? qEl.value : "";
+      var siteId = siteEl ? siteEl.value : "";
+      var wt = wtEl ? wtEl.value : "";
+      if (!q && !siteId && !wt) {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "検索条件を入力してください"; }
+        return;
+      }
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "検索中…"; }
+      adapter.searchHistory({ q: q, site_id: siteId, work_type: wt }).then(function (rows) {
+        adapter._state.history = rows || [];
+        if (msg) { msg.style.color = "#2e7d32"; msg.textContent = (rows || []).length + " 件"; }
+        cwBump();
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "検索に失敗しました（APIエラー）"; }
+      });
+    }
+    function cwHistSimilar() {
+      var sim = document.getElementById("cw-hist-sim");
+      var msg = document.getElementById("cw-hist-msg");
+      var siteEl = document.getElementById("cw-hist-site");
+      var wtEl = document.getElementById("cw-hist-wt");
+      var siteId = siteEl ? siteEl.value : "";
+      var wt = wtEl ? wtEl.value : "";
+      if (!siteId && !wt) {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = "類似判断には現場または工種を選択してください"; }
+        return;
+      }
+      if (sim) { sim.style.display = "block"; sim.innerHTML = '<div class="cw-empty">類似判断を検索中…</div>'; }
+      adapter.similarHistory({ site_id: siteId, work_type: wt }).then(function (rows) {
+        if (!sim) return;
+        if (!rows || !rows.length) {
+          sim.innerHTML = '<div class="cw-empty">類似する過去判断が見つかりませんでした</div>';
+          return;
+        }
+        sim.innerHTML = '<div style="font-size:11.5px;font-weight:800;color:#13344f;margin-bottom:6px">'
+          + "類似する過去判断（同一現場・工種・判定レベル・直近7日を優先）</div>"
+          + rows.map(function (x) {
+            return '<div style="display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid #e8eef3">'
+              + '<span style="min-width:88px;color:#8693a0;font-size:11px">' + esc(x.datetime) + "</span>"
+              + '<span style="min-width:120px;font-weight:700;color:#2a3641;font-size:11.5px">' + esc(x.site) + "</span>"
+              + '<span style="min-width:96px;color:#54636f;font-size:11.5px">' + esc(x.workType) + "</span>"
+              + '<span style="min-width:58px;font-weight:800;color:' + (CW_LVC[x.level] || "#5a6b7b")
+              + ";font-size:11px\">" + esc(CW_LV[x.level] || ("L" + x.level)) + "</span>"
+              + '<span style="flex:1;color:#5b6975;font-size:11.5px;line-height:1.45">' + esc(x.comment) + "</span>"
+              + '<span style="min-width:80px;font-weight:700;color:#13344f;font-size:10.5px">'
+              + esc((x.matchReasons || []).join("/")) + "</span></div>";
+          }).join("");
+      }).catch(function () {
+        if (sim) sim.innerHTML = '<div class="cw-empty">類似判断の取得に失敗しました（APIエラー）</div>';
+      });
+    }
+    function cwToggleHistoryTools(show) {
+      var el = document.getElementById("cw-hist-tools");
+      if (el) el.style.display = show ? "block" : "none";
+      if (!show) return;
+      var sel = document.getElementById("cw-hist-site");
+      if (sel && sel.options.length <= 1 && adapter._state.sites) {
+        var cur = sel.value;
+        sel.innerHTML = '<option value="">全現場</option>' + adapter._state.sites.map(function (s) {
+          return '<option value="' + esc(s.id) + '">' + esc(s.id) + " " + esc(s.name) + "</option>";
+        }).join("");
+        sel.value = cur;
+      }
+      var wt = document.getElementById("cw-hist-wt");
+      if (wt && wt.options.length <= 1) {
+        var cur2 = wt.value;
+        wt.innerHTML = '<option value="">全工種</option>';
+        adapter.workTypes().then(function (wts) {
+          (wts || []).forEach(function (w) {
+            var o = document.createElement("option");
+            o.value = w.id; o.textContent = w.name;
+            wt.appendChild(o);
+          });
+          wt.value = cur2;
+        }).catch(function () {});
+      }
+    }
+    function installHistoryTools() {
+      if (document.getElementById("cw-hist-tools")) return;
+      var n = document.createElement("div");
+      n.id = "cw-hist-tools";
+      n.style.cssText = "display:none;position:fixed;left:0;right:0;bottom:0;z-index:34;background:#fff;"
+        + "border-top:1px solid #dde5ec;box-shadow:0 -2px 8px rgba(0,0,0,.12);"
+        + "font:400 12.5px 'Noto Sans JP',sans-serif;color:#2c3e4f";
+      n.innerHTML =
+        '<div id="cw-hist-sim" style="display:none;max-height:40vh;overflow:auto;'
+        + "border-bottom:1px solid #e8eef3;padding:10px 14px;background:#f7fafc\"></div>"
+        + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 14px">'
+        + '<input type="text" id="cw-hist-q" placeholder="検索（現場名/メモ/記録者/工種）" style="flex:1;min-width:180px;padding:8px 10px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif">'
+        + '<select id="cw-hist-site" style="padding:8px 8px;border:1px solid #d4dce2;border-radius:7px;'
+        + "font:400 12.5px 'Noto Sans JP',sans-serif;max-width:230px\"><option value=\"\">全現場</option></select>"
+        + '<select id="cw-hist-wt" style="padding:8px 8px;border:1px solid #d4dce2;border-radius:7px;'
+        + "font:400 12.5px 'Noto Sans JP',sans-serif;max-width:180px\"><option value=\"\">全工種</option></select>"
+        + '<button type="button" class="cw-btn" id="cw-hist-go">検索</button>'
+        + '<button type="button" class="cw-btn" id="cw-hist-reset">リセット</button>'
+        + '<button type="button" class="cw-btn" id="cw-hist-sim-btn">類似判断</button>'
+        + '<button type="button" class="cw-btn" id="cw-hist-csv">CSV</button>'
+        + '<button type="button" class="cw-btn cw-btn-pri" id="cw-hist-pdf">PDF帳票</button>'
+        + '<span class="cw-msg" id="cw-hist-msg" style="margin-left:auto"></span></div>';
+      document.body.appendChild(n);
+      n.querySelector("#cw-hist-go").addEventListener("click", cwHistSearch);
+      n.querySelector("#cw-hist-q").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") cwHistSearch();
+      });
+      n.querySelector("#cw-hist-reset").addEventListener("click", function () {
+        var q = document.getElementById("cw-hist-q"); if (q) q.value = "";
+        var s = document.getElementById("cw-hist-site"); if (s) s.value = "";
+        var w = document.getElementById("cw-hist-wt"); if (w) w.value = "";
+        var msg = document.getElementById("cw-hist-msg");
+        if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = "全件を再読込中…"; }
+        var sim = document.getElementById("cw-hist-sim");
+        if (sim) { sim.style.display = "none"; sim.innerHTML = ""; }
+        adapter.loadHistory().then(function () {
+          if (msg) { msg.style.color = "#2e7d32"; msg.textContent = "全件を表示"; }
+          cwBump();
+        }).catch(function () {
+          if (msg) { msg.style.color = "#c62828"; msg.textContent = "再読込に失敗しました"; }
+        });
+      });
+      n.querySelector("#cw-hist-sim-btn").addEventListener("click", cwHistSimilar);
+      n.querySelector("#cw-hist-csv").addEventListener("click", function () {
+        adapter.authedFetch("/api/decision-logs/export.csv").then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.blob();
+        }).then(function (b) { cwSaveBlob(b, "decision_logs.csv"); })
+        .catch(function () { window.alert("CSVの取得に失敗しました（権限またはAPIエラー）"); });
+      });
+      n.querySelector("#cw-hist-pdf").addEventListener("click", function () {
+        adapter.authedFetch("/api/decision-logs/export.pdf").then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.blob();
+        }).then(function (b) { cwSaveBlob(b, "decision_logs.pdf"); })
+        .catch(function () { window.alert("PDFの生成に失敗しました（権限またはAPIエラー）"); });
+      });
     }
 
     // ---- 熱中症/WBGT 画面: 全国地図＋スケール＋ランキング ----
@@ -1245,6 +1438,7 @@
     // 機微画面（監査ログ・設定）の表示データと画面状態を破棄する（401時。#83 対抗レビュー[high]）
     function cwResetSensitiveUi() {
       cwAuditRows = null;
+      cwUserRows = null;
       cwUser = null;
       cwSbSig = "";       // サイドバーをロールなし状態で再構築させる
       cwSbOpen = null;     // アコーディオン開閉状態もリセット（前ユーザーの状態を残さない）
@@ -1256,6 +1450,21 @@
       if (ops) ops.innerHTML = "";
       var q = document.getElementById("cw-audit-q");
       if (q) q.value = "";
+      var um = document.getElementById("cw-um-body");
+      if (um) um.innerHTML = "";
+      var umMsg = document.getElementById("cw-um-msg");
+      if (umMsg) umMsg.textContent = "";
+      cwUmResetForm();
+      var hq = document.getElementById("cw-hist-q");
+      if (hq) hq.value = "";
+      var hs = document.getElementById("cw-hist-sim");
+      if (hs) { hs.style.display = "none"; hs.innerHTML = ""; }
+      var hm = document.getElementById("cw-hist-msg");
+      if (hm) hm.textContent = "";
+      var hsite = document.getElementById("cw-hist-site");
+      if (hsite) hsite.value = "";
+      var hwt = document.getElementById("cw-hist-wt");
+      if (hwt) hwt.value = "";
       var key = document.getElementById("cw-as-ai-key");
       if (key) key.value = "";
       var st = document.getElementById("cw-as-ai-status");
@@ -1721,6 +1930,12 @@
             return r.blob();
           }).then(function (b) { cwSaveBlob(b, "decision_logs.csv"); done(); })
             .catch(function () { done("判断履歴CSVの取得に失敗しました"); });
+        } else if (act === "decision-pdf") {
+          adapter.authedFetch("/api/decision-logs/export.pdf").then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.blob();
+          }).then(function (b) { cwSaveBlob(b, "decision_logs.pdf"); done(); })
+            .catch(function () { done("判断履歴PDFの取得に失敗しました"); });
         } else if (act === "sites-csv") {
           var meta = adapter._state.meta || [];
           if (!meta.length) { done("現場データが未読込です"); return; }
@@ -1746,17 +1961,19 @@
       if (!box) return;
       var role = cwUser ? cwUser.role : "";
       var isAdminish = role === "admin" || role === "tech_manager";
-      function card(title, desc, act, disabled) {
+      function card(title, desc, act, disabled, label) {
         return '<div class="cw-pg-card" style="display:flex;align-items:center;gap:14px">'
           + '<div style="flex:1"><div style="font-size:13.5px;font-weight:800;color:#13344f">' + title + "</div>"
           + '<div style="font-size:11.5px;color:#7e8c99;margin-top:3px">' + desc + "</div></div>"
           + (disabled
             ? '<span style="font-size:11px;color:#8a99a5">権限なし（admin/技術管理者）</span>'
-            : '<button type="button" class="cw-btn cw-btn-pri" data-act="' + act + '">CSVダウンロード</button>')
+            : '<button type="button" class="cw-btn cw-btn-pri" data-act="' + act + '">'
+              + (label || "CSVダウンロード") + "</button>")
           + "</div>";
       }
       box.innerHTML =
         card("判断履歴レポート", "全判断履歴（判断ID・現場・種別・レベル・アクション・記録者・日時）", "decision-csv", false)
+        + card("判断履歴PDF帳票", "全判断履歴の日本語帳票（A4横・監査/発注者説明用）", "decision-pdf", false, "PDFダウンロード")
         + card("現場一覧レポート", "登録現場のマスタ情報（ID・名称・所在地・種別・担当・状態・座標）", "sites-csv", false)
         + card("監査ログレポート", "操作監査の証跡（時刻・ユーザー・操作・内容・現場）最新1000件", "audit-csv", !isAdminish)
         + '<div class="cw-msg" id="cw-rep-msg"></div>';
@@ -1912,6 +2129,184 @@
         }).join("") + "</tbody></table>";
     }
 
+    // ---- ユーザー管理（admin。弱点 #17 解消: 一覧/作成/ロール変更/無効化/パスワードリセット/削除） ----
+    var cwUserRows = null;
+    function cwErrText(res) {
+      var d = res.body && res.body.detail;
+      return Array.isArray(d) ? d.map(function (x) { return x.msg; }).join(" / ")
+        : (typeof d === "string" ? d : ("HTTP " + res.status));
+    }
+    function cwUmResetForm() {
+      var f = document.getElementById("cw-um-form");
+      if (!f) return;
+      f.style.display = "none";
+      ["cw-um-username", "cw-um-display", "cw-um-email", "cw-um-dept", "cw-um-password"].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.value = "";
+      });
+      var r = document.getElementById("cw-um-role");
+      if (r) r.value = "viewer";
+    }
+    function cwLoadUsers() {
+      var box = document.getElementById("cw-um-body");
+      if (!box) return;
+      box.innerHTML = '<div class="cw-empty">読込中…</div>';
+      adapter.listUsers().then(function (rows) {
+        if (!rows || !rows.map) {
+          box.innerHTML = '<div class="cw-empty">取得できませんでした（権限またはAPIエラー）</div>';
+          return;
+        }
+        cwUserRows = rows;
+        cwRenderUsers();
+      }).catch(function () {
+        box.innerHTML = '<div class="cw-empty">取得に失敗しました（通信エラー）</div>';
+      });
+    }
+    function cwRenderUsers() {
+      var box = document.getElementById("cw-um-body");
+      if (!box || !cwUserRows) return;
+      var me = cwUser && cwUser.id;
+      box.innerHTML = '<table class="cw-tbl"><thead><tr><th>ID</th><th>ユーザー名</th><th>表示名</th>'
+        + '<th>ロール</th><th>部署</th><th>メール</th><th>状態</th><th>操作</th></tr></thead><tbody>'
+        + cwUserRows.map(function (u) {
+          var roleOpts = ["admin", "tech_manager", "site_manager", "safety", "viewer"].map(function (r) {
+            return '<option value="' + r + '"' + (u.role === r ? " selected" : "") + '>' + roleLabel(r) + "</option>";
+          }).join("");
+          return '<tr data-id="' + esc(u.id) + '"><td>' + esc(u.id) + '</td><td><b>' + esc(u.username) + "</b>"
+            + (u.id === me ? ' <span class="cw-badge" style="background:#eef2f6;color:#3a4854">自分</span>' : "") + "</td>"
+            + "<td>" + esc(u.displayName) + "</td>"
+            + '<td><select class="cw-um-role-sel" style="padding:5px 6px;border:1px solid #d4dce2;border-radius:6px;'
+            + "font:400 12px 'Noto Sans JP',sans-serif;max-width:130px\">" + roleOpts + "</select></td>"
+            + "<td>" + esc(u.department || "—") + "</td><td>" + esc(u.email || "—") + "</td>"
+            + '<td><span class="cw-badge" style="background:' + (u.isActive ? "#e7f4e9" : "#f6e8e8")
+            + ";color:" + (u.isActive ? "#2e7d32" : "#c62828") + '">' + (u.isActive ? "有効" : "無効") + "</span></td>"
+            + '<td style="white-space:nowrap">'
+            + '<button type="button" class="cw-um-act" data-act="toggle" style="font-size:11px;margin-right:6px">'
+            + (u.isActive ? "無効化" : "有効化") + "</button>"
+            + '<button type="button" class="cw-um-act" data-act="pw" style="font-size:11px;margin-right:6px">パスワード変更</button>'
+            + '<button type="button" class="cw-um-act" data-act="del" style="font-size:11px">削除</button>'
+            + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+    function cwUmMutate(id, payload, label, isDelete) {
+      var msg = document.getElementById("cw-um-msg");
+      if (msg) { msg.style.color = "#5a6b7b"; msg.textContent = label + "中…"; }
+      var p = isDelete ? adapter.deleteUser(id) : adapter.updateUser(id, payload);
+      p.then(function (res) {
+        if (res.ok) {
+          if (msg) { msg.style.color = "#2e7d32"; msg.textContent = label + "しました"; }
+          cwLoadUsers();
+        } else if (msg) {
+          msg.style.color = "#c62828";
+          msg.textContent = label + "できません: " + cwErrText(res);
+        }
+      }).catch(function () {
+        if (msg) { msg.style.color = "#c62828"; msg.textContent = label + "に失敗しました（APIエラー）"; }
+      });
+    }
+    function installUsersScreen() {
+      var el = cwMakeScreen("cw-users-screen",
+        '<div class="cw-pg"><h2>ユーザー管理</h2>'
+        + '<p class="sub">ユーザーの作成・ロール変更・無効化・パスワードリセット・削除。'
+        + "変更は監査ログに記録されます（管理者専用）。自分自身の降格・無効化・削除と、最後の有効な管理者の変更は防止されます。</p>"
+        + '<div class="cw-pg-bar"><button type="button" class="cw-btn cw-btn-pri" id="cw-um-new">＋ユーザー追加</button>'
+        + '<button type="button" class="cw-btn" id="cw-um-reload">再読込</button>'
+        + '<span class="cw-msg" id="cw-um-msg"></span></div>'
+        + '<div class="cw-pg-card" id="cw-um-form" style="display:none">'
+        + '<h3 style="margin:0 0 10px;font-size:13.5px;color:#13344f">新規ユーザー</h3>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">'
+        + '<div><label style="display:block;font-size:11px;font-weight:700;color:#3a4854;margin-bottom:3px">ユーザー名</label>'
+        + '<input id="cw-um-username" placeholder="英数字・._- 3〜50文字" style="width:100%;padding:8px 9px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif;box-sizing:border-box"></div>'
+        + '<div><label style="display:block;font-size:11px;font-weight:700;color:#3a4854;margin-bottom:3px">表示名</label>'
+        + '<input id="cw-um-display" placeholder="例: 山田 太郎" style="width:100%;padding:8px 9px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif;box-sizing:border-box"></div>'
+        + '<div><label style="display:block;font-size:11px;font-weight:700;color:#3a4854;margin-bottom:3px">メール</label>'
+        + '<input id="cw-um-email" placeholder="name@example.com" style="width:100%;padding:8px 9px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif;box-sizing:border-box"></div>'
+        + '<div><label style="display:block;font-size:11px;font-weight:700;color:#3a4854;margin-bottom:3px">部署</label>'
+        + '<input id="cw-um-dept" placeholder="例: 土木部" style="width:100%;padding:8px 9px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif;box-sizing:border-box"></div>'
+        + '<div><label style="display:block;font-size:11px;font-weight:700;color:#3a4854;margin-bottom:3px">ロール</label>'
+        + '<select id="cw-um-role" style="width:100%;padding:8px 9px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif">'
+        + '<option value="viewer">閲覧</option><option value="safety">安全担当</option>'
+        + '<option value="site_manager">現場管理者</option><option value="tech_manager">技術管理者</option>'
+        + '<option value="admin">管理者</option></select></div>'
+        + '<div><label style="display:block;font-size:11px;font-weight:700;color:#3a4854;margin-bottom:3px">初期パスワード</label>'
+        + '<input id="cw-um-password" type="password" placeholder="8文字以上" style="width:100%;padding:8px 9px;border:1px solid #d4dce2;border-radius:7px;font:400 13px \'Noto Sans JP\',sans-serif;box-sizing:border-box"></div></div>'
+        + '<div style="display:flex;gap:10px;margin-top:12px">'
+        + '<button type="button" class="cw-btn cw-btn-pri" id="cw-um-save">作成</button>'
+        + '<button type="button" class="cw-btn" id="cw-um-cancel">キャンセル</button></div></div>'
+        + '<div class="cw-pg-card" style="padding:0;overflow:auto;max-height:calc(100vh - 310px)" id="cw-um-body"></div></div>');
+      if (!el) return;
+      el.querySelector("#cw-um-new").addEventListener("click", function () {
+        var f = document.getElementById("cw-um-form");
+        if (f) f.style.display = f.style.display === "none" ? "block" : "none";
+      });
+      el.querySelector("#cw-um-cancel").addEventListener("click", cwUmResetForm);
+      el.querySelector("#cw-um-reload").addEventListener("click", cwLoadUsers);
+      el.querySelector("#cw-um-save").addEventListener("click", function () {
+        var msg = document.getElementById("cw-um-msg");
+        var payload = {
+          username: (document.getElementById("cw-um-username").value || "").trim(),
+          display_name: (document.getElementById("cw-um-display").value || "").trim(),
+          email: (document.getElementById("cw-um-email").value || "").trim(),
+          role: document.getElementById("cw-um-role").value,
+          department: (document.getElementById("cw-um-dept").value || "").trim(),
+          password: document.getElementById("cw-um-password").value
+        };
+        if (!payload.username || !payload.display_name || !payload.password) {
+          msg.style.color = "#c62828";
+          msg.textContent = "ユーザー名・表示名・パスワードは必須です";
+          return;
+        }
+        msg.style.color = "#5a6b7b"; msg.textContent = "作成中…";
+        adapter.createUser(payload).then(function (res) {
+          if (res.ok) {
+            msg.style.color = "#2e7d32";
+            msg.textContent = "作成しました（" + res.body.id + "）";
+            cwUmResetForm(); cwLoadUsers();
+          } else {
+            msg.style.color = "#c62828";
+            msg.textContent = "作成できません: " + cwErrText(res);
+          }
+        }).catch(function () {
+          msg.style.color = "#c62828"; msg.textContent = "作成に失敗しました（APIエラー）";
+        });
+      });
+      el.querySelector("#cw-um-body").addEventListener("change", function (e) {
+        var sel = e.target;
+        if (!sel.classList || !sel.classList.contains("cw-um-role-sel")) return;
+        var tr = sel.closest("tr");
+        var id = tr && tr.getAttribute("data-id");
+        var row = cwUserRows && cwUserRows.filter(function (x) { return x.id === id; })[0];
+        if (!row || row.role === sel.value) return;
+        if (!window.confirm(row.username + " のロールを " + roleLabel(sel.value) + " に変更しますか？")) {
+          cwRenderUsers(); return;
+        }
+        cwUmMutate(id, { role: sel.value }, "ロール変更");
+      });
+      el.querySelector("#cw-um-body").addEventListener("click", function (e) {
+        var b = e.target;
+        if (!b.classList || !b.classList.contains("cw-um-act")) return;
+        var tr = b.closest("tr");
+        var id = tr && tr.getAttribute("data-id");
+        var row = cwUserRows && cwUserRows.filter(function (x) { return x.id === id; })[0];
+        if (!row) return;
+        var act = b.getAttribute("data-act");
+        if (act === "toggle") {
+          if (!row.isActive || window.confirm(row.username + " を無効化しますか？")) {
+            cwUmMutate(id, { is_active: !row.isActive }, row.isActive ? "無効化" : "有効化");
+          }
+        } else if (act === "pw") {
+          var p = window.prompt(row.username + " の新しいパスワード（8〜200文字）");
+          if (p == null) return;
+          if (p.length < 8) { window.alert("パスワードは8文字以上で指定してください"); return; }
+          cwUmMutate(id, { password: p }, "パスワード変更");
+        } else if (act === "del") {
+          if (window.confirm("ユーザー " + row.username + "（" + row.displayName + "）を削除しますか？")) {
+            cwUmMutate(id, null, "削除", true);
+          }
+        }
+      });
+    }
+
     // ---- 設定（管理: ユーザー設定/通知設定/データ保存期間/AI設定 #80連動） ----
     function installAppSettingsScreen() {
       var el = cwMakeScreen("cw-appset-screen",
@@ -1920,7 +2315,7 @@
 
         + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">👤 ユーザー設定</h3>'
         + '<div id="cw-as-user" style="font-size:12.5px;color:#3a4854"></div>'
-        + '<div style="font-size:11px;color:#7e8c99;margin-top:6px">ユーザーの追加・ロール変更は今後のリリースで対応予定です。</div></div>'
+        + '<div style="font-size:11px;color:#7e8c99;margin-top:6px">ユーザーの追加・ロール変更は「ユーザー管理」画面から行えます。</div></div>'
 
         + '<div class="cw-pg-card"><h3 style="margin:0 0 8px;font-size:13.5px;color:#13344f">🔔 通知設定</h3>'
         + '<div class="cw-as-row"><label>Slack 通知</label><input type="checkbox" id="cw-as-slack"></div>'
@@ -2457,6 +2852,7 @@
     CW_SCREENS["reports"] = { id: "cw-reports-screen", show: cwRenderReports };
     CW_SCREENS["ops-status"] = { id: "cw-ops-screen", show: cwLoadOpsStatus };
     CW_SCREENS["audit"] = { id: "cw-audit-screen", show: cwLoadAudit };
+    CW_SCREENS["users"] = { id: "cw-users-screen", show: cwLoadUsers };
     CW_SCREENS["app-settings"] = { id: "cw-appset-screen", show: cwLoadAppSettings };
 
     // ---- ログイン画面（注入。.dc.html 無改修） ----
@@ -2747,6 +3143,7 @@
           installRegisterScreen(adapter);
           installSettingsScreen();
           installSourceNote();
+          installHistoryTools();
           installWbgtScreen();
           // #79 新画面群（現場一覧/気象全国版/分析/レポート/監査ログ/設定/準備中）
           installSitesScreen();
@@ -2756,6 +3153,7 @@
           installReportsScreen();
           installOpsScreen();
           installAuditScreen();
+          installUsersScreen();
           installAppSettingsScreen();
           installMarineScreen();
           installMarineWorkScreen();
