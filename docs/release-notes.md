@@ -1,5 +1,45 @@
 # リリースノート / Release Notes
 
+## 2026-08-13 — MVP/Prototype 完成（ユーザー管理・類似判断・PDF帳票・検索・MVP分離環境）
+
+### 変更内容
+
+- **ユーザー管理 API＋管理画面（admin 専用）**: 一覧/作成/ロール変更/有効無効/
+  パスワードリセット/削除。自分自身の降格・無効化・削除と最後の有効な管理者の変更を防止し、
+  全操作を監査ログへ記録（弱点 #17 解消）
+- **類似過去判断の参照（#67）**: 同一現場/工種/判定レベル/直近7日をスコアリングして
+  過去の判断を参照できる `/api/decision-logs/similar` と画面パネル
+- **判断履歴 PDF 帳票**: `/api/decision-logs/export.pdf`（A4横・日本語）。
+  フォントは SIL OFL 1.1 の M+ 1p を `backend/app/assets/fonts/` に同梱・self-host
+- **判断履歴の検索・絞り込み**: `site_id` / `work_type` / `q`（現場名・メモ・記録者・
+  工種の部分一致）/ `action`。画面に検索ツールバーを追加
+- **ダミーデータ刷新**: シード実行日基準で 7工種・判定レベル0-3・全行動を網羅する
+  30件の判断履歴と 12件の作業予定を投入（レビュー時に常に直近のデータが並ぶ）
+- **MVP 分離環境**: 本番と別トンネル・別 PostgreSQL16・別ポートで
+  `https://cwwd-mvp.mirai-dx-platform.com` を新設（Cloudflare Access で保護）。
+  手順は `docs/mvp-environment.md`
+- **テスト基盤修正**: conftest の二重インポートが稼働中テストDBを削除する潜在バグを解消
+- **評価書**: `docs/evaluation/2026-08-13-mvp-assessment.md`
+
+### 検証結果
+
+| 項目 | 結果 |
+|---|---|
+| backend pytest | **481 passed** |
+| ruff | PASS |
+| pip-audit | 既知脆弱性 0 |
+| frontend tests | logic 21 / adapter-contract 59 / policy・vendor・serve suites PASS |
+| E2E smoke（local） | PASS（Playwright Firefox ログイン〜表示〜ログアウト） |
+| MVP URL | `/health` `/readyz` 200 OK・未認証 302（Cloudflare Access）実測 |
+
+### 本番への影響
+
+- 本番デプロイ（systemd 再起動）・本番DB migration・本番Secrets変更は**実施していない**。
+  本番 backend は従来版のまま（再起動は今回の対象外）。
+- 本番 frontend は `serve.py` がリポジトリのファイルを配信する構成のため、merge 後の
+  再起動まで新旧が混在し得ます。本番反映時は `cwwd-backend` / `cwwd-frontend` を
+  同時に再起動してください。
+
 ## 2026-08-12 — WMCDSS 統合（NOWPHAS 海象・公的データ優先）
 
 ### 変更内容

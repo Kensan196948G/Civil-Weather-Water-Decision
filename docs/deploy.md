@@ -2,6 +2,10 @@
 
 詳細設計 §15（システム構成方針）/ §16（セキュリティ）に基づく。
 
+> MVP/Prototype（本番と分離したレビュー環境）の構成・アカウント・操作・廃止手順は
+> [docs/mvp-environment.md](./mvp-environment.md) を参照してください。
+> MVP URL: `https://cwwd-mvp.mirai-dx-platform.com`（本番 `cwwd.mirai-dx-platform.com` とは別トンネル・別DB）。
+
 ## CI（GitHub Actions）
 
 `.github/workflows/ci.yml` が push / PR(main) で実行:
