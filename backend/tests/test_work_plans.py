@@ -1,10 +1,13 @@
 """作業予定 API（#16 T1-05・詳細設計§7 /api/work-plans）の結合テスト。"""
+from datetime import date
+
 from conftest import login_token
+from app import seed as seed_module
 
 
 def test_list_work_plans(client):
     rows = client.get("/api/work-plans").json()
-    assert len(rows) == 5  # seed.py WP01〜WP05
+    assert len(rows) == len(seed_module._build_plans())
     assert {"id", "siteId", "workType", "plannedStart", "plannedEnd", "status"} <= rows[0].keys()
 
 
@@ -15,9 +18,12 @@ def test_list_work_plans_filter_by_site(client):
 
 
 def test_list_work_plans_daily_view(client):
-    # FR-014: 日別表示。seed は全件 2026-06-20 の予定
-    rows = client.get("/api/work-plans", params={"date": "2026-06-20"}).json()
-    assert len(rows) == 5
+    # FR-014: 日別表示。seed はシード実行日を基準に直近数日分の予定を投入する
+    today = date.today().isoformat()
+    expected_today = sum(1 for (_, _, _, off, *_)
+                         in seed_module.PLAN_ITEMS if off == 0)
+    rows = client.get("/api/work-plans", params={"date": today}).json()
+    assert len(rows) == expected_today
     assert client.get("/api/work-plans", params={"date": "2099-01-01"}).json() == []
 
 

@@ -17,6 +17,7 @@ dependencies = [
     "bcrypt>=4.1",
     "cryptography>=43.0.1",
     "defusedxml>=0.7",
+    "reportlab>=4.2",
 ]
 
 [project.optional-dependencies]

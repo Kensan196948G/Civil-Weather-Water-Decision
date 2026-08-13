@@ -45,8 +45,8 @@
   "kpi": {
     "ci_success_rate": 1.0,
     "backend_test_pass_rate": 1.0,
-    "backend_tests_total": 462,
-    "frontend_tests_total": 78,
+    "backend_tests_total": 481,
+    "frontend_tests_total": 83,
     "security_critical": 0,
     "blocker_count": 0,
     "dependency_scan_in_ci": true
@@ -518,5 +518,52 @@
       "data_adapter": "cw-open-meteo-attribution / mapSiteLinks 反映",
       "logs": "ERROR/Traceback なし"
     }
+  },
+  "mvp_2026_08_13": {
+    "title": "MVP/Prototype 完成（ユーザー管理・類似判断・PDF帳票・検索・ダミーデータ刷新・MVP分離環境/URL新設）",
+    "scope": "本番運用化は対象外。本番は read-only 確認のみ（本番DB/deploy/Secrets変更なし）",
+    "urls": {
+      "production": "https://cwwd.mirai-dx-platform.com",
+      "mvp": "https://cwwd-mvp.mirai-dx-platform.com（新設・Cloudflare Access+Tunnel・ダミーデータのみ）"
+    },
+    "features": [
+      "ユーザー管理API/画面（/api/admin/users CRUD・RBAC・自己ロックアウト/最終admin保護・監査）",
+      "類似過去判断の参照（/api/decision-logs/similar・#67）",
+      "判断履歴PDF帳票（/api/decision-logs/export.pdf・OFL日本語フォント同梱）",
+      "判断履歴の検索・絞り込み（site_id/work_type/q/action）",
+      "ダミーデータ刷新（シード実行日基準・7工種・L0-3・全行動・12作業予定・30判断履歴）",
+      "テスト基盤修正（conftest二重インポートによる稼働中テストDB削除の解消）"
+    ],
+    "mvp_env": {
+      "backend": "cwwd-mvp-backend（127.0.0.1:55119, APP_ENV=mvp, PostgreSQL16 cwwd-mvp-pg:15433）",
+      "frontend": "cwwd-mvp-frontend（127.0.0.1:35179）",
+      "tunnel": "cwwd-mvp-tunnel（cwwd-mvp-civil-weather-water → cwwd-mvp.mirai-dx-platform.com）",
+      "access": "Accessアプリ cwwd-mvp（mirai-const.co.jp または kensan1969@gmail.com, 24h）",
+      "docs": "docs/mvp-environment.md（アカウント・操作・廃止手順）"
+    },
+    "verification": {
+      "backend_pytest": "PASS (481 passed)",
+      "ruff": "PASS",
+      "frontend_tests": "PASS（logic/adapter/policy系。委任Agent実装後に再確認）",
+      "e2e_smoke_local": "PASS（Playwright Firefox ログイン〜表示〜ログアウト）",
+      "pip_audit": "PASS (known vulnerabilities 0)",
+      "ci": "PASS（GitHub Actions 5ジョブ: backend lint+test / security / frontend / e2e / docker build）",
+      "coderabbit": "NOT RUN（Fair Usage レート制限。必須CI 5ジョブは全PASS）",
+      "mvp_health": "200 OK / readyz ok（PG16・migrations・tables）",
+      "mvp_public": "302（Cloudflare Access。未認証リダイレクト実測）",
+      "mvp_seed": "16現場/5ユーザー(5ロール)/30判断履歴/12作業予定/PDF 65KB 生成"
+    },
+    "pr": {
+      "number": 144,
+      "url": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision/pull/144",
+      "branch": "feat/mvp-user-management-history-reports",
+      "status": "Ready for Review（Phase 1 完了・CI 5ジョブPASS・マージ判定待ち）",
+      "closes": [67]
+    },
+    "residual": [
+      "#114 Open-Meteo商用契約 / #115 オフサイトバックアップ / #116 外部監視 / #119 3現場30日受入試験（本番運用・今回対象外）",
+      "河川公式自動取得・通知実配信・アクセシビリティ検証・モバイルPWA・AI機能・データ保持クリーンアップ"
+    ],
+    "verdict": "MVP/Prototype: GO（本番運用化は別スコープ）"
   }
 }

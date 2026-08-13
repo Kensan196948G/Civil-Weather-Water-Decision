@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # 本番の新規DBへデモ現場を誤投入しないための安全側既定（評価 2026-08-12 対応）。
     # 検証環境で明示的にデモデータが必要な場合は SEED_DEMO_DATA=true を設定する。
     seed_demo_data: bool | None = None
+    # デモユーザー（tanaka/yamada/takahashi/viewer・共有デモパスワード）を投入するか。
+    # local は常に投入。MVP/検証環境（SEED_DEMO_USERS=true）では本番管理者(U01)を除く
+    # ロール別デモユーザーのみ投入し、ADMIN_PASSWORD は本番管理者にのみ適用する。
+    seed_demo_users: bool = False
 
     @model_validator(mode="after")
     def _guard_production(self):

@@ -1,0 +1,32 @@
+[Unit]
+Description=Civil-Weather-Water-Decision MVP Cloudflare Tunnel (cwwd-mvp.mirai-dx-platform.com)
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+After=network-online.target cwwd-mvp-backend.service cwwd-mvp-frontend.service
+Wants=network-online.target cwwd-mvp-backend.service cwwd-mvp-frontend.service
+
+[Service]
+Type=simple
+User=kensan
+Restart=always
+RestartSec=5
+ExecStart=/usr/local/bin/cloudflared tunnel --config /home/kensan/.cloudflared/config-cwwd-mvp.yml run cwwd-mvp-civil-weather-water
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

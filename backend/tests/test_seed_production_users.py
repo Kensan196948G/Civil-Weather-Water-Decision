@@ -83,7 +83,29 @@ def test_seed_production_explicit_demo_data_is_allowed(monkeypatch):
         seed_module.seed(db)
 
         assert db.query(Site).count() == len(seed_module.SITES)
-        assert db.query(WorkPlan).count() == len(seed_module.PLANS)
-        assert db.query(DecisionLog).count() == len(seed_module.HISTORY)
+        assert db.query(WorkPlan).count() == len(seed_module._build_plans())
+        assert db.query(DecisionLog).count() == len(seed_module._build_history())
         # デモユーザーは local 限定のまま（本番は Entra 連携/個別管理を前提）
         assert db.get(User, "U02") is None
+
+
+def test_seed_mvp_users_stay_active_across_restarts(monkeypatch):
+    """MVP環境（非local・SEED_DEMO_USERS=true）では再起動時シードでも
+    デモユーザーを無効化しない（_sync_production_users の安全側ガード検証）。"""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False)
+
+    monkeypatch.setattr(seed_module.settings, "app_env", "mvp")
+    monkeypatch.setattr(seed_module.settings, "admin_password", "mvp-boot-password")
+    monkeypatch.setattr(seed_module.settings, "seed_demo_data", True)
+    monkeypatch.setattr(seed_module.settings, "seed_demo_users", True)
+    with Session() as db:
+        seed_module.seed(db)  # 初回: デモユーザー投入
+        assert db.get(User, "U03").is_active is True
+    # 再起動相当: 既投入DBでもう一度 seed してもデモユーザーは有効のまま
+    with Session() as db:
+        seed_module.seed(db)
+        for uid in ("U02", "U03", "U04", "U05"):
+            assert db.get(User, uid).is_active is True
+        assert db.get(User, "U01").username == "admin"

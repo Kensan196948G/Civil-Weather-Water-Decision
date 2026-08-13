@@ -1,0 +1,43 @@
+[Unit]
+Description=Civil-Weather-Water-Decision MVP frontend (static server, port 35179)
+Documentation=https://github.com/Kensan196948G/Civil-Weather-Water-Decision/blob/main/docs/deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kensan
+Group=kensan
+WorkingDirectory=/home/kensan/Projects/Mirai-DX-Project/Civil-Weather-Water-Decision/frontend
+Environment=PORT=35179
+Environment=HOST=127.0.0.1
+Environment=CW_TILE_URL=https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png
+Environment=CW_TILE_ATTRIBUTION=国土地理院
+Environment=CW_BACKEND_PROXY_BASE=http://127.0.0.1:55119
+ExecStart=/usr/bin/python3 serve.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+RemoveIPC=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

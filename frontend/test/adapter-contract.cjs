@@ -83,6 +83,17 @@ function fetchMock(u, opts) {
       data_retention_days: 365, user_prefs: {} };
   } else if (u.indexOf("/api/admin/audit-logs") >= 0) {
     data = [{ id: 1, timestamp: "2026-07-12 21:00:00", user: "admin", action: "login", message: "ログイン成功", siteId: null }];
+  } else if (u.indexOf("/api/admin/users") >= 0 && method === "POST") {
+    lastPost = JSON.parse(opts.body);
+    data = { id: "U10", status: "created" }; status = 201;
+  } else if (u.indexOf("/api/admin/users/") >= 0 && method === "PUT") {
+    lastPost = JSON.parse(opts.body);
+    data = { id: "U10", status: "updated" };
+  } else if (u.indexOf("/api/admin/users/") >= 0 && method === "DELETE") {
+    data = { id: "U10", status: "deleted" };
+  } else if (u.indexOf("/api/admin/users") >= 0) {
+    data = [{ id: "U01", username: "admin", displayName: "システム管理者", email: "",
+              role: "admin", department: "IT・DX部門", isActive: true }];
   } else if (u.indexOf("/api/sites/") >= 0 && u.indexOf("/observation-stations") >= 0) {
     data = { automatic: true, provider: "デモ自動取得（DEMO-RIVER・シミュレーション）", stations: [
       { id: "OS1", sourceId: "DEMO-RIVER", stationCode: "DEMO-S01-NEAR",
@@ -103,6 +114,8 @@ function fetchMock(u, opts) {
   } else if (u.indexOf("/api/sites") >= 0) data = SITES_LIST;
   else if (u.indexOf("/api/dashboard/site-risk") >= 0) data = DASH;
   else if (u.indexOf("/api/dashboard/data-sources") >= 0) data = SOURCES;
+  else if (u.indexOf("/api/decision-logs/similar") >= 0) data = [Object.assign({}, HISTORY[0], {
+    score: 5, matchReasons: ["同一現場", "同一工種"] })];
   else if (u.indexOf("/api/decision-logs") >= 0) data = HISTORY;
   else if (u.indexOf("/api/weather/timeseries") >= 0) data = { points: points24() };
   else if (u.indexOf("/api/marine/national") >= 0) data = {
@@ -279,6 +292,30 @@ const ok = (c, msg) => { c ? pass++ : fail++; console.log((c ? "  ✓" : "  ✗"
   const raw = await adapter.authedFetch("/api/decision-logs/export.csv");
   ok(raw && raw.ok && lastReq.url.indexOf("/api/decision-logs/export.csv") >= 0,
     "authedFetch が認証付きの素 fetch 応答を返す（CSVダウンロード用）");
+
+  // ---- 2026-08-13: ユーザー管理 / 判断履歴の検索・類似参照 ----
+  const ul = await adapter.listUsers();
+  ok(Array.isArray(ul) && ul[0].id === "U01" && ul[0].role === "admin",
+    "listUsers が GET /api/admin/users で一覧を取得");
+  const uc = await adapter.createUser({ username: "newuser", display_name: "新 太郎", email: "",
+    role: "viewer", department: "", password: "pass1234" });
+  ok(uc.ok && uc.status === 201 && lastPost.username === "newuser" && lastReq.method === "POST",
+    "createUser が POST /api/admin/users で作成");
+  const uu = await adapter.updateUser("U10", { role: "tech_manager" });
+  ok(uu.ok && lastReq.method === "PUT" && lastPost.role === "tech_manager"
+    && lastReq.url.indexOf("/api/admin/users/U10") >= 0,
+    "updateUser が PUT /api/admin/users/{id} で更新");
+  const ud = await adapter.deleteUser("U10");
+  ok(ud.ok && lastReq.method === "DELETE" && lastReq.url.indexOf("/api/admin/users/U10") >= 0,
+    "deleteUser が DELETE /api/admin/users/{id} で削除");
+  const sh = await adapter.searchHistory({ q: "打設", site_id: "S01" });
+  ok(Array.isArray(sh) && lastReq.url.indexOf("/api/decision-logs?") >= 0
+    && lastReq.url.indexOf("q=%E6%89%93%E8%A8%AD") >= 0 && lastReq.url.indexOf("site_id=S01") >= 0,
+    "searchHistory が絞り込みクエリで /api/decision-logs を呼ぶ");
+  const sim = await adapter.similarHistory({ site_id: "S01", work_type: "river" });
+  ok(Array.isArray(sim) && sim[0].score === 5 && sim[0].matchReasons.indexOf("同一現場") >= 0
+    && lastReq.url.indexOf("/api/decision-logs/similar") >= 0,
+    "similarHistory が /api/decision-logs/similar を呼びスコア付き結果を返す");
 
   // ---- isAllowedApiBase: ?api= 上書きによる認証情報流出対策（Token Exfiltration対応） ----
   ["", "http://localhost:8000", "http://127.0.0.1:3000", "http://192.168.1.5:8000",
