@@ -5,7 +5,7 @@ WebUI(ClaudeDesign) のモックと同じ S01〜S06 を用い、見た目を一�
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +18,8 @@ from .models import (
     UserSiteAccess, WorkPlan, WorkType,
 )
 from .services.data_collectors import river_collector
+
+JST = timezone(timedelta(hours=9))
 
 # デモ用ユーザー（5ロール）。本番では各自パスワード変更／Entra ID 連携。
 USERS = [
@@ -76,13 +78,38 @@ STATIONS = {
             ("Z市 WBGT地点", "wbgt", "参照", 35.436, 139.686)],
 }
 
-PLANS = [
-    ("WP01", "S01", "river", "護岸ブロック据付", "2026-06-20T08:00", "2026-06-20T12:00", "○○建設"),
-    ("WP02", "S01", "river", "法面整形", "2026-06-20T13:00", "2026-06-20T16:00", "○○建設"),
-    ("WP03", "S03", "concrete", "橋脚 コンクリート打設", "2026-06-20T09:00", "2026-06-20T15:00", "□□工業"),
-    ("WP04", "S02", "earthwork", "掘削・残土搬出", "2026-06-20T08:00", "2026-06-20T17:00", "△△土建"),
-    ("WP05", "S06", "pavement", "表層 舗設", "2026-06-20T08:00", "2026-06-20T15:00", "◎◎道路"),
+# 作業予定は「シード実行日基準」で生成する（レビュー時に常に直近の予定が並ぶ）。
+# (site_id, work_type, title, day_offset, start_hh, start_mm, end_hh, end_mm, contractor)
+PLAN_ITEMS = [
+    ("S01", "river", "護岸ブロック据付", 0, 8, 0, 12, 0, "葵総合建設"),
+    ("S01", "river", "法面整形", 0, 13, 0, 16, 0, "葵総合建設"),
+    ("S03", "concrete", "橋脚 コンクリート打設", 0, 9, 0, 15, 0, "つばさ工業"),
+    ("S02", "earthwork", "掘削・残土搬出", 0, 8, 0, 17, 0, "みやび土建"),
+    ("S06", "pavement", "表層 舗設", 0, 8, 0, 15, 0, "港未来道路"),
+    ("S12", "crane", "ガントリークレーン据付", 1, 8, 0, 17, 0, "大洋重機"),
+    ("S12", "marine", "岸壁近接 海中基礎作業", 1, 9, 0, 14, 0, "大洋重機"),
+    ("S15", "heat", "高所作業（暑熱対策計画適用）", 0, 9, 0, 16, 0, "南風鉄構"),
+    ("S07", "river", "河道掘削（河川内）", 2, 7, 0, 15, 0, "北星建設"),
+    ("S11", "concrete", "床版 コンクリート打設", 1, 8, 0, 16, 0, "名城土木"),
+    ("S16", "pavement", "表層 舗設", 1, 8, 0, 15, 0, "琉南道路"),
+    ("S14", "earthwork", "造成盛土", 2, 8, 0, 16, 0, "讃岐開発"),
 ]
+
+
+def _build_plans() -> list[tuple]:
+    """作業予定をシード実行日基準の日時文字列で組み立てる。"""
+    today = datetime.now(JST).date()
+    rows = []
+    for i, (sid, wt, title, off, sh, sm, eh, em, con) in enumerate(PLAN_ITEMS, 1):
+        d = today + timedelta(days=off)
+        rows.append((
+            f"WP{i:02d}", sid, wt, title,
+            f"{d:%Y-%m-%d}T{sh:02d}:{sm:02d}",
+            f"{d:%Y-%m-%d}T{eh:02d}:{em:02d}",
+            con,
+        ))
+    return rows
+
 
 # 現場別の公式リンク（#30 T2-02 / FR-035）。河川作業のある現場に「川の防災情報」への導線を用意。
 # 現場別の精緻なURL(観測所ページ)は観測所正規化(#29)後に対応。初期は公式トップへの参照リンク。
@@ -115,15 +142,56 @@ SOURCES = [
      "暫定運用）。退避判断は必ず公式サイトと現地確認を優先。"),
 ]
 
-HISTORY = [
-    ("L07", "06/19 08:10", "S01", "北川 下流右岸 護岸工事", "河川内作業", 2, "cancel", "上流雨量増加・水位上昇傾向のため午前のブロック据付を中止。午後再評価。", "山田（現場管理者）"),
-    ("L06", "06/19 07:55", "S03", "中央高架橋 下部工", "コンクリート打設", 1, "execute", "高温だが暑中コンクリート対策を確認し打設実施。養生強化。", "佐藤（主任技術者）"),
-    ("L05", "06/18 16:40", "S02", "東部丘陵 道路改良", "土工", 1, "postpone", "翌日午前の降雨予報により法面整形を午後へ変更。", "鈴木（現場管理者）"),
-    ("L04", "06/18 13:20", "S05", "西沢川 樋門設置", "河川内作業", 3, "monitor", "河川データ更新遅延。公式ページと現地目視で監視継続。", "高橋（安全担当）"),
-    ("L03", "06/18 09:05", "S03", "中央高架橋 下部工", "クレーン作業", 2, "cancel", "突風リスクのため大型クレーン揚重を中止・待機。", "佐藤（主任技術者）"),
-    ("L02", "06/17 14:10", "S06", "港南 臨港道路 舗装", "舗装", 0, "execute", "気象条件良好。予定どおり舗設実施。", "田中（現場管理者）"),
-    ("L01", "06/17 10:30", "S02", "東部丘陵 道路改良", "土工", 0, "execute", "注意条件なし。通常確認で作業実施。", "鈴木（現場管理者）"),
+# 判断履歴は「シード実行日基準・14日分」で生成し、7工種・判定レベル0-3・全行動を網羅する。
+# (day_offset, hh, mm, site_id, work_type_key, level, action, comment, decided_by)
+HISTORY_ITEMS = [
+    (13, 8, 10, "S01", "river", 2, "cancel", "上流雨量増加・水位上昇傾向のため午前のブロック据付を中止。午後再評価。", "山田（現場管理者）"),
+    (13, 7, 55, "S03", "concrete", 1, "execute", "高温だが暑中コンクリート対策を確認し打設実施。養生強化。", "佐藤（主任技術者）"),
+    (12, 16, 40, "S02", "earthwork", 1, "postpone", "翌日午前の降雨予報により法面整形を午後へ変更。", "鈴木（現場管理者）"),
+    (12, 13, 20, "S05", "river", 3, "monitor", "河川データ更新遅延。公式ページと現地目視で監視継続。", "高橋（安全担当）"),
+    (12, 9, 5, "S03", "crane", 2, "cancel", "突風リスクのため大型クレーン揚重を中止・待機。", "佐藤（主任技術者）"),
+    (11, 14, 10, "S06", "pavement", 0, "execute", "気象条件良好。予定どおり舗設実施。", "田中（現場管理者）"),
+    (11, 10, 30, "S02", "earthwork", 0, "execute", "注意条件なし。通常確認で作業実施。", "鈴木（現場管理者）"),
+    (10, 8, 15, "S15", "heat", 2, "postpone", "WBGT危険域（31超）予報のため高所作業を早朝時間帯へ変更。", "森（安全担当）"),
+    (10, 9, 40, "S12", "marine", 1, "monitor", "うねり増大予報。海上作業は監視継続し作業船待機。", "井上（現場管理者）"),
+    (9, 7, 50, "S09", "river", 2, "cancel", "信濃川上流の雨量増加で水位上昇。河川内作業を中止。", "加藤（現場管理者）"),
+    (9, 13, 5, "S11", "concrete", 0, "execute", "打設時の気温・風速とも基準内。予定どおり実施。", "山本（主任技術者）"),
+    (8, 15, 25, "S08", "earthwork", 1, "postpone", "強風注意報発表中のため盛土・重機作業を翌日に延期。", "小林（現場管理者）"),
+    (8, 8, 55, "S16", "pavement", 0, "execute", "降雨予報なし・舗装基準内。表層舗設を実施。", "比嘉（現場管理者）"),
+    (7, 11, 20, "S01", "river", 1, "execute", "水位安定を確認し、護岸工を実施。観測は継続。", "山田（現場管理者）"),
+    (7, 14, 40, "S05", "river", 3, "monitor", "観測値の遅延が継続。公式ページ参照し監視継続。", "高橋（安全担当）"),
+    (6, 9, 10, "S03", "crane", 1, "execute", "風速基準内を確認し揚重を実施。随時風速を監視。", "佐藤（主任技術者）"),
+    (6, 10, 45, "S15", "heat", 1, "execute", "WBGT注意域。休憩・給水を増やし作業実施。", "森（安全担当）"),
+    (5, 13, 30, "S12", "marine", 2, "cancel", "有義波高が閾値超過。海中基礎作業を中止し波浪減衰を待つ。", "井上（現場管理者）"),
+    (5, 8, 35, "S04", "earthwork", 0, "execute", "注意条件なし。造成工を予定どおり実施。", "伊藤（現場管理者）"),
+    (4, 16, 5, "S02", "earthwork", 1, "postpone", "夕方の降雨予報により残土搬出を翌朝へ。", "鈴木（現場管理者）"),
+    (4, 9, 50, "S06", "pavement", 1, "execute", "軽い降雨後。路面乾燥を確認し舗設実施。", "田中（現場管理者）"),
+    (3, 7, 45, "S07", "river", 2, "cancel", "上流の雨量増加で水位上昇。河道掘削を中止。", "中村（現場管理者）"),
+    (3, 12, 15, "S14", "earthwork", 0, "execute", "良好。盛土締固めを実施。", "清水（現場管理者）"),
+    (2, 10, 20, "S11", "concrete", 1, "execute", "気温高めのため暑中コンクリート対策を適用して打設。", "山本（主任技術者）"),
+    (2, 14, 55, "S13", "river", 1, "execute", "水位平常を確認し河川内の護床工を実施。", "松本（現場管理者）"),
+    (1, 8, 30, "S15", "heat", 2, "postpone", "WBGT31超予報。作業開始を早朝へ前倒し。", "森（安全担当）"),
+    (1, 13, 40, "S12", "crane", 0, "execute", "風速基準内・注意事項なし。クレーン作業実施。", "井上（現場管理者）"),
+    (1, 9, 15, "S03", "concrete", 0, "execute", "基準内。橋脚コンクリートを打設。", "佐藤（主任技術者）"),
+    (0, 7, 35, "S01", "river", 1, "monitor", "水位はやや高め。観測値と現地目視で監視のうえ作業開始を判断。", "山田（現場管理者）"),
+    (0, 8, 5, "S02", "earthwork", 0, "execute", "注意条件なし。通常確認で掘削作業を開始。", "鈴木（現場管理者）"),
 ]
+
+
+def _build_history() -> list[tuple]:
+    """判断履歴をシード実行日基準で組み立て、旧→新の順でIDを採番する。"""
+    today = datetime.now(JST).date()
+    name_by_id = {sid: name for sid, _, name, *_ in SITES}
+    label_by_key = {k: n for k, n, _ in WORK_TYPES}
+    rows = []
+    for i, (off, hh, mm, sid, wt, lv, act, comment, by) in enumerate(HISTORY_ITEMS, 1):
+        d = today - timedelta(days=off)
+        rows.append((
+            f"L{i:02d}", f"{d:%m/%d} {hh:02d}:{mm:02d}",
+            sid, name_by_id[sid], label_by_key[wt],
+            lv, act, comment, by,
+        ))
+    return rows
 
 
 def _sync_production_users(db: Session) -> None:
@@ -140,10 +208,13 @@ def _sync_production_users(db: Session) -> None:
     admin.email = "admin@example.com"
     admin.password_hash = hash_password(settings.admin_password)
     admin.is_active = True
-    for uid in DEMO_USER_IDS:
-        demo = db.get(User, uid)
-        if demo is not None:
-            demo.is_active = False
+    if not settings.seed_demo_users:
+        # SEED_DEMO_USERS=true（MVP/検証環境）ではロール別デモユーザーを維持する。
+        # 本番相当ではデモユーザーを無効化し、個別管理/Entra連携を前提とする。
+        for uid in DEMO_USER_IDS:
+            demo = db.get(User, uid)
+            if demo is not None:
+                demo.is_active = False
 
 
 def seed(db: Session) -> None:
@@ -156,6 +227,8 @@ def seed(db: Session) -> None:
         if settings.seed_demo_data is not None
         else settings.app_env == "local"
     )
+    plans = _build_plans()
+    history = _build_history()
     # 作業種別・データソースは「既投入でも不足分を追補」する冪等 upsert（#72 段5:
     # 既存本番DBへ marine 種別・海洋ソースを追加してもシード済み判定で無視されない）
     has_any_wt = db.scalar(select(WorkType).limit(1)) is not None
@@ -187,7 +260,7 @@ def seed(db: Session) -> None:
             for i, (sname, stype, srel, slat, slon) in enumerate(STATIONS.get(sid, []), 1):
                 db.add(Station(id=f"{sid}-ST{i}", site_id=sid, name=sname, type=stype, rel=srel,
                                latitude=slat, longitude=slon))
-        for (pid, sid, wt, title, st, en, con) in PLANS:
+        for (pid, sid, wt, title, st, en, con) in plans:
             db.add(WorkPlan(id=pid, site_id=sid, work_type=wt, title=title,
                             planned_start=st, planned_end=en, contractor=con))
         for (lid, sid, label, url, kind, order) in SITE_LINKS:
@@ -195,20 +268,33 @@ def seed(db: Session) -> None:
         # 新規DBでは現場投入後にデモ観測所と紐付けを投入（現場が存在する状態で1回だけ実行）
         if settings.river_demo_enabled:
             river_collector.ensure_demo_stations(db)
-        for (lid, dt, sid, sname, wt, lv, act, comment, by) in HISTORY:
+        for (lid, dt, sid, sname, wt, lv, act, comment, by) in history:
             db.add(DecisionLog(id=lid, site_id=sid, site_name=sname, work_type=wt, level=lv,
                                action=act, comment=comment, decided_by=by, decided_at=dt))
-    # デモユーザー(admin/admin123 等)は local のみ。本番管理者は本関数冒頭の
-    # _sync_production_users() で既に同期済み（#90 対抗レビュー critical-1: ここで再度
-    # 呼ぶと同一主キー U01 の User が2件 pending になり commit 時に IntegrityError となる）。
-    if settings.app_env == "local":
-        for (uid, uname, disp, role, dept, pw) in USERS:
-            db.add(User(id=uid, username=uname, display_name=disp, role=role,
-                        department=dept, email=f"{uname}@example.com",
-                        password_hash=hash_password(pw)))
+    # デモユーザーは local（既定）または SEED_DEMO_USERS=true の検証環境のみ投入する。
+    # 本番管理者(U01)は本関数冒頭の _sync_production_users() で既に同期済みのため、
+    # 非localで SEED_DEMO_USERS=true の場合は U02 以降のみを投入/再有効化する
+    # （#90 対抗レビュー critical-1: U01 を二重 add すると IntegrityError になる）。
+    seed_users = settings.app_env == "local" or settings.seed_demo_users
+    if seed_users:
+        target_users = USERS if settings.app_env == "local" else [u for u in USERS if u[0] != "U01"]
+        for (uid, uname, disp, role, dept, pw) in target_users:
+            existing = db.get(User, uid)
+            if existing is None:
+                db.add(User(id=uid, username=uname, display_name=disp, role=role,
+                            department=dept, email=f"{uname}@example.com",
+                            password_hash=hash_password(pw), is_active=True))
+            else:
+                existing.username = uname
+                existing.display_name = disp
+                existing.role = role
+                existing.department = dept
+                existing.email = f"{uname}@example.com"
+                existing.password_hash = hash_password(pw)
+                existing.is_active = True
         # #117: デモユーザーへ全現場を割当（現場単位権限の動作確認と既存UI維持用。
-        # 本番では管理API/Entra同期で個別割当するため、このブロックは local のみ）
-        _now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # 本番では管理API/Entra同期で個別割当するため、このブロックはデモユーザー投入時のみ）
+        _now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
         for uid, role in (("U03", "site_decision"), ("U04", "site_decision"),
                           ("U05", "site_viewer")):
             for sid, *_ in SITES:
@@ -224,8 +310,8 @@ def seed(db: Session) -> None:
 
     counter_values = {
         "S": _maxnum([s[0] for s in SITES], "S"),
-        "WP": _maxnum([p[0] for p in PLANS], "WP"),
-        "L": _maxnum([h[0] for h in HISTORY], "L"),
+        "WP": _maxnum([p[0] for p in plans], "WP"),
+        "L": _maxnum([h[0] for h in history], "L"),
         "SL": _maxnum([sl[0] for sl in SITE_LINKS], "SL"),
         "DR": 0,
     }

@@ -9,11 +9,19 @@ import random
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -22,6 +30,7 @@ from ..core import crypto, ops_status, readiness
 from ..core.config import settings
 from ..core.db import get_db
 from ..core.deps import get_current_user, require_role
+from ..core.security import hash_password
 from ..models import (
     AppSetting, AuditLog, DataSourceStatus, DecisionLog, DecisionReason, DecisionResult,
     IdCounter, ObservationStation, RiverObservation, Site, SiteLink, SiteStation,
@@ -39,7 +48,26 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 WORK_KEYS = {"river", "concrete", "earthwork", "pavement", "crane", "heat", "marine"}
 RIVER_STATES = {"none", "stable", "rising", "stale"}
+USER_ROLES = {"admin", "tech_manager", "site_manager", "safety", "viewer"}
+LEVEL_LABELS = {0: "通常", 1: "注意", 2: "中止検討", 3: "確認不能"}
+ACTION_LABELS = {
+    "execute": "実施", "postpone": "延期", "cancel": "中止",
+    "monitor": "監視継続", "other": "その他",
+}
 _ID_COMMIT_ATTEMPTS = 5
+
+# 帳票PDF用の日本語フォント（SIL OFL 1.1 で同梱。self-host 方針に合わせ CDN/システムフォント非依存）
+_PDF_FONT_PATH = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "MPlus1p-Regular.ttf"
+_PDF_FONT_REGISTERED = False
+
+
+def _pdf_font() -> str:
+    """PDF用日本語TTFを一度だけ登録してフォント名を返す。"""
+    global _PDF_FONT_REGISTERED
+    if not _PDF_FONT_REGISTERED:
+        pdfmetrics.registerFont(TTFont("MPlus1p", str(_PDF_FONT_PATH)))
+        _PDF_FONT_REGISTERED = True
+    return "MPlus1p"
 
 
 def _max_existing_numeric(db: Session, model, prefix: str) -> int:
@@ -74,7 +102,7 @@ def _allocate_id(db: Session, model, prefix: str, width: int) -> str:
 _COUNTER_SPECS = ((Site, "S"), (DecisionResult, "DR"), (WorkPlan, "WP"),
                   (DecisionLog, "L"), (SiteLink, "SL"),
                   (ObservationStation, "OS"), (SiteStation, "SS"),
-                  (RiverObservation, "RO"))
+                  (RiverObservation, "RO"), (User, "U"))
 
 # リトライしてよい一時エラーのみ許可（恒久障害を409に偽装しない: 対抗レビュー[medium]）
 _SQLITE_TRANSIENT_MARKERS = ("database is locked", "database table is locked")
@@ -1830,17 +1858,91 @@ class DecisionLogReq(BaseModel):
 
 
 @router.get("/decision-logs")
-def list_decision_logs(action: str | None = None, db: Session = Depends(get_db),
+def list_decision_logs(action: str | None = None,
+                       site_id: str | None = Query(None, max_length=10),
+                       work_type: str | None = Query(None, max_length=40),
+                       q: str | None = Query(None, max_length=100),
+                       db: Session = Depends(get_db),
                        user: User = Depends(get_current_user)):
     accessible = site_access.accessible_site_ids(db, user)
-    q = select(DecisionLog).order_by(DecisionLog.id.desc())
-    q = q.where(DecisionLog.site_id.in_(accessible))
+    stmt = select(DecisionLog).order_by(DecisionLog.id.desc())
+    stmt = stmt.where(DecisionLog.site_id.in_(accessible))
     if action and action != "all":
-        q = q.where(DecisionLog.action == action)
-    rows = db.scalars(q).all()
+        stmt = stmt.where(DecisionLog.action == action)
+    if site_id:
+        if site_id not in accessible:
+            return []
+        stmt = stmt.where(DecisionLog.site_id == site_id)
+    if work_type:
+        stmt = stmt.where(DecisionLog.work_type == work_type)
+    if q and q.strip():
+        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        needle = f"%{escaped}%"
+        stmt = stmt.where(
+            DecisionLog.site_name.ilike(needle, escape="\\")
+            | DecisionLog.comment.ilike(needle, escape="\\")
+            | DecisionLog.decided_by.ilike(needle, escape="\\")
+            | DecisionLog.work_type.ilike(needle, escape="\\")
+        )
+    rows = db.scalars(stmt).all()
     return [{"id": h.id, "datetime": h.decided_at, "siteId": h.site_id, "site": h.site_name,
              "workType": h.work_type, "level": h.level, "action": h.action,
              "comment": h.comment, "by": h.decided_by} for h in rows]
+
+
+@router.get("/decision-logs/similar")
+def similar_decision_logs(site_id: str | None = Query(None, max_length=10),
+                          work_type: str | None = Query(None, max_length=40),
+                          level: int | None = Query(None, ge=0, le=3),
+                          limit: int = Query(8, ge=1, le=20),
+                          db: Session = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """類似過去判断の参照（#67）。同一現場・同一工種・同一レベルを優先して類似ログを返す。
+
+    スコアは 現場一致=3 / 工種一致=2 / レベル一致=1 / 直近7日=2 とし、
+    スコア降順・ID降順で返す。いずれの条件も未指定の場合は400（無意味な全件返しを防ぐ）。
+    """
+    if site_id is None and work_type is None and level is None:
+        raise HTTPException(400, "site_id / work_type / level のいずれかを指定してください")
+    accessible = site_access.accessible_site_ids(db, user)
+    if site_id and site_id not in accessible:
+        return []
+    rows = db.scalars(
+        select(DecisionLog).where(DecisionLog.site_id.in_(accessible))
+        .order_by(DecisionLog.id.desc())).all()
+    now = datetime.now(assessment.JST)
+    scored = []
+    for h in rows:
+        score = 0
+        reasons = []
+        if site_id and h.site_id == site_id:
+            score += 3
+            reasons.append("同一現場")
+        if work_type and h.work_type == work_type:
+            score += 2
+            reasons.append("同一工種")
+        if level is not None and h.level == level:
+            score += 1
+            reasons.append("同一判定レベル")
+        try:
+            decided = datetime.strptime(h.decided_at, "%m/%d %H:%M").replace(
+                year=now.year, tzinfo=assessment.JST)
+            if decided > now:  # 年またぎ（12月末シード等）は前年扱い
+                decided = decided.replace(year=now.year - 1)
+            if (now - decided).days <= 7:
+                score += 2
+                reasons.append("直近7日以内")
+        except ValueError:
+            pass
+        if score > 0:
+            scored.append({
+                "id": h.id, "datetime": h.decided_at, "siteId": h.site_id,
+                "site": h.site_name, "workType": h.work_type, "level": h.level,
+                "action": h.action, "comment": h.comment, "by": h.decided_by,
+                "score": score, "matchReasons": reasons,
+            })
+    scored.sort(key=lambda x: (-x["score"], x["id"]))
+    return scored[:limit]
 
 
 @router.post("/decision-logs")
@@ -1887,6 +1989,75 @@ def export_decision_logs(db: Session = Depends(get_db),
                     headers={"Content-Disposition": "attachment; filename=decision_logs.csv"})
 
 
+@router.get("/decision-logs/export.pdf")
+def export_decision_logs_pdf(db: Session = Depends(get_db),
+                             user: User = Depends(get_current_user)):
+    """判断履歴のPDF帳票（発注者説明・監査用）。CSVと同じ認証・現場権限で出力する。"""
+    audit(db, user, "pdf_export", "decision_logs.pdf")
+    accessible = site_access.accessible_site_ids(db, user)
+    rows = db.scalars(
+        select(DecisionLog).where(DecisionLog.site_id.in_(accessible))
+        .order_by(DecisionLog.id.desc())).all()
+    font = _pdf_font()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        leftMargin=12 * mm, rightMargin=12 * mm,
+        topMargin=12 * mm, bottomMargin=12 * mm,
+        title="施工判断支援システム 判断履歴",
+    )
+    title_style = ParagraphStyle("cwTitle", fontName=font, fontSize=14,
+                                 textColor=colors.HexColor("#13344f"),
+                                 leading=18, spaceAfter=2)
+    meta_style = ParagraphStyle("cwMeta", fontName=font, fontSize=9,
+                                textColor=colors.HexColor("#697a88"), leading=12)
+    note_style = ParagraphStyle("cwNote", fontName=font, fontSize=8,
+                                textColor=colors.HexColor("#8a5a2b"), leading=11)
+    cell_style = ParagraphStyle("cwCell", fontName=font, fontSize=8, leading=10.5)
+    story = []
+    story.append(Paragraph("施工判断支援システム 判断履歴", title_style))
+    story.append(Spacer(1, 3 * mm))
+    story.append(Paragraph(
+        f"生成日時: {datetime.now(assessment.JST):%Y-%m-%d %H:%M} ／ 対象件数: {len(rows)} 件",
+        meta_style))
+    story.append(Paragraph(
+        "本帳票は判断を「支援」する記録であり、作業の実施・中止を自動決定するものではありません。"
+        "最終判断は現場責任者が行ってください。",
+        note_style))
+    story.append(Spacer(1, 4 * mm))
+    header = ["ID", "日時", "現場", "工種", "判定", "行動", "記録者", "判断理由・メモ"]
+    data = [header]
+    for h in rows:
+        data.append([
+            h.id, h.decided_at, h.site_name, h.work_type,
+            f"L{h.level} {LEVEL_LABELS.get(h.level, '')}",
+            ACTION_LABELS.get(h.action, h.action), h.decided_by,
+            Paragraph(h.comment.replace("&", "&amp;").replace("<", "&lt;"),
+                      cell_style),
+        ])
+    table = Table(data, colWidths=[
+        14 * mm, 22 * mm, 42 * mm, 30 * mm, 24 * mm, 20 * mm, 32 * mm, 88 * mm],
+        repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#13344f")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONT", (0, 0), (-1, -1), font, 8),
+        ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c6d0d8")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f6f8")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+    ]))
+    story.append(table)
+    doc.build(story)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": "attachment; filename="
+                        f"decision_logs_{datetime.now(assessment.JST):%Y%m%d}.pdf"
+                    })
+
+
 # ---------- データ取得（手動再取得） ----------
 @router.post("/data-collectors/run")
 async def run_collectors(db: Session = Depends(get_db),
@@ -1926,6 +2097,220 @@ async def list_notifications(db: Session = Depends(get_db),
                 "fails": d.fails, "lastOk": d.last_ok} for d in src]
     notifs = notifications.build_notifications(cards, sources)
     return {"count": len(notifs), "notifications": notifs}
+
+
+# ---------- ユーザー管理（管理者専用。弱点 #17 解消: UI/APIでユーザーを管理できるようにする） ----------
+def _validate_email(v: str) -> str:
+    v = (v or "").strip()
+    if v and (v.count("@") != 1 or len(v) > 255 or v.startswith("@") or v.endswith("@")):
+        raise ValueError("email は空または有効なメールアドレス（例: name@example.com）を指定してください")
+    return v
+
+
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str
+    display_name: str
+    email: str = ""
+    role: str = "viewer"
+    department: str = ""
+    password: str
+
+    @field_validator("username")
+    @classmethod
+    def _username(cls, v):
+        v = (v or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,50}", v):
+            raise ValueError("username は英数字・._- の3〜50文字で指定してください")
+        return v.lower()
+
+    @field_validator("display_name")
+    @classmethod
+    def _display(cls, v):
+        v = (v or "").strip()
+        if not v or len(v) > 100:
+            raise ValueError("display_name は必須・100文字以内で指定してください")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v):
+        if v not in USER_ROLES:
+            raise ValueError(f"role は {sorted(USER_ROLES)} のいずれかで指定してください")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v):
+        return _validate_email(v)
+
+    @field_validator("department")
+    @classmethod
+    def _department(cls, v):
+        v = (v or "").strip()
+        if len(v) > 100:
+            raise ValueError("department は100文字以内で指定してください")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, v):
+        if len(v) < 8:
+            raise ValueError("password は8文字以上で指定してください")
+        if len(v) > 200:
+            raise ValueError("password は200文字以内で指定してください")
+        return v
+
+
+class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = None
+    email: str | None = None
+    role: str | None = None
+    department: str | None = None
+    is_active: bool | None = None
+    password: str | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _display(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v or len(v) > 100:
+            raise ValueError("display_name は100文字以内で指定してください")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v):
+        if v is not None and v not in USER_ROLES:
+            raise ValueError(f"role は {sorted(USER_ROLES)} のいずれかで指定してください")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v):
+        return None if v is None else _validate_email(v)
+
+    @field_validator("department")
+    @classmethod
+    def _department(cls, v):
+        if v is not None and len((v or "").strip()) > 100:
+            raise ValueError("department は100文字以内で指定してください")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, v):
+        if v is not None and not 8 <= len(v) <= 200:
+            raise ValueError("password は8〜200文字で指定してください")
+        return v
+
+
+def _user_dict(u: User) -> dict:
+    return {"id": u.id, "username": u.username, "displayName": u.display_name,
+            "email": u.email, "role": u.role, "department": u.department,
+            "isActive": u.is_active, "createdAt": u.created_at,
+            "updatedAt": u.updated_at}
+
+
+def _active_admin_count(db: Session) -> int:
+    return db.scalar(select(func.count()).select_from(User).where(
+        User.role == "admin", User.is_active.is_(True))) or 0
+
+
+def _guard_user_change(db: Session, actor: User, target: User,
+                       new_role: str, new_active: bool) -> None:
+    """管理者ロックアウト防止: 自分自身の降格/無効化と最終adminの降格/無効化を拒否する。"""
+    if target.id == actor.id and (new_role != "admin" or not new_active):
+        raise HTTPException(400, "自分自身を降格・無効化することはできません")
+    if target.role == "admin" and (new_role != "admin" or not new_active):
+        if _active_admin_count(db) <= 1:
+            raise HTTPException(400, "最後の有効な管理者を降格・無効化することはできません")
+
+
+@router.get("/admin/users")
+def list_users(db: Session = Depends(get_db),
+               user: User = Depends(require_role("admin"))):
+    rows = db.scalars(select(User).order_by(User.id)).all()
+    return [_user_dict(u) for u in rows]
+
+
+@router.post("/admin/users", status_code=201)
+def create_user(req: UserCreate, db: Session = Depends(get_db),
+                user: User = Depends(require_role("admin"))):
+    if db.scalar(select(User).where(User.username == req.username)):
+        raise HTTPException(409, "username already exists")
+    now = datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _build():
+        entry = User(
+            id=_allocate_id(db, User, "U", 2), username=req.username,
+            display_name=req.display_name, email=req.email, role=req.role,
+            department=req.department, password_hash=hash_password(req.password),
+            is_active=True, created_at=now, updated_at=now)
+        db.add(entry)
+        audit_add(db, user, "user_create",
+                  f"{entry.id} {req.username} role={req.role}")
+        return entry
+
+    entry = _commit_with_retry(db, _build)
+    return {"id": entry.id, "status": "created"}
+
+
+@router.put("/admin/users/{user_id}")
+def update_user(user_id: str, req: UserUpdate, db: Session = Depends(get_db),
+                user: User = Depends(require_role("admin"))):
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(404, "user not found")
+    new_role = req.role if req.role is not None else target.role
+    new_active = req.is_active if req.is_active is not None else target.is_active
+    _guard_user_change(db, user, target, new_role, new_active)
+    changes = []
+    if req.display_name is not None and req.display_name != target.display_name:
+        target.display_name = req.display_name
+        changes.append("display_name")
+    if req.email is not None and req.email != target.email:
+        target.email = req.email
+        changes.append("email")
+    if req.role is not None and req.role != target.role:
+        target.role = req.role
+        changes.append(f"role={req.role}")
+    if req.department is not None and req.department != target.department:
+        target.department = req.department
+        changes.append("department")
+    if req.is_active is not None and req.is_active != target.is_active:
+        target.is_active = req.is_active
+        changes.append(f"is_active={req.is_active}")
+    if req.password is not None:
+        target.password_hash = hash_password(req.password)
+        changes.append("password=reset")
+    target.updated_at = datetime.now(assessment.JST).strftime("%Y-%m-%d %H:%M:%S")
+    audit_add(db, user, "user_update",
+              f"{target.id} {target.username} " + (",".join(changes) or "no-change"))
+    db.commit()
+    return {"id": target.id, "status": "updated"}
+
+
+@router.delete("/admin/users/{user_id}")
+def delete_user(user_id: str, db: Session = Depends(get_db),
+                user: User = Depends(require_role("admin"))):
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(404, "user not found")
+    if target.id == user.id:
+        raise HTTPException(400, "自分自身を削除することはできません")
+    _guard_user_change(db, user, target, "viewer", False)
+    for row in db.scalars(select(UserSiteAccess).where(
+            UserSiteAccess.user_id == target.id)):
+        db.delete(row)
+    audit_add(db, user, "user_delete",
+              f"{target.id} {target.username} role={target.role}")
+    db.delete(target)
+    db.commit()
+    return {"id": user_id, "status": "deleted"}
 
 
 # ---------- 監査ログ（管理者・技術管理者） ----------

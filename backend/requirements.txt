@@ -12,6 +12,8 @@ pyjwt>=2.8
 bcrypt>=4.1
 cryptography>=43.0.1
 defusedxml>=0.7
+# 判断履歴PDF帳票（日本語フォントは app/assets/fonts にOFL同梱・self-host）
+reportlab>=4.2
 
 # dev
 pytest>=8.0
