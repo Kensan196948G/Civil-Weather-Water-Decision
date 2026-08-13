@@ -547,9 +547,17 @@
       "frontend_tests": "PASS（logic/adapter/policy系。委任Agent実装後に再確認）",
       "e2e_smoke_local": "PASS（Playwright Firefox ログイン〜表示〜ログアウト）",
       "pip_audit": "PASS (known vulnerabilities 0)",
+      "ci": "PASS（GitHub Actions 5ジョブ: backend lint+test / security / frontend / e2e / docker build）",
       "mvp_health": "200 OK / readyz ok（PG16・migrations・tables）",
       "mvp_public": "302（Cloudflare Access。未認証リダイレクト実測）",
       "mvp_seed": "16現場/5ユーザー(5ロール)/30判断履歴/12作業予定/PDF 65KB 生成"
+    },
+    "pr": {
+      "number": 144,
+      "url": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision/pull/144",
+      "branch": "feat/mvp-user-management-history-reports",
+      "status": "Draft PR（Phase 1 完了・マージ判定待ち）",
+      "closes": [67]
     },
     "residual": [
       "#114 Open-Meteo商用契約 / #115 オフサイトバックアップ / #116 外部監視 / #119 3現場30日受入試験（本番運用・今回対象外）",

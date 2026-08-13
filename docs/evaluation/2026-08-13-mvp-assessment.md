@@ -133,7 +133,7 @@
 - `backend: pip-audit -r requirements.txt` → 既知脆弱性 0
 - `frontend: node --check + logic/adapter/policy/vendor/serve suites` → 全PASS
 - CI: GitHub Actions 5ジョブ（lint+test / security / frontend / e2e / docker build）
-  → PR 作成後に実行（結果は PR 本文・state.json に記録）
+  → PR #144 作成後に実行し **5ジョブ全て PASS**（結果は PR 本文・state.json に記録）
 - MVP ローカル E2E smoke: **PASS**（Playwright Firefox・ログイン〜画面表示〜ログアウト）
 - MVP 公開 URL: `/health` `/readyz` **200 OK**・未認証 `/health` **302（Cloudflare Access）**
   を実測。Access ログイン後のブラウザ画面確認は関係者レビューで実施（自動化不可・要承認メール）
