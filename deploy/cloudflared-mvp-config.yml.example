@@ -1,0 +1,43 @@
+# Cloudflare Tunnel 設定（cwwd-mvp.mirai-dx-platform.com / Civil-Weather-Water-Decision MVP）
+#
+# 実行:
+#   cloudflared tunnel --config ~/.cloudflared/config-cwwd-mvp.yml run cwwd-mvp-civil-weather-water
+#
+# 本番(cwwd.mirai-dx-platform.com)とはトンネル・ポート・DBを完全分離する。
+# MVP backend=127.0.0.1:55119 / frontend=127.0.0.1:35179。
+
+tunnel: <MVP_TUNNEL_ID>
+credentials-file: /home/kensan/.cloudflared/<MVP_TUNNEL_ID>.json
+
+ingress:
+  - hostname: cwwd-mvp.mirai-dx-platform.com
+    path: ^/api(/.*)?$
+    service: http://localhost:55119
+
+  - hostname: cwwd-mvp.mirai-dx-platform.com
+    path: ^/health$
+    service: http://localhost:55119
+
+  - hostname: cwwd-mvp.mirai-dx-platform.com
+    path: ^/readyz$
+    service: http://localhost:55119
+
+  # MVP では FastAPI docs/OpenAPI を公開し、関係者がAPIをその場で確認できるようにする
+  - hostname: cwwd-mvp.mirai-dx-platform.com
+    path: ^/docs/?(.*)?$
+    service: http://localhost:55119
+
+  - hostname: cwwd-mvp.mirai-dx-platform.com
+    path: ^/redoc$
+    service: http://localhost:55119
+
+  - hostname: cwwd-mvp.mirai-dx-platform.com
+    path: ^/openapi\.json$
+    service: http://localhost:55119
+
+  # フロントエンド（それ以外の全パス）
+  - hostname: cwwd-mvp.mirai-dx-platform.com
+    service: http://localhost:35179
+
+  # cloudflared の ingress は最後に catch-all が必須
+  - service: http_status:404
