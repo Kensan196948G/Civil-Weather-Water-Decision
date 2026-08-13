@@ -9,6 +9,12 @@ import pathlib
 # flock による直列化は同一プロセス内の二重 import で自己デッドロックするため使わない。
 _TEST_DB_STEM = f"_test_cw_{os.getpid()}"
 
+# conftest は pytest 本体（`conftest`）とテストからの `from tests.conftest import ...`
+# で二重に実行されることがある。二重実行時に稼働中DBを削除すると後続テストが
+# 空DBで401になるため、プロセス内の初回ロード時のみ残骸削除を実行する（2026-08-13 修正）。
+_CWW_FIRST_CONFTEST_LOAD = os.environ.get("_CWW_CONFTEST_LOADED") != "1"
+os.environ["_CWW_CONFTEST_LOADED"] = "1"
+
 # app インポート前にテスト用DBへ差し替え（本番DBを汚さない）＋スケジューラ無効化（ネット非依存）
 os.environ["APP_ENV"] = "local"
 os.environ["DATABASE_URL"] = f"sqlite:///./{_TEST_DB_STEM}.db"
@@ -33,10 +39,11 @@ os.environ["JWT_SECRET"] = "dev-secret-change-in-production-please-32+"
 # ai_api_key 保存の正常系を成立させる。弱鍵拒否は該当テストで settings を差し替えて検証。
 os.environ["SETTINGS_ENCRYPTION_KEY"] = "test-only-settings-encryption-key-32bytes-plus-000"
 
-for _suffix in ("", "-wal", "-shm"):
-    _path = pathlib.Path(f"{_TEST_DB_STEM}.db{_suffix}")
-    if _path.exists():
-        _path.unlink()
+if _CWW_FIRST_CONFTEST_LOAD:
+    for _suffix in ("", "-wal", "-shm"):
+        _path = pathlib.Path(f"{_TEST_DB_STEM}.db{_suffix}")
+        if _path.exists():
+            _path.unlink()
 
 
 def _cleanup_test_db() -> None:
