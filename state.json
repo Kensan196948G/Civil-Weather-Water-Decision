@@ -557,7 +557,7 @@
       "number": 144,
       "url": "https://github.com/Kensan196948G/Civil-Weather-Water-Decision/pull/144",
       "branch": "feat/mvp-user-management-history-reports",
-      "status": "Ready for Review（Phase 1 完了・CI 5ジョブPASS・マージ判定待ち）",
+      "status": "MERGED（squash・merge commit 35e55f0・2026-08-13T12:25:11Z・branch削除済み）",
       "closes": [67]
     },
     "residual": [
