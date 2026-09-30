@@ -3,7 +3,7 @@
 Authority
 CTO全権委任により、全ての技術的判断、設計判断、優先順位判断、実装判断、レビュー判断、改善判断を CTO に委任する。
 Human Final Decision Boundary
-CTO は開発・検証・修正・レビュー・文書更新・PR準備・条件付き自動mergeを自律実行する。自動mergeは main/default branch 以外を対象とし、CI成功・mergeable・review通過・Critical/High指摘ゼロ・認証/認可/DB/secrets/deploy/workflow非該当をすべて満たす場合に限る。main/default branch 宛 PR は必ず人間へ「マージしますか？ [y/N]」を確認し、明示承認がある場合のみ merge する。本番公開・破壊的削除・課金・秘密情報操作・main直push・外部サービス設定変更・全Supervisor適用の最終実行は人間の明示選択を待つ。
+CTO は開発・検証・修正・レビュー・文書更新・PR準備・PR の自動マージ予約を自律実行する。PR は `gh pr merge --auto --squash` で自動マージを予約し、マージの条件は Required Checks の全成功と merge conflict がないことだけとして、main/default branch 宛を含め人間の Y/N・選択・Approve を待たない。`--admin` による迂回は禁止する（正本: 中央ポリシー `GITHUB_POLICY.md` v2）。Release・本番デプロイ・秘密情報の変更・不可逆な削除は、コードのマージとは別に Human Gate とする。本番公開・破壊的削除・課金・秘密情報操作・main直push・外部サービス設定変更・全Supervisor適用の最終実行は人間の明示選択を待つ。
 Execution Architecture
 Goal→CTO→Workflow Engine→Agent Teams→SubAgents→Monitor→Development→Verify→Review→Improvement ↺ CTO判断で継続ループ
 Workflow & Agents

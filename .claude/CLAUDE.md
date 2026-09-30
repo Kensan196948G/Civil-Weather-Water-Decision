@@ -89,7 +89,7 @@ gh pr list --state open
 **人間の最終決断が必要な境界:**
 - 本番公開、外部公開URLの切替、課金が発生する操作、秘密情報の登録・削除は自動実行しない
 - データ削除、履歴改変、force push、main 直pushは人間の明示承認を待つ
-- PR merge は `claudeos/docs/auto-merge-protocol.md` に従う。main/default branch 宛は必ず人間の選択式、main 以外は CI・review・mergeability・危険ファイル gate 全通過時のみ自動 merge 可
+- PR merge は `gh pr merge --auto --squash` で自動マージを予約する。マージの条件は Required Checks の全成功と merge conflict がないことだけとし、main/default branch 宛を含め人間の Y/N・選択・Approve を待たない。`--admin` による迂回は禁止する。Release・本番デプロイ・秘密情報の変更・不可逆な削除は、コードのマージとは別に Human Gate とする（正本: 中央ポリシー `GITHUB_POLICY.md` v2）
 - 全プロジェクトへの Supervisor 適用は計画表示後、人間の選択で実行する
 - CTO は判断材料、手順、リスク、推奨案を提示し、選択後の実作業は自律継続する
 
@@ -730,7 +730,7 @@ Claude Code 公式の multi-agent cloud review を行う。
 
 | 状態 | 処理 |
 |---|---|
-| STABLE 達成 | PR 仕上げ → 人間へ「マージしますか？ [y/N]」確認 → (承認後) merge → デプロイ手順書提示（実デプロイは人間が実行）→ 終了報告 |
+| STABLE 達成 | PR 仕上げ → `gh pr merge --auto --squash` で自動マージ予約（Required Checks 全成功・conflict なしで merge、人間の Y/N は待たない）→ デプロイ手順書提示（実デプロイは人間が実行）→ 終了報告 |
 | STABLE 未達 | Draft PR + 再開ポイント記録 |
 | エラー発生 | Blocked + Issue 起票 + 修復方針記録 |
 
