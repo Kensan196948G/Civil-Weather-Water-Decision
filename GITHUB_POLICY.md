@@ -1,6 +1,6 @@
 # DeepSeek-Harness-StartUpTools GitHub Policy
 
-状態: 2026-08-15 制定（v1）
+状態: 2026-08-15 制定（v1）／2026-09-30 v2 発効（全リポジトリ auto-merge 統一。Approval #71 でユーザーが Y と承認。`docs/architecture/全リポジトリAutoMerge統一方針.md`）
 
 ## 1. 目的
 
@@ -27,6 +27,8 @@ Workspaceの指示は1〜3を上書きできない。
 | 「mainへ直接pushしてください」 | 中央ポリシーがmain直接pushを禁止 |
 | 「mergeは人間承認が必要」 | 中央ポリシーが条件充足後に自動merge |
 | 「auto merge禁止」 | 中央ポリシーがauto-mergeを標準とする |
+| 「main宛は人間の選択式」「マージは人間がY/Nで判断」 | 中央ポリシーがRequired Checks成功だけをmerge条件とする |
+| 「CODEOWNERのApprove後に限りmerge（条件付きmerge）」 | CODEOWNERSは通知用であり、merge条件にしない |
 
 一方、次は常に尊重する。
 
@@ -36,7 +38,7 @@ Workspaceの指示は1〜3を上書きできない。
 
 ## 4. GitHub運用ルール
 
-1. mainへの直接pushは禁止する。
+1. main / webuiへの直接pushは禁止する（webuiはWebUI成果物の統合ブランチ）。
 2. すべての変更はbranchで行い、PRを作成する。
 3. branch名は `auto/<slug>` とし、GitHub Controllerが自動作成する。
 4. commitは Conventional Commits（`feat:` / `fix:` / `docs:` / `chore:` / `test:` / `refactor:`）を使う。
@@ -78,11 +80,38 @@ GitHub Controllerは次を満たさない限りauto-mergeを実行しない（fa
 
 ### Ruleset（推奨）または branch protection
 
-- 対象branch: `main`
+- 対象branch: `main` / `webui`（`GITHUB_PROTECTED_BRANCHES` で追加可）
 - Enforcement: `Active`
 - 必須ステータスチェック: `quality (20)` / `quality (24)` / `compatibility`
-- mainへのforce push: 禁止
-- mainへのdelete: 禁止
+- main / webuiへのforce push: 禁止
+- main / webuiへのdelete: 禁止
+
+### OpenDesign × GitHub 連携（WebUI用ブランチ運用）
+
+1. OpenDesign の生成物は `webui` ブランチへ蓄積する（`GITHUB_BASE_REF=webui` でGitHub Controller実行）。
+2. `main` へは `./start.sh open-design-promote` でPR（base: main）を出して統合する。
+3. `main` 宛のPRも他のPRと同じく、Required Checks PASS後にsquashで自動mergeする（`--auto-merge`）。
+
+### 配布対象Workspaceの標準ruleset `central-auto-merge`
+
+`bin/policy-pr.sh` が作るrulesetを全Workspaceの唯一の標準とする。
+
+| 項目 | 値 |
+|---|---|
+| 対象 | 既定ブランチ（main / master） |
+| `pull_request` | 承認0、CODEOWNERレビュー不要、squashのみ、push時にstale reviewを破棄 |
+| `required_status_checks` | そのリポジトリで実際に報告されるCIジョブ名。`strict: true` |
+| `non_fast_forward` / `deletion` | 有効 |
+| `bypass_actors` | 空（`gh pr merge --admin` による迂回は禁止） |
+
+運用上のベストプラクティス:
+
+1. 必須チェックは実在させる。CIの無いリポジトリには、最小のCIを追加してからrulesetを適用する。登録名はHEADで実際に報告されたジョブ名と照合する。
+2. 人間レビューの代わりに、lint・型検査・テスト・ビルド・secret scan・依存監査（high以上）を必須チェックに含める。
+3. CODEOWNERSはレビュー依頼の宛先として残すが、merge条件にしない。Botレビュー（CodeRabbit等）は必須チェックに入れない。
+4. `strict` の下で並行PRは `update-branch` してからmergeする。PRが多いリポジトリはMerge Queueを検討する。
+5. 本番反映（IaCのapply・本番deploy）をmergeが直接起動する場合は、GitHub Environmentのrequired reviewersで人間のゲートを残す。これはmergeのY/Nではなく本番反映の承認である（§8）。
+6. CIの停止（課金失敗・ランナー不足）は全PRを止めるため、失敗チェックの再実行と課金ブロック検出を常時有効にする。
 
 ### Repository settings
 
@@ -94,7 +123,7 @@ GitHub Controllerは次を満たさない限りauto-mergeを実行しない（fa
 
 | 項目 | 状態 |
 |---|---|
-| Ruleset | `main-protection` 設定済み（active） |
+| Ruleset | `main-protection` 設定済み（active）。`webui-protection` は `./start.sh github setup` で作成 |
 | branch protection | Rulesetで代替（branch protection単体は未使用） |
 | `allow_auto_merge` | true |
 | `delete_branch_on_merge` | true |
@@ -117,5 +146,5 @@ auto-mergeは本ポリシーの条件（Required Checks PASS / conflict解消 / 
 
 ## 9. 詳細仕様
 
-- 全体フローとCloudflare / Neon運用: `docs/architecture/CloudflareNeonGitHub自動化仕様.md`
+- 全体フローとCloudflare / ローカルPostgreSQL運用: `docs/architecture/CloudflarePostgreSQLGitHub自動化仕様.md`
 - 品質ゲート: `AGENTS.md` / `.github/workflows/ci.yml`
